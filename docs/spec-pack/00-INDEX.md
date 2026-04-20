@@ -1,5 +1,7 @@
 # SPEC PACK - BO TAI LIEU DAC TA TU CHUA
 
+Tong quan van hanh va danh sach service (cap nhat): [`../../README.md`](../../README.md).
+
 Muc tieu: bo tai lieu nay duoc bien soan tu ma nguon hien tai de ban co the viet dac ta day du ma KHONG can doc them file nao khac trong repo.
 
 Ngay cap nhat: 2026-03-20

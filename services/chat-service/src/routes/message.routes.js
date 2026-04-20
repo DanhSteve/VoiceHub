@@ -23,8 +23,32 @@ router.post(
   messageController.deleteDmBetweenUsers.bind(messageController)
 );
 
+router.get(
+  '/internal/messages/:messageId',
+  internalServiceOnly,
+  messageController.getMessageInternal.bind(messageController)
+);
+
+router.patch(
+  '/internal/messages/:messageId/file-promoted',
+  internalServiceOnly,
+  messageController.promoteMessageFileInternal.bind(messageController)
+);
+
+router.get(
+  '/internal/storage/signed-read',
+  internalServiceOnly,
+  messageController.getSignedReadUrlInternal.bind(messageController)
+);
+
 // Tất cả routes đều cần authentication
 router.use(authenticate);
+
+// Signed upload URL (Firebase) — đặt trước POST /
+router.post(
+  '/storage/signed-upload',
+  messageController.createSignedUploadUrl.bind(messageController)
+);
 
 // Tạo tin nhắn mới
 router.post('/', messageController.createMessage.bind(messageController));
@@ -34,6 +58,9 @@ router.get('/stats/summary', messageController.getMessageStatsSummary.bind(messa
 
 // Tin chưa đọc — kênh tổ chức
 router.get('/unread/org', messageController.getUnreadOrgMessagesFeed.bind(messageController));
+
+// Tìm kiếm tin kênh tổ chức (đặt trước /:messageId)
+router.get('/search', messageController.searchMessages.bind(messageController));
 
 // Lấy danh sách tin nhắn
 router.get('/', messageController.getMessages.bind(messageController));

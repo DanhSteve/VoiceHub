@@ -1,6 +1,14 @@
 const roleService = require('../services/role.service');
 const { getAction, extractServerId, noPermissionRoutes } = require('../config/permissions');
-const { isPublicRoute } = require('../config/services');
+const { isPublicRoute, normalizePath } = require('../config/services');
+
+/** Cache kết quả checkPermission (giảm tải role-service) */
+const permissionCache = new Map();
+const CACHE_TTL_MS = Math.max(5000, parseInt(process.env.GATEWAY_PERMISSION_CACHE_TTL_MS || '60000', 10) || 60000);
+
+function cacheKey(userId, serverId, action) {
+  return `${userId}|${serverId}|${action}`;
+}
 
 /**
  * Middleware kiểm tra quyền truy cập
@@ -21,6 +29,20 @@ const permissionMiddleware = async (req, res, next) => {
         success: false,
         message: 'Unauthorized',
       });
+    }
+
+    // Task / Work / AI-task: bỏ qua role theo serverId — chạy NGAY và dùng originalUrl vì req.path
+    // có thể không khớp (proxy/mount). task-service tự kiểm tra creator/assignee.
+    const pathOnly = String(req.originalUrl || req.url || req.path || '')
+      .split('?')[0]
+      .replace(/\/+/g, '/');
+    const pathNorm = normalizePath(pathOnly).toLowerCase();
+    if (
+      pathNorm.startsWith('/api/tasks') ||
+      pathNorm.startsWith('/api/work') ||
+      pathNorm.startsWith('/api/ai/tasks')
+    ) {
+      return next();
     }
 
     // Lấy action từ route và method
@@ -51,12 +73,6 @@ const permissionMiddleware = async (req, res, next) => {
     // Voice/WebRTC MVP hiện chưa gắn role-context theo organization/server cho từng event.
     // Cho phép gateway bỏ qua permission check để tránh chặn bootstrap/join room.
     if (action.startsWith('voice:')) {
-      return next();
-    }
-
-    // Task: task-service tự lọc theo user (JWT / x-user-id). Lịch gọi GET /api/tasks?dueFrom&dueTo
-    // không mang serverId — không chặn ở gateway (tránh 400 "serverId or organizationId is required").
-    if (action.startsWith('task:')) {
       return next();
     }
 
@@ -116,12 +132,27 @@ const permissionMiddleware = async (req, res, next) => {
       });
     }
 
-    // Gọi Role Service để check permission
+    const ck = cacheKey(userId, serverId, action);
+    const now = Date.now();
+    const hit = permissionCache.get(ck);
+    if (hit && now - hit.at < CACHE_TTL_MS) {
+      if (hit.allowed) {
+        return next();
+      }
+      return res.status(403).json({
+        success: false,
+        message: 'Permission denied',
+        reason: hit.reason || 'You do not have permission to perform this action',
+      });
+    }
+
     const { allowed, reason } = await roleService.checkPermission(
       userId,
       serverId,
       action
     );
+
+    permissionCache.set(ck, { allowed, reason, at: now });
 
     if (!allowed) {
       return res.status(403).json({
@@ -131,7 +162,6 @@ const permissionMiddleware = async (req, res, next) => {
       });
     }
 
-    // Cho phép request tiếp tục
     next();
   } catch (error) {
     console.error('Permission middleware error:', error);

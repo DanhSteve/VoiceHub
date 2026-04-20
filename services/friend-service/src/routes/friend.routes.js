@@ -10,6 +10,13 @@ router.use(protect);
 // Tìm bạn theo số điện thoại (phải đặt trước /:friendId để không bị match nhầm)
 router.get('/search', friendControllerLegacy.searchByPhone);
 
+// Backward-compatible aliases (client đang dùng các path legacy)
+router.get('/pending', friendControllerLegacy.getPendingRequests);
+router.post('/accept/:id', friendControllerLegacy.acceptRequest);
+router.delete('/reject/:id', friendControllerLegacy.rejectRequest);
+router.post('/block', friendControllerLegacy.blockUser);
+router.delete('/unblock/:userId', friendControllerLegacy.unblockUser);
+
 // Gửi lời mời kết bạn
 router.post('/request', friendController.sendFriendRequest.bind(friendController));
 

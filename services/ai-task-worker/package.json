@@ -1,0 +1,20 @@
+{
+  "name": "ai-task-worker",
+  "version": "1.0.0",
+  "description": "AI Task Worker - Consumer queue task-ai.* và gọi Ollama/OCR",
+  "main": "src/worker.js",
+  "scripts": {
+    "start": "node src/worker.js",
+    "dev": "nodemon src/worker.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.4",
+    "axios": "^1.7.7",
+    "dotenv": "^17.2.3",
+    "mongoose": "^9.1.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
+

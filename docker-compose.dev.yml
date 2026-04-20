@@ -3,7 +3,8 @@
 
 services:
   api-gateway:
-    command: ["npm", "run", "dev"]
+    # npm install: đồng bộ node_modules trong volume với package.json sau khi thêm dependency
+    command: ["sh", "-c", "npm install && npm run dev"]
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "500"
@@ -39,7 +40,7 @@ services:
       CHOKIDAR_INTERVAL: "500"
 
   chat-service:
-    command: ["npm", "run", "dev"]
+    command: ["sh", "-c", "npm install && npm run dev"]
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "500"
@@ -51,7 +52,7 @@ services:
       CHOKIDAR_INTERVAL: "500"
 
   task-service:
-    command: ["npm", "run", "dev"]
+    command: ["sh", "-c", "npm install && npm run dev"]
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "500"
@@ -72,7 +73,7 @@ services:
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3016", "--reload"]
 
   socket-service:
-    command: ["npm", "run", "dev"]
+    command: ["sh", "-c", "npm install && npm run dev"]
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "500"

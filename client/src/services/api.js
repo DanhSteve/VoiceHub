@@ -15,6 +15,8 @@
 
 // Import axios - HTTP client library
 import axios from 'axios';
+import { getToken, removeToken } from '../utils/tokenStorage';
+import { isLandingEmbedActive, isWriteHttpMethod } from '../utils/landingEmbedMode';
 
 // Import toast để show error notifications
 import toast from 'react-hot-toast';
@@ -22,7 +24,7 @@ import toast from 'react-hot-toast';
 /* ========================================
    API BASE URL
    - Production: lấy từ .env → VITE_API_URL
-   - Development: http://localhost:3000/api (API Gateway port 3000)
+   - Development: http://localhost:13000/api (API Gateway map host trong docker-compose)
    
    API Gateway sẽ route:
    /api/auth/* → auth-service (port 3001)
@@ -75,9 +77,14 @@ const api = axios.create({
 api.interceptors.request.use(
   // Success handler: modify config trước khi gửi
   (config) => {
-    // Lấy token từ localStorage (được lưu khi login)
-    const token = localStorage.getItem('token');
-    
+    if (isLandingEmbedActive() && isWriteHttpMethod(config.method)) {
+      toast('Chế độ demo — không ghi dữ liệu lên server.', { icon: '🔒', duration: 2800 });
+      const block = new Error('LANDING_EMBED_WRITE_BLOCKED');
+      block.code = 'LANDING_EMBED_WRITE_BLOCKED';
+      block.isLandingEmbedBlock = true;
+      return Promise.reject(block);
+    }
+
     // Danh sách public routes không cần JWT token
     const publicRoutes = [
       '/auth/register',
@@ -88,9 +95,19 @@ api.interceptors.request.use(
       '/auth/reset-password',
       '/auth/verify-email', // Verify email chỉ dùng token trong query, KHÔNG dùng JWT
     ];
-    
-    // Kiểm tra xem route có phải public route không
-    const isPublicRoute = publicRoutes.some(route => config.url?.includes(route));
+
+    const isPublicRoute = publicRoutes.some((route) => config.url?.includes(route));
+
+    /** Demo landing: không gửi request bảo vệ tới gateway — chỉ giả lập UI */
+    if (isLandingEmbedActive() && !isPublicRoute) {
+      const block = new Error('LANDING_EMBED_API_BLOCKED');
+      block.code = 'LANDING_EMBED_API_BLOCKED';
+      block.isLandingEmbedBlock = true;
+      return Promise.reject(block);
+    }
+
+    // Lấy token từ localStorage (được lưu khi login)
+    const token = getToken();
     
     // Chỉ thêm JWT token nếu:
     // 1. Token tồn tại và không rỗng
@@ -142,6 +159,21 @@ api.interceptors.response.use(
   /* ----- ERROR HANDLER -----
      Response lỗi (status 400+, 500+, network error) */
   (error) => {
+    if (error?.code === 'LANDING_EMBED_WRITE_BLOCKED' || error?.isLandingEmbedBlock) {
+      return Promise.reject(error);
+    }
+
+    /* Khung demo trên HomePage: không toast / không redirect — tránh "No token" khi có request lạc */
+    if (isLandingEmbedActive()) {
+      return Promise.reject({
+        message: error.response?.data?.message || error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+        code: error.code,
+        isLandingEmbedSilent: true,
+      });
+    }
+
     console.error('[API] Request error:', {
       message: error.message,
       code: error.code,
@@ -225,7 +257,7 @@ api.interceptors.response.use(
 
       // Trì hoãn redirect 2s để user đọc được toast và có thể mở console xem chi tiết
       setTimeout(() => {
-        localStorage.removeItem('token');
+        removeToken();
         window.location.href = '/login';
       }, 2000);
 

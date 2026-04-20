@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const { socketAuth } = require('/shared/middleware/auth');
+const { connectRedis } = require('/shared');
 const registerChatNamespace = require('./socket/chat.namespace');
 const { setChatNamespace, publishRealtimeEvent } = require('./socket/realtimeHub');
 
@@ -59,22 +60,59 @@ const io = new Server(server, {
   },
 });
 
-// Namespace chính cho chat (bạn bè + doanh nghiệp sau này)
-const chatNamespace = io.of('/chat');
-// Auth phải gắn trực tiếp vào namespace đang dùng.
-chatNamespace.use(socketAuth);
-setChatNamespace(chatNamespace);
-registerChatNamespace(chatNamespace);
+async function attachRedisAdapterIfEnabled() {
+  if (process.env.SOCKET_IO_REDIS_ADAPTER === 'false') return;
+  const url =
+    process.env.REDIS_URL ||
+    (process.env.REDIS_HOST
+      ? `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT || 6379}`
+      : null);
+  if (!url) return;
 
-server.listen(PORT, () => {
-  const originLabel =
-    socketCorsOrigin === true ? '*' : Array.isArray(socketCorsOrigin) ? socketCorsOrigin.join(', ') : String(socketCorsOrigin);
-  console.log(`Socket Service đang chạy trên cổng ${PORT}`);
-  console.log(`[socket-service] Allowed origins: ${originLabel}`);
-  const presenceToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
-  console.log(
-    `[socket-service] Presence → user-service: USER_SERVICE_URL=${process.env.USER_SERVICE_URL || 'http://user-service:3004'} ` +
-      `internal token ${presenceToken ? 'SET (len=' + presenceToken.length + ')' : 'MISSING (disconnect sẽ KHÔNG cập nhật offline trong DB)'}`
-  );
-});
+  try {
+    const { createClient } = require('redis');
+    const { createAdapter } = require('@socket.io/redis-adapter');
+    const pubClient = createClient({ url });
+    const subClient = pubClient.duplicate();
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('[socket-service] Socket.IO Redis adapter enabled');
+  } catch (err) {
+    console.warn('[socket-service] Redis adapter not available:', err.message);
+  }
+}
 
+function startListen() {
+  server.listen(PORT, () => {
+    const originLabel =
+      socketCorsOrigin === true
+        ? '*'
+        : Array.isArray(socketCorsOrigin)
+          ? socketCorsOrigin.join(', ')
+          : String(socketCorsOrigin);
+    console.log(`Socket Service đang chạy trên cổng ${PORT}`);
+    console.log(`[socket-service] Allowed origins: ${originLabel}`);
+    const presenceToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
+    console.log(
+      `[socket-service] Presence → user-service: USER_SERVICE_URL=${process.env.USER_SERVICE_URL || 'http://user-service:3004'} ` +
+        `internal token ${presenceToken ? 'SET (len=' + presenceToken.length + ')' : 'MISSING (disconnect sẽ KHÔNG cập nhật offline trong DB)'}`
+    );
+  });
+}
+
+(async () => {
+  try {
+    connectRedis();
+  } catch (e) {
+    console.warn('[socket-service] Redis optional:', e.message);
+  }
+
+  await attachRedisAdapterIfEnabled();
+
+  const chatNamespace = io.of('/chat');
+  chatNamespace.use(socketAuth);
+  setChatNamespace(chatNamespace);
+  registerChatNamespace(chatNamespace);
+
+  startListen();
+})();

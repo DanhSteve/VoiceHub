@@ -6,6 +6,7 @@ const { protect, authorize } = require('../middleware/auth');
 router.use(protect);
 
 router.get('/', memberController.getMembers);
+router.post('/leave', memberController.leaveOrganization);
 router.post('/', authorize(['owner', 'admin']), memberController.inviteMember);
 router.post('/invite', authorize(['owner', 'admin']), memberController.inviteMember);
 router.post('/invite-link', authorize(['owner', 'admin']), memberController.createInviteLink);

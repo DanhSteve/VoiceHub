@@ -1,8 +1,29 @@
 // Migrated and adapted from old Chat.tsx component
 import { motion } from 'framer-motion';
-import moment from 'moment';
 import { useState } from 'react';
 import { Avatar } from '../ui/Avatar';
+
+/** Thời gian tương đối (thay moment.fromNow), theo lang trên <html> */
+function formatRelativeTimeFromNow(input) {
+  const date = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(date.getTime())) return 'Vừa xong';
+  const diffSec = Math.round((date.getTime() - Date.now()) / 1000);
+  const lang =
+    typeof document !== 'undefined' && document.documentElement?.lang?.startsWith('vi') ? 'vi' : 'en';
+  const rtf = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
+  const a = Math.abs(diffSec);
+  if (a < 60) return rtf.format(diffSec, 'second');
+  const diffMin = Math.round(diffSec / 60);
+  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, 'minute');
+  const diffHour = Math.round(diffMin / 60);
+  if (Math.abs(diffHour) < 24) return rtf.format(diffHour, 'hour');
+  const diffDay = Math.round(diffHour / 24);
+  if (Math.abs(diffDay) < 30) return rtf.format(diffDay, 'day');
+  const diffMonth = Math.round(diffDay / 30);
+  if (Math.abs(diffMonth) < 12) return rtf.format(diffMonth, 'month');
+  const diffYear = Math.round(diffDay / 365);
+  return rtf.format(diffYear, 'year');
+}
 
 export const ChatMessage = ({
   message,
@@ -16,9 +37,7 @@ export const ChatMessage = ({
   onRecall,
   onEdit,
 }) => {
-  const formattedTime = timestamp 
-    ? moment(timestamp).fromNow()
-    : "Vừa xong";
+  const formattedTime = timestamp ? formatRelativeTimeFromNow(timestamp) : 'Vừa xong';
 
   const [showMenu, setShowMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);

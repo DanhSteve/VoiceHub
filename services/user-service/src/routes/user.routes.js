@@ -2,8 +2,22 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/user.controller');
 const userContext = require('../middlewares/userContext');
+const internalServiceAuth = require('../middlewares/internalServiceAuth');
 
-// Apply user context middleware cho tất cả routes
+// Presence từ socket-service (trước userContext — không cần x-user-id)
+router.patch(
+  '/internal/status',
+  internalServiceAuth,
+  userController.patchInternalStatus.bind(userController)
+);
+
+router.post(
+  '/internal/presence/batch',
+  internalServiceAuth,
+  userController.internalPresenceBatch.bind(userController)
+);
+
+// Apply user context middleware cho các route còn lại
 router.use(userContext);
 
 // Tạo user profile mới

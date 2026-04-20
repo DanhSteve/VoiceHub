@@ -4,6 +4,10 @@ FROM node:22-bullseye
 # 2️⃣ Set working dir
 WORKDIR /app
 
+ENV npm_config_fetch_retries=10 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000
+
 # 3️⃣ Build tools cho mediasoup worker fallback compile
 RUN apt-get update && \
     apt-get install -y --no-install-recommends python3 python3-pip make g++ && \

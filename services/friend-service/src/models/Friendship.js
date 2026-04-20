@@ -1,4 +1,6 @@
-const mongoose = require('mongoose');
+// Dùng singleton mongoose từ /shared để đảm bảo connectDB() áp dụng cho model
+const { mongo } = require('/shared');
+const { mongoose } = mongo;
 
 const friendshipSchema = new mongoose.Schema(
   {

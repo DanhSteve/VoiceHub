@@ -1,25 +1,30 @@
 import { useState } from 'react';
+import toast from 'react-hot-toast';
 import { Link, useNavigate } from 'react-router-dom';
 import NavigationSidebar from '../../components/Layout/NavigationSidebar';
-import { GlassCard, GradientButton, Toast } from '../../components/Shared';
+import { GlassCard, GradientButton } from '../../components/Shared';
+import AddFriendModal from '../../components/Friends/AddFriendModal';
 import friendService from '../../services/friendService';
+import { useAppStrings } from '../../locales/appStrings';
 
 function FriendsPage() {
   const navigate = useNavigate();
+  const { t } = useAppStrings();
   const [activeTab, setActiveTab] = useState('all');
-  const [toast, setToast] = useState(null);
-
-  const showToast = (message, type = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
-  };
+  const [showAddFriend, setShowAddFriend] = useState(false);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState(() => new Set());
 
   const sendFriendRequest = async (userId) => {
+    const id = userId && String(userId).trim();
+    if (!id) {
+      toast.error(t('friends.errUserUnknown'));
+      return;
+    }
     try {
-      await friendService.sendRequest(userId);
-      showToast('Đã gửi lời mời', 'success');
+      await friendService.sendRequest(id);
+      toast.success(t('friends.toastRequestSent'));
     } catch (err) {
-      showToast(err.response?.data?.message || 'Lỗi khi gửi yêu cầu', 'fail');
+      toast.error(err.response?.data?.message || t('friends.toastRequestErr'));
     }
   };
 
@@ -59,10 +64,10 @@ function FriendsPage() {
 
   const getStatusLabel = (status) => {
     const labels = {
-      online: 'Đang hoạt động',
-      away: 'Vắng mặt',
-      busy: 'Bận',
-      offline: 'Ngoại tuyến'
+      online: t('friends.statusOnline'),
+      away: t('friends.statusAway'),
+      busy: t('friends.statusBusy'),
+      offline: t('friends.statusOffline'),
     };
     return labels[status] || status;
   };
@@ -72,20 +77,22 @@ function FriendsPage() {
 
   const handleSearch = async () => {
     if (!searchPhone) {
-      showToast('Xin hãy nhập số điện thoại', 'fail');
+      toast.error(t('friends.toastPhoneRequired'));
       return;
     }
 
     try {
       const resp = await friendService.searchByPhone(searchPhone);
-      if (resp.data && resp.data.data) {
-        setSearchResult(resp.data.data);
+      const body = resp?.data !== undefined ? resp.data : resp;
+      const user = body?.data !== undefined ? body.data : body;
+      if (user && (user._id || user.userId || user.phone)) {
+        setSearchResult(user);
       } else {
-        showToast('Không tìm thấy người dùng', 'info');
+        toast(t('friends.toastSearchNone'), { icon: 'ℹ️' });
         setSearchResult(null);
       }
     } catch (err) {
-      showToast(err.response?.data?.message || 'Lỗi khi tìm kiếm', 'fail');
+      toast.error(err.response?.data?.message || t('friends.toastSearchErr'));
       setSearchResult(null);
     }
   };
@@ -97,24 +104,35 @@ function FriendsPage() {
 
   return (
     <div className="min-h-screen flex">
-      <NavigationSidebar currentPage="Bạn Bè" />
+      <NavigationSidebar currentPage={t('friends.navTitle')} />
       <div className="flex-1 p-6 overflow-y-auto overflow-x-visible scrollbar-gradient">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-black text-gradient mb-2">Bạn Bè và Liên Hệ</h1>
-          <p className="text-gray-400">Kết nối và giao tiếp với đồng nghiệp</p>
+        <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-black text-gradient mb-2">{t('friends.pageTitle')}</h1>
+            <p className="text-gray-400">{t('friends.subtitle')}</p>
+          </div>
+          <GradientButton
+            type="button"
+            variant="primary"
+            className="shrink-0 px-6 py-3 text-base font-semibold"
+            onClick={() => setShowAddFriend(true)}
+          >
+            {t('friends.addFriend')}
+          </GradientButton>
         </div>
 
         {/* Tabs */}
         <div className="flex gap-2 mb-6">
           {[
-            { id: 'all', label: `Tất cả (${friends.length})`, icon: '👥' },
-            { id: 'online', label: `Online (${onlineFriends.length})`, icon: '🟢' },
-            { id: 'requests', label: `Yêu cầu (${friendRequests.length})`, icon: '📬' },
-            { id: 'suggestions', label: 'Gợi ý', icon: '✨' }
+            { id: 'all', label: t('friends.tabAll', { n: friends.length }), icon: '👥' },
+            { id: 'online', label: t('friends.tabOnline', { n: onlineFriends.length }), icon: '🟢' },
+            { id: 'requests', label: t('friends.tabRequests', { n: friendRequests.length }), icon: '📬' },
+            { id: 'suggestions', label: t('friends.tabSuggestions'), icon: '✨' },
           ].map(tab => (
             <button
               key={tab.id}
+              type="button"
               onClick={() => setActiveTab(tab.id)}
               className={`px-4 py-2 rounded-xl font-semibold transition-all ${
                 activeTab === tab.id
@@ -161,23 +179,24 @@ function FriendsPage() {
                     )}
                     <div className="text-xs text-gray-600 mt-2 flex items-center gap-1">
                       <span>👥</span>
-                      <span>{friend.mutualFriends} bạn chung</span>
+                      <span>{t('friends.mutualFriends', { n: friend.mutualFriends })}</span>
                     </div>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Link to="/chat" className="glass px-3 py-2 rounded-lg hover:bg-white/10 transition-all text-sm font-semibold flex items-center gap-1">
-                      💬 Nhắn tin
+                    <Link to="/chat/friends" className="glass px-3 py-2 rounded-lg hover:bg-white/10 transition-all text-sm font-semibold flex items-center gap-1">
+                      {t('friends.message')}
                     </Link>
-                    <button 
+                    <button
+                      type="button"
                       onClick={() => {
-                        showToast(`Đang kết nối với ${friend.name}...`, "info");
+                        toast(t('friends.toastConnecting', { name: friend.name }), { icon: '📞' });
                         setTimeout(() => {
-                          navigate('/voice/call-' + friend.name.toLowerCase().replace(' ', '-'));
+                          navigate(`/voice/call-${friend.name.toLowerCase().replace(/\s+/g, '-')}`);
                         }, 500);
                       }}
                       className="glass px-3 py-2 rounded-lg hover:bg-white/10 transition-all text-sm font-semibold flex items-center gap-1"
                     >
-                      📞 Gọi
+                      {t('friends.call')}
                     </button>
                   </div>
                 </div>
@@ -208,9 +227,32 @@ function FriendsPage() {
                     </div>
                   )}
                   <div className="flex gap-2">
-                    <button className="flex-1 py-2 glass rounded-lg hover:bg-white/10 transition-all text-sm">💬</button>
-                    <button className="flex-1 py-2 glass rounded-lg hover:bg-white/10 transition-all text-sm">📞</button>
-                    <button className="flex-1 py-2 glass rounded-lg hover:bg-white/10 transition-all text-sm">⋯</button>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/chat/friends')}
+                      className="flex-1 py-2 glass rounded-lg hover:bg-white/10 transition-all text-sm"
+                      aria-label={`Nhắn tin ${friend.name}`}
+                    >
+                      💬
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toast(t('friends.toastConnecting', { name: friend.name }), { icon: '📞' });
+                        setTimeout(() => navigate(`/voice/call-${friend.name.toLowerCase().replace(/\s+/g, '-')}`), 400);
+                      }}
+                      className="flex-1 py-2 glass rounded-lg hover:bg-white/10 transition-all text-sm"
+                      aria-label={`Gọi ${friend.name}`}
+                    >
+                      📞
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toast(t('friends.toastFriendOptions'), { icon: '⋯' })}
+                      className="flex-1 py-2 glass rounded-lg hover:bg-white/10 transition-all text-sm"
+                    >
+                      ⋯
+                    </button>
                   </div>
                 </div>
               </GlassCard>
@@ -229,12 +271,24 @@ function FriendsPage() {
                   </div>
                   <div className="flex-1">
                     <h3 className="font-bold text-white mb-1">{request.name}</h3>
-                    <div className="text-sm text-gray-400 mb-1">{request.mutualFriends} bạn chung</div>
-                    <div className="text-xs text-gray-500">Gửi yêu cầu {request.requestDate}</div>
+                    <div className="text-sm text-gray-400 mb-1">{t('friends.mutualFriends', { n: request.mutualFriends })}</div>
+                    <div className="text-xs text-gray-500">{t('friends.requestSentOn', { date: request.requestDate })}</div>
                   </div>
                   <div className="flex gap-2">
-                    <GradientButton variant="primary">Chấp nhận</GradientButton>
-                    <button className="glass px-4 py-2 rounded-xl hover:bg-white/10 transition-all font-semibold">Từ chối</button>
+                    <GradientButton
+                      type="button"
+                      variant="primary"
+                      onClick={() => toast.success(t('friends.toastAcceptDemo', { name: request.name }))}
+                    >
+                      {t('friends.accept')}
+                    </GradientButton>
+                    <button
+                      type="button"
+                      onClick={() => toast(t('friends.toastRejectDemo', { name: request.name }), { icon: 'ℹ️' })}
+                      className="glass px-4 py-2 rounded-xl hover:bg-white/10 transition-all font-semibold"
+                    >
+                      {t('friends.reject')}
+                    </button>
                   </div>
                 </div>
               </GlassCard>
@@ -242,7 +296,7 @@ function FriendsPage() {
             {friendRequests.length === 0 && (
               <div className="text-center py-12 text-gray-500">
                 <div className="text-6xl mb-4">📭</div>
-                <p>Không có yêu cầu kết bạn mới</p>
+                <p>{t('friends.noRequests')}</p>
               </div>
             )}
           </div>
@@ -255,23 +309,28 @@ function FriendsPage() {
             <div className="mb-4 flex gap-2 items-center max-w-md">
               <input
                 type="text"
-                placeholder="Nhập số điện thoại để tìm bạn"
+                placeholder={t('friends.searchPlaceholder')}
                 value={searchPhone}
                 onChange={(e) => setSearchPhone(e.target.value)}
                 className="flex-1 px-4 py-2 rounded-xl glass text-white placeholder-gray-400"
               />
               <button
+                type="button"
                 onClick={handleSearch}
                 className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-semibold"
-              >Tìm</button>
+              >
+                {t('friends.searchBtn')}
+              </button>
               {searchResult && (
-                <button onClick={clearSearch} className="text-gray-400 hover:text-white">✕</button>
+                <button type="button" onClick={clearSearch} className="text-gray-400 hover:text-white">
+                  ✕
+                </button>
               )}
             </div>
 
             {searchResult && (
               <div className="mb-6">
-                <h2 className="text-xl font-bold text-white mb-2">Kết quả tìm kiếm</h2>
+                <h2 className="text-xl font-bold text-white mb-2">{t('friends.searchResults')}</h2>
                 <GlassCard hover>
                   <div className="flex items-center gap-4">
                     <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center text-3xl">
@@ -281,11 +340,22 @@ function FriendsPage() {
                       <h3 className="font-bold text-white mb-1">{searchResult.displayName || searchResult.username}</h3>
                       <div className="text-xs text-gray-400 mb-1">{searchResult.phone}</div>
                       {searchResult.relationship && (
-                        <div className="text-xs text-gray-300">Trạng thái: {searchResult.relationship.status}</div>
+                        <div className="text-xs text-gray-300">
+                          {t('friends.statusLabel')} {searchResult.relationship.status}
+                        </div>
                       )}
                     </div>
                     <div className="flex gap-2">
-                      <GradientButton variant="secondary" className="flex-1">Thêm bạn</GradientButton>
+                      <GradientButton
+                        variant="secondary"
+                        className="flex-1"
+                        type="button"
+                        onClick={() =>
+                          sendFriendRequest(searchResult.userId || searchResult._id)
+                        }
+                      >
+                        {t('friends.addFriendBtn')}
+                      </GradientButton>
                     </div>
                   </div>
                 </GlassCard>
@@ -293,8 +363,10 @@ function FriendsPage() {
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {suggestions.map((suggestion, idx) => (
-                <GlassCard key={idx} hover className="animate-slideUp" style={{animationDelay: `${idx * 0.1}s`}}>
+              {suggestions
+                .filter((s) => !dismissedSuggestions.has(s.name))
+                .map((suggestion, idx) => (
+                <GlassCard key={suggestion.name} hover className="animate-slideUp" style={{animationDelay: `${idx * 0.1}s`}}>
                   <div className="text-center">
                     <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center text-4xl mx-auto mb-3">
                       {suggestion.avatar}
@@ -303,10 +375,28 @@ function FriendsPage() {
                     <div className="text-xs glass-strong px-2 py-1 rounded-full inline-block mb-2">
                       {suggestion.reason}
                     </div>
-                    <div className="text-sm text-gray-400 mb-4">{suggestion.mutualFriends} bạn chung</div>
+                    <div className="text-sm text-gray-400 mb-4">{t('friends.mutualFriends', { n: suggestion.mutualFriends })}</div>
                     <div className="flex gap-2">
-                      <GradientButton variant="secondary" className="flex-1">Thêm bạn</GradientButton>
-                      <button className="glass px-3 py-2 rounded-xl hover:bg-white/10 transition-all">✕</button>
+                      <GradientButton
+                        type="button"
+                        variant="secondary"
+                        className="flex-1"
+                        onClick={() =>
+                          toast.success(t('friends.toastInviteDemo', { name: suggestion.name }))
+                        }
+                      >
+                        {t('friends.addFriendBtn')}
+                      </GradientButton>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDismissedSuggestions((prev) => new Set([...prev, suggestion.name]))
+                        }
+                        className="glass px-3 py-2 rounded-xl hover:bg-white/10 transition-all"
+                        aria-label={t('friends.hideSuggestionAria')}
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
                 </GlassCard>
@@ -316,14 +406,7 @@ function FriendsPage() {
         )}
       </div>
       
-      {/* Toast */}
-      {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+      <AddFriendModal isOpen={showAddFriend} onClose={() => setShowAddFriend(false)} />
     </div>
   );
 }

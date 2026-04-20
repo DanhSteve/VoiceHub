@@ -6,16 +6,20 @@
 import api from './api';
 
 const userService = {
+  /** User hiện tại — GET /api/users/me (user-service) */
+  getMe: async () => {
+    return await api.get('/users/me');
+  },
+
   // Lấy profile của 1 user - GET /users/:userId
   // Dùng khi: xem profile người khác, click vào avatar
   getProfile: async (userId) => {
     return await api.get(`/users/${userId}`);
   },
 
-  // Cập nhật profile của mình - PUT /users/profile
-  // data: { name, bio, location, website, ... }
+  // Cập nhật profile của mình — PATCH /users/me (user-service user.routes.js)
   updateProfile: async (data) => {
-    return await api.put('/users/profile', data);
+    return await api.patch('/users/me', data);
   },
 
   // Upload avatar - POST /users/avatar

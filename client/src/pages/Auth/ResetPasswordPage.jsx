@@ -1,17 +1,31 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { GradientButton } from '../../components/Shared';
+import { ArrowRight, KeyRound, LogIn } from 'lucide-react';
+import AuthPageLayout from '../../components/Auth/AuthPageLayout';
+import AuthMarketingAside from '../../components/Auth/AuthMarketingAside';
+import { authInputSurface, authPrimaryButtonClass } from '../../components/Auth/authFieldClasses';
+import { useTheme } from '../../context/ThemeContext';
 import authService from '../../services/authService';
+import { useAppStrings } from '../../locales/appStrings';
 
 function ResetPasswordPage() {
   const navigate = useNavigate();
+  const { isDarkMode } = useTheme();
+  const { t } = useAppStrings();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') || '';
 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const inputOk = authInputSurface(isDarkMode, { dense: true });
+  const btnPrimary = authPrimaryButtonClass(isDarkMode);
+  const titleCls = isDarkMode ? 'text-white' : 'text-[#0f172a]';
+  const mutedCls = isDarkMode ? 'text-slate-400' : 'text-slate-600';
+  const labelCls = isDarkMode ? 'text-slate-200' : 'text-slate-700';
+  const barEmpty = isDarkMode ? 'bg-slate-700' : 'bg-slate-200';
 
   const passwordStrength = useMemo(() => {
     let score = 0;
@@ -22,30 +36,38 @@ function ResetPasswordPage() {
     return score;
   }, [password]);
 
+  const getStrengthColor = () => {
+    if (passwordStrength === 0) return 'from-slate-400 to-slate-500';
+    if (passwordStrength === 1) return 'from-red-500 to-orange-500';
+    if (passwordStrength === 2) return 'from-amber-500 to-orange-500';
+    if (passwordStrength === 3) return 'from-emerald-500 to-teal-500';
+    return 'from-emerald-600 to-teal-600';
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!token) {
-      toast.error('Liên kết không hợp lệ hoặc đã hết hạn');
+      toast.error(t('resetPassword.toastInvalidToken'));
       return;
     }
     if (password.length < 8) {
-      toast.error('Mật khẩu phải có ít nhất 8 ký tự');
+      toast.error(t('resetPassword.toastPasswordMin'));
       return;
     }
     if (password !== confirmPassword) {
-      toast.error('Mật khẩu xác nhận không khớp');
+      toast.error(t('resetPassword.toastConfirmMismatch'));
       return;
     }
 
     setLoading(true);
     try {
       await authService.resetPassword(token, password);
-      toast.success('Đặt lại mật khẩu thành công');
+      toast.success(t('resetPassword.toastSuccess'));
       navigate('/login', {
-        state: { message: 'Mật khẩu đã được cập nhật. Bạn có thể đăng nhập ngay.' },
+        state: { message: t('resetPassword.loginFlashMessage') },
       });
     } catch (error) {
-      const message = error?.message || 'Không thể đặt lại mật khẩu';
+      const message = error?.message || t('resetPassword.toastResetErr');
       toast.error(message);
     } finally {
       setLoading(false);
@@ -53,70 +75,93 @@ function ResetPasswordPage() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#020817] text-slate-100 overflow-hidden">
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute -top-20 -left-20 h-[22rem] w-[22rem] rounded-full border border-cyan-500/20 bg-cyan-500/10 blur-2xl animate-pulse-slow" />
-        <div className="absolute top-20 left-1/3 h-56 w-[20rem] rounded-[48%] border border-sky-500/20 bg-sky-500/10 blur-2xl animate-pulse-slow" style={{ animationDelay: '0.5s' }} />
+    <AuthPageLayout aside={<AuthMarketingAside />}>
+      <div className="mb-1 flex justify-end">
+        <Link
+          to="/login"
+          className={`inline-flex items-center gap-2 text-base font-semibold ${isDarkMode ? 'text-cyan-400 hover:underline' : 'text-cyan-700 hover:underline'}`}
+        >
+          <LogIn className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+          {t('resetPassword.loginLink')}
+        </Link>
       </div>
 
-      <div className="relative z-10 flex min-h-screen items-center justify-center px-5 py-10 sm:px-8">
-        <div className="w-full max-w-lg rounded-2xl border border-cyan-500/20 bg-gradient-to-b from-[#07122f]/90 to-[#030b1f]/95 p-6 shadow-[0_14px_40px_rgba(2,8,23,0.62)] backdrop-blur-xl animate-slideUp sm:p-8">
-          <h1 className="mt-1 text-3xl font-bold text-white">Đặt lại mật khẩu</h1>
-          <p className="mt-2 text-base text-slate-400">
-            Tạo mật khẩu mới để bảo vệ tài khoản của bạn.
-          </p>
-
-          <form onSubmit={handleSubmit} className="mt-7 space-y-5">
-            <div>
-              <label htmlFor="password" className="mb-2 block text-sm font-semibold text-slate-200">Mật khẩu mới</label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="w-full rounded-xl border border-slate-800 bg-[#040f2a] px-4 py-3 text-sm text-white placeholder:text-slate-500 transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/40"
-                placeholder="••••••••"
-              />
-              {password && (
-                <div className="mt-2 flex gap-1">
-                  {[0, 1, 2, 3].map((slot) => (
-                    <div
-                      key={slot}
-                      className={`h-1.5 flex-1 rounded-full ${slot < passwordStrength ? 'bg-gradient-to-r from-cyan-500 to-blue-600' : 'bg-slate-800'}`}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label htmlFor="confirmPassword" className="mb-2 block text-sm font-semibold text-slate-200">Xác nhận mật khẩu mới</label>
-              <input
-                id="confirmPassword"
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                className="w-full rounded-xl border border-slate-800 bg-[#040f2a] px-4 py-3 text-sm text-white placeholder:text-slate-500 transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/40"
-                placeholder="••••••••"
-              />
-            </div>
-
-            <GradientButton
-              variant="primary"
-              className="w-full justify-center rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 py-3 text-base font-bold hover:from-cyan-400 hover:to-blue-500"
-              type="submit"
-              disabled={loading}
-            >
-              {loading ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
-            </GradientButton>
-          </form>
-
-          <Link to="/login" className="mt-7 block text-center text-sm text-slate-500 hover:text-slate-300 transition-colors">
-            Quay lại đăng nhập
-          </Link>
+      <div className="mt-3 flex items-start gap-3">
+        <div
+          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+            isDarkMode ? 'bg-cyan-500/15 text-cyan-300' : 'bg-cyan-100 text-cyan-700'
+          }`}
+        >
+          <KeyRound className="h-6 w-6" strokeWidth={1.75} aria-hidden />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h1 className={`text-[1.65rem] font-bold tracking-tight sm:text-[1.85rem] ${titleCls}`}>{t('resetPassword.title')}</h1>
+          <p className={`mt-2 text-base leading-relaxed sm:text-lg ${mutedCls}`}>{t('resetPassword.subtitle')}</p>
         </div>
       </div>
-    </div>
+
+      <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+        <div>
+          <label htmlFor="password" className={`mb-2.5 block text-base font-semibold ${labelCls}`}>
+            {t('resetPassword.newPassword')}
+          </label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className={inputOk}
+            placeholder={t('common.passwordPlaceholder')}
+            autoComplete="new-password"
+          />
+          {password && (
+            <div className="mt-2">
+              <div className="mb-1 flex gap-1">
+                {[0, 1, 2, 3].map((slot) => (
+                  <div
+                    key={slot}
+                    className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
+                      slot < passwordStrength ? `bg-gradient-to-r ${getStrengthColor()}` : barEmpty
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label htmlFor="confirmPassword" className={`mb-2.5 block text-base font-semibold ${labelCls}`}>
+            {t('resetPassword.confirmNewPassword')}
+          </label>
+          <input
+            id="confirmPassword"
+            type="password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            className={inputOk}
+            placeholder={t('common.confirmPasswordPlaceholder')}
+            autoComplete="new-password"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={loading}
+          className={`flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-lg font-bold text-white shadow-lg transition disabled:cursor-not-allowed disabled:opacity-60 ${btnPrimary}`}
+        >
+          {loading ? t('resetPassword.updating') : t('resetPassword.update')}
+          {!loading && <ArrowRight className="h-5 w-5" strokeWidth={2} aria-hidden />}
+        </button>
+      </form>
+
+      <Link
+        to="/login"
+        className={`mt-8 block text-center text-base font-medium ${mutedCls} hover:text-cyan-600 dark:hover:text-cyan-300`}
+      >
+        {t('resetPassword.backToLogin')}
+      </Link>
+    </AuthPageLayout>
   );
 }
 

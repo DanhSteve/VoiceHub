@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -24,7 +22,7 @@ html.light {
 }
 
 html.light body {
-  background: linear-gradient(145deg, #f6f9ff 0%, #eef3fb 45%, #f8faff 100%);
+  background: linear-gradient(165deg, #bfdbfe 0%, #e0f2fe 38%, #f0f9ff 72%, #cbd5e1 100%);
   background-attachment: fixed;
 }
 
@@ -58,8 +56,12 @@ html.light .bg-gradient-to-br .text-white {
 
 /* Normalize hardcoded dark utility classes in light mode */
 html.light .bg-\[\#020817\],
-html.light .bg-\[\#0a0118\] {
-  background: linear-gradient(145deg, #f7f9ff 0%, #eff4fc 100%) !important;
+html.light .bg-\[\#0a0118\],
+html.light .bg-\[\#050810\],
+html.light .bg-\[\#0b0e14\],
+html.light .bg-\[\#080a0f\],
+html.light .bg-\[\#0c0f15\] {
+  background: linear-gradient(165deg, #dbeafe 0%, #e0f2fe 45%, #f1f5f9 100%) !important;
 }
 
 html.light .bg-\[\#040f2a\],
@@ -99,8 +101,120 @@ html.light textarea::placeholder {
   color: #7b8aa3 !important;
 }
 
+/*
+ * Preview landing: khi html.light nhưng khung demo bật UI tối (theme cục bộ),
+ * các rule normalize phía trên sẽ ép chữ trắng → xám đậm và ép input/nền tối → sáng.
+ * Lớp .voicehub-landing-embed--dark hoàn tác trong phạm vi khung preview.
+ */
+html.light .voicehub-landing-embed--dark .text-white {
+  color: #ffffff !important;
+}
+
+html.light .voicehub-landing-embed--dark .text-gray-400,
+html.light .voicehub-landing-embed--dark .text-gray-300 {
+  color: rgb(148 163 184) !important;
+}
+
+html.light .voicehub-landing-embed--dark .text-gray-500 {
+  color: rgb(100 116 139) !important;
+}
+
+html.light .voicehub-landing-embed--dark .bg-\[\#020817\] {
+  background-color: #020817 !important;
+}
+html.light .voicehub-landing-embed--dark .bg-\[\#0a0118\] {
+  background-color: #0a0118 !important;
+}
+html.light .voicehub-landing-embed--dark .bg-\[\#050810\] {
+  background-color: #050810 !important;
+}
+html.light .voicehub-landing-embed--dark .bg-\[\#0b0e14\] {
+  background-color: #0b0e14 !important;
+}
+html.light .voicehub-landing-embed--dark .bg-\[\#080a0f\] {
+  background-color: #080a0f !important;
+}
+html.light .voicehub-landing-embed--dark .bg-\[\#0c0f15\] {
+  background-color: #0c0f15 !important;
+}
+
+html.light .voicehub-landing-embed--dark .bg-\[\#040f2a\] {
+  background-color: #040f2a !important;
+}
+html.light .voicehub-landing-embed--dark .bg-\[\#030d24\] {
+  background-color: #030d24 !important;
+}
+html.light .voicehub-landing-embed--dark .bg-slate-900\/60 {
+  background-color: rgb(15 23 42 / 0.6) !important;
+}
+html.light .voicehub-landing-embed--dark .bg-slate-900\/70 {
+  background-color: rgb(15 23 42 / 0.7) !important;
+}
+html.light .voicehub-landing-embed--dark .bg-slate-900\/45 {
+  background-color: rgb(15 23 42 / 0.45) !important;
+}
+html.light .voicehub-landing-embed--dark .bg-slate-900\/40 {
+  background-color: rgb(15 23 42 / 0.4) !important;
+}
+html.light .voicehub-landing-embed--dark .bg-slate-900\/35 {
+  background-color: rgb(15 23 42 / 0.35) !important;
+}
+
+html.light .voicehub-landing-embed--dark .border-slate-800 {
+  border-color: rgb(30 41 59) !important;
+}
+html.light .voicehub-landing-embed--dark .border-white\/10 {
+  border-color: rgb(255 255 255 / 0.1) !important;
+}
+html.light .voicehub-landing-embed--dark .border-white\/15 {
+  border-color: rgb(255 255 255 / 0.15) !important;
+}
+html.light .voicehub-landing-embed--dark .border-white\/20 {
+  border-color: rgb(255 255 255 / 0.2) !important;
+}
+
+html.light .voicehub-landing-embed--dark input,
+html.light .voicehub-landing-embed--dark textarea,
+html.light .voicehub-landing-embed--dark select {
+  background-color: #0c1018 !important;
+  color: #f1f5f9 !important;
+  border-color: rgba(71, 85, 105, 0.9) !important;
+}
+
+html.light .voicehub-landing-embed--dark input::placeholder,
+html.light .voicehub-landing-embed--dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+html.light .voicehub-landing-embed--dark .hover\:bg-slate-800\/70:hover {
+  background-color: rgb(30 41 59 / 0.7) !important;
+}
+html.light .voicehub-landing-embed--dark .hover\:bg-slate-800\/60:hover {
+  background-color: rgb(30 41 59 / 0.6) !important;
+}
+html.light .voicehub-landing-embed--dark .hover\:bg-white\/10:hover {
+  background-color: rgb(255 255 255 / 0.1) !important;
+}
+html.light .voicehub-landing-embed--dark .hover\:bg-white\/5:hover {
+  background-color: rgb(255 255 255 / 0.05) !important;
+}
+
+html.light .scrollbar-overlay:hover::-webkit-scrollbar-thumb,
+html.light .scrollbar-overlay:focus-within::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.2);
+}
+html.light .scrollbar-overlay::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 23, 42, 0.32);
+}
+@supports (scrollbar-width: thin) {
+  html.light .scrollbar-overlay:hover,
+  html.light .scrollbar-overlay:focus-within {
+    scrollbar-color: rgba(15, 23, 42, 0.28) transparent;
+  }
+}
+
 html.light .text-gradient {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #0891b2 0%, #0d9488 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -119,7 +233,7 @@ html.light .text-gradient {
   }
 
   body {
-    font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     background: #0a0118;

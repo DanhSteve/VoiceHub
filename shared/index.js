@@ -42,5 +42,6 @@ module.exports = {
   ...require('./utils/fieldCrypto'),
   ...require('./utils/cryptoMetrics'),
   ...require('./utils/migration'),
+  firebaseStorage: require('./utils/firebaseStorage'),
 };
 

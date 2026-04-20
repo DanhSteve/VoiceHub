@@ -1,4 +1,5 @@
 const Membership = require('../models/Membership');
+const Organization = require('../models/Organization');
 const jwt = require('jsonwebtoken');
 const { emitRealtimeEvent } = require('/shared');
 // Không log JWT/link mời đầy đủ — production nên dùng HTTPS cho FRONTEND_URL.
@@ -220,6 +221,24 @@ exports.joinViaLink = async (req, res, next) => {
       return res.status(401).json({ status: 'fail', message: 'Not authenticated' });
     }
 
+    const org = await Organization.findById(req.params.orgId).lean();
+    if (!org || !org.isActive) {
+      return res.status(404).json({ status: 'fail', message: 'Organization not found' });
+    }
+
+    const joinForm = org.settings?.joinApplicationForm;
+    if (joinForm?.enabled) {
+      return res.json({
+        status: 'success',
+        data: {
+          requiresJoinApplication: true,
+          organizationId: String(org._id),
+          organizationName: org.name,
+        },
+        message: 'Vui lòng điền form gia nhập',
+      });
+    }
+
     const membership = await Membership.findOneAndUpdate(
       { user: userId, organization: req.params.orgId },
       {
@@ -301,6 +320,59 @@ exports.removeMember = async (req, res, next) => {
     });
 
     res.json({ status: 'success', message: 'Member removed' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Người dùng tự rời tổ chức (không cần quyền admin). Chủ sở hữu duy nhất không được rời — phải xóa tổ chức hoặc chuyển quyền. */
+exports.leaveOrganization = async (req, res, next) => {
+  try {
+    const orgId = req.params.orgId;
+    const userId = req.user?.id || req.user?.userId || req.user?._id;
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Not authenticated' });
+    }
+
+    const membership = await Membership.findOne({
+      user: userId,
+      organization: orgId,
+      status: 'active',
+    });
+
+    if (!membership) {
+      return res.status(404).json({ status: 'fail', message: 'Bạn không thuộc tổ chức này' });
+    }
+
+    const normalizedRole = Membership.normalizeRole(membership.role);
+    if (normalizedRole === 'owner') {
+      const ownerCount = await Membership.countDocuments({
+        organization: orgId,
+        status: 'active',
+        role: 'owner',
+      });
+      if (ownerCount <= 1) {
+        return res.status(400).json({
+          status: 'fail',
+          message:
+            'Bạn là chủ sở hữu duy nhất. Hãy xóa tổ chức hoặc chuyển quyền sở hữu trước khi rời.',
+        });
+      }
+    }
+
+    await Membership.findOneAndDelete({ _id: membership._id });
+
+    await emitRealtimeEvent({
+      event: 'organization:member_removed',
+      userId: String(userId),
+      payload: {
+        organizationId: String(orgId),
+        userId: String(userId),
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    res.json({ status: 'success', message: 'Đã rời tổ chức' });
   } catch (error) {
     next(error);
   }

@@ -1,4 +1,5 @@
-const mongoose = require('mongoose');
+const { mongo } = require('/shared');
+const { mongoose } = mongo;
 const Friend = require('../models/Friend');
 const { getRedisClient, friendWebhook, logger, emitRealtimeEvent } = require('/shared');
 const axios = require('axios');
@@ -6,6 +7,7 @@ const axios = require('axios');
 const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3004';
 const CHAT_SERVICE_URL = process.env.CHAT_SERVICE_URL || 'http://chat-service:3006';
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
+const USER_SERVICE_INTERNAL_TOKEN = process.env.USER_SERVICE_INTERNAL_TOKEN || '';
 
 const MONGO_UNAVAILABLE_MSG = 'Service temporarily unavailable. Please try again later.';
 
@@ -357,12 +359,43 @@ class FriendService {
         })
       );
 
+      let presenceMap = {};
+      if (USER_SERVICE_INTERNAL_TOKEN && friendIds.length > 0) {
+        try {
+          const pr = await axios.post(
+            `${USER_SERVICE_URL}/api/users/internal/presence/batch`,
+            { userIds: friendIds },
+            {
+              headers: { 'x-internal-token': USER_SERVICE_INTERNAL_TOKEN },
+              timeout: 8000,
+              validateStatus: () => true,
+            }
+          );
+          if (pr.status === 200 && pr.data?.data && typeof pr.data.data === 'object') {
+            presenceMap = pr.data.data;
+          }
+        } catch (err) {
+          logger.warn('presence batch failed:', err.message);
+        }
+      }
+
       const result = {
-        friends: friends.map((f) => ({
-          friendId: userMap[f.friendId?.toString()] || f.friendId,
-          acceptedAt: f.acceptedAt,
-          createdAt: f.createdAt,
-        })),
+        friends: friends.map((f) => {
+          const uid = f.friendId?.toString();
+          const u = userMap[uid];
+          const mergedFriend = u
+            ? {
+                ...u,
+                status:
+                  presenceMap[uid] === 'online' ? 'online' : u.status || 'offline',
+              }
+            : f.friendId;
+          return {
+            friendId: mergedFriend,
+            acceptedAt: f.acceptedAt,
+            createdAt: f.createdAt,
+          };
+        }),
         totalPages: Math.ceil(total / limit),
         currentPage: page,
         total,

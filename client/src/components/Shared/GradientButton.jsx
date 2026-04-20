@@ -1,6 +1,8 @@
 const GradientButton = ({ children, onClick, variant = "primary", className = "", icon = null, disabled = false, type = "button", ...rest }) => {
   const variants = {
     primary: "bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700",
+    /** Cùng tông shell (cyan/teal) — Tasks, CTA thống nhất light mode */
+    shell: "bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-700 hover:to-teal-700",
     secondary: "bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600",
     success: "bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600",
     warm: "bg-gradient-to-r from-orange-500 to-yellow-500 hover:from-orange-600 hover:to-yellow-600",

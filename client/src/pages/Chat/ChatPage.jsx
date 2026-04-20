@@ -1,17 +1,69 @@
-import { useState, useEffect } from "react";
-import axios from "axios";
+import { useState, useEffect, useCallback } from "react";
+import toast from "react-hot-toast";
 
 import NavigationSidebar from "../../components/Layout/NavigationSidebar";
+import api from "../../services/api";
+import { useTheme } from "../../context/ThemeContext";
+import { appShellBg } from "../../theme/shellTheme";
 import {
   Dropdown,
   GlassCard,
   GradientButton,
   Modal,
   StatusIndicator,
-  Toast
 } from "../../components/Shared";
+import { useAppStrings } from "../../locales/appStrings";
+
+const unwrapPayload = (payload) => {
+  if (payload == null) return null;
+  if (Array.isArray(payload)) return payload;
+  return payload?.data ?? payload?.channels ?? payload?.items ?? payload;
+};
+
+const unwrapList = (payload) => {
+  const inner = unwrapPayload(payload);
+  return Array.isArray(inner) ? inner : [];
+};
 
 function ChatPage() {
+  const { isDarkMode } = useTheme();
+  const { t } = useAppStrings();
+
+  const normalizeChannel = useCallback(
+    (c) => ({
+      ...c,
+      id: c?.id ?? c?._id,
+      name: c?.name ?? t("chat.defaultChannelName"),
+      icon: c?.icon ?? "📢",
+      members: c?.members ?? c?.memberCount ?? 0,
+    }),
+    [t]
+  );
+
+  const normalizeDm = useCallback(
+    (d) => ({
+      ...d,
+      id: d?.id ?? d?._id,
+      name: d?.name ?? t("chat.defaultUserName"),
+      avatar: d?.avatar ?? "👤",
+      status: d?.status ?? "offline",
+      lastMsg: d?.lastMsg ?? d?.lastMessage ?? "",
+    }),
+    [t]
+  );
+
+  const normalizeMessage = useCallback(
+    (m) => ({
+      ...m,
+      id: m?.id ?? m?._id,
+      content: m?.content ?? m?.text ?? "",
+      user: m?.user ?? {
+        name: m?.senderName ?? t("chat.defaultUserName"),
+        avatar: m?.senderAvatar ?? "👤",
+      },
+    }),
+    [t]
+  );
 
   const [selectedChannel, setSelectedChannel] = useState(null);
   const [message, setMessage] = useState("");
@@ -26,7 +78,6 @@ function ChatPage() {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [showThreadFor, setShowThreadFor] = useState(null);
   const [showImagePreview, setShowImagePreview] = useState(null);
-  const [toast, setToast] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
 
@@ -35,48 +86,43 @@ function ChatPage() {
     "👏","🚀","💪","🙏","😍","🤔","😎","🎨"
   ];
 
-  const showToast = (message, type = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
-  };
-
   /* ---------------- FETCH DATA ---------------- */
 
   useEffect(() => {
     fetchChannels();
     fetchDirectMessages();
-  }, []);
+  }, [normalizeChannel, normalizeDm]);
 
   useEffect(() => {
     if (selectedChannel) {
       fetchMessages(selectedChannel);
     }
-  }, [selectedChannel]);
+  }, [selectedChannel, normalizeMessage]);
 
   const fetchChannels = async () => {
     try {
-      const res = await axios.get("/api/channels");
-      setChannels(res.data);
+      const res = await api.get("/channels");
+      setChannels(unwrapList(res).map(normalizeChannel).filter((c) => c.id));
     } catch (err) {
-      console.error(err);
+      if (import.meta.env.DEV) console.warn("[ChatPage] fetchChannels:", err?.message);
     }
   };
 
   const fetchDirectMessages = async () => {
     try {
-      const res = await axios.get("/api/dm");
-      setDirectMessages(res.data);
+      const res = await api.get("/dm");
+      setDirectMessages(unwrapList(res).map(normalizeDm).filter((d) => d.id));
     } catch (err) {
-      console.error(err);
+      if (import.meta.env.DEV) console.warn("[ChatPage] fetchDirectMessages:", err?.message);
     }
   };
 
   const fetchMessages = async (channelId) => {
     try {
-      const res = await axios.get(`/api/messages/${channelId}`);
-      setMessages(res.data);
+      const res = await api.get(`/messages/${channelId}`);
+      setMessages(unwrapList(res).map(normalizeMessage));
     } catch (err) {
-      console.error(err);
+      if (import.meta.env.DEV) console.warn("[ChatPage] fetchMessages:", err?.message);
     }
   };
 
@@ -86,16 +132,17 @@ function ChatPage() {
     if (!message.trim()) return;
 
     try {
-      const res = await axios.post("/api/messages", {
+      const res = await api.post("/messages", {
         channelId: selectedChannel,
         content: message
       });
 
-      setMessages(prev => [...prev, res.data]);
+      const created = normalizeMessage(unwrapPayload(res) ?? res);
+      if (created?.id) setMessages((prev) => [...prev, created]);
       setMessage("");
 
     } catch (err) {
-      console.error(err);
+      if (import.meta.env.DEV) console.warn("[ChatPage] sendMessage:", err?.message);
     }
   };
 
@@ -122,38 +169,42 @@ function ChatPage() {
   const handleDeleteMessage = async (msgId) => {
     try {
 
-      await axios.delete(`/api/messages/${msgId}`);
+      await api.delete(`/messages/${msgId}`);
 
-      setMessages(messages.filter(m => m.id !== msgId));
+      setMessages(messages.filter((m) => m.id !== msgId && m._id !== msgId));
 
-      showToast("Đã xóa tin nhắn");
+      toast.success(t("chat.toastDeleted"));
 
     } catch (err) {
-      console.error(err);
+      if (import.meta.env.DEV) console.warn("[ChatPage] handleDeleteMessage:", err?.message);
     }
   };
 
   const handleReaction = async (msgId, emoji) => {
     try {
 
-      await axios.post(`/api/messages/${msgId}/reaction`, { emoji });
+      await api.post(`/messages/${msgId}/reaction`, { emoji });
 
-      showToast("Đã thêm reaction");
+      toast.success(t("chat.toastReaction"));
 
       setShowEmojiPicker(false);
 
     } catch (err) {
-      console.error(err);
+      if (import.meta.env.DEV) console.warn("[ChatPage] handleReaction:", err?.message);
     }
   };
 
   /* ---------------- UI ---------------- */
 
+  const chatShell = isDarkMode
+    ? "h-screen flex overflow-hidden bg-[#020817] text-slate-100"
+    : `h-screen flex overflow-hidden ${appShellBg(false)} text-slate-900`;
+
   return (
 <>
-<div className="h-screen flex overflow-hidden bg-[#020817] text-slate-100">
+<div className={chatShell}>
 
-<NavigationSidebar currentPage="Tin Nhắn"/>
+<NavigationSidebar currentPage={t("chat.sidebarTitle")}/>
 
 <div className="flex-1 flex">
 
@@ -161,14 +212,14 @@ function ChatPage() {
 
 <div className="w-72 bg-slate-900/60 border-r border-slate-800 p-4 overflow-y-auto scrollbar-overlay">
 
-<h2 className="text-xl font-extrabold text-white mb-4">
-Tin Nhắn
+<h2 className={`text-xl font-extrabold mb-4 ${isDarkMode ? "text-white" : "text-slate-900"}`}>
+{t("chat.sidebarTitle")}
 </h2>
 
 {/* CHANNELS */}
 
 <h3 className="text-sm font-bold text-gray-400 mb-3">
-CÁC KÊNH
+{t("chat.channelsHeading")}
 </h3>
 
 <div className="space-y-2">
@@ -189,12 +240,12 @@ className="p-3 rounded-xl cursor-pointer bg-[#040f2a] border border-slate-800 ho
 
 <div className="flex-1">
 
-<div className="font-semibold text-white">
+<div className={`font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>
 {channel.name}
 </div>
 
 <div className="text-xs text-gray-400">
-{channel.members} thành viên
+{channel.members} {t("chat.membersSuffix")}
 </div>
 
 </div>
@@ -207,13 +258,13 @@ className="p-3 rounded-xl cursor-pointer bg-[#040f2a] border border-slate-800 ho
 onClick={() => setShowCreateChannelModal(true)}
 className="w-full mt-3 py-2 bg-[#040f2a] border border-slate-800 rounded-lg text-sm hover:bg-slate-800/70 transition-all"
 >
-+ Tạo kênh
+{t("chat.createChannel")}
 </button>
 
 {/* DIRECT MESSAGES */}
 
 <h3 className="text-sm font-bold text-gray-400 mt-6 mb-3">
-TIN NHẮN RIÊNG
+{t("chat.dmHeading")}
 </h3>
 
 <div className="space-y-2">
@@ -228,7 +279,7 @@ className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/60 cursor-p
 
 <div className="relative">
 
-<div className="w-9 h-9 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center text-base">
+<div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-500 to-teal-600 flex items-center justify-center text-base">
 {dm.avatar}
 </div>
 
@@ -238,7 +289,7 @@ className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/60 cursor-p
 
 <div className="flex-1">
 
-<div className="text-white font-medium text-sm">
+<div className={`font-medium text-sm ${isDarkMode ? "text-white" : "text-slate-900"}`}>
 {dm.name}
 </div>
 
@@ -265,8 +316,8 @@ className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/60 cursor-p
 
 <div className="p-3.5 bg-slate-900/60 border-b border-slate-800">
 
-<h2 className="text-lg font-bold text-white">
-{currentChat?.name || "Chọn kênh"}
+<h2 className={`text-lg font-bold ${isDarkMode ? "text-white" : "text-slate-900"}`}>
+{currentChat?.name || t("chat.selectChannel")}
 </h2>
 
 </div>
@@ -280,17 +331,17 @@ className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/60 cursor-p
 
 <div key={msg.id} className="flex gap-3">
 
-<div className="w-9 h-9 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center text-sm">
+<div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-500 to-teal-600 flex items-center justify-center text-sm">
 {msg.user?.avatar}
 </div>
 
 <div>
 
-<div className="text-white font-semibold text-xs">
+<div className={`font-semibold text-xs ${isDarkMode ? "text-white" : "text-slate-900"}`}>
 {msg.user?.name}
 </div>
 
-<p className="text-sm text-gray-300">
+<p className={`text-sm ${isDarkMode ? "text-gray-300" : "text-slate-600"}`}>
 {msg.content}
 </p>
 
@@ -313,13 +364,13 @@ className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/60 cursor-p
 type="text"
 value={message}
 onChange={(e)=>setMessage(e.target.value)}
-className="flex-1 px-4 py-2.5 rounded-xl bg-[#040f2a] border border-slate-800 text-sm text-white"
-placeholder="Nhập tin nhắn..."
+className={`flex-1 px-4 py-2.5 rounded-xl bg-[#040f2a] border border-slate-800 text-sm ${isDarkMode ? "text-white" : "text-slate-900"}`}
+placeholder={t("chat.placeholderInput")}
 />
 
 <button
 onClick={sendMessage}
-className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-500 to-indigo-500 text-sm font-semibold hover:from-violet-400 hover:to-indigo-400 transition-all"
+className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 text-sm font-semibold text-white hover:from-cyan-500 hover:to-teal-500 transition-all"
 >
 🚀
 </button>
@@ -340,7 +391,7 @@ className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-violet-500 to-indigo-500
 <Modal
 isOpen={showEmojiPicker}
 onClose={()=>setShowEmojiPicker(false)}
-title="Emoji"
+title={t("chat.modalEmojiTitle")}
 size="sm"
 >
 
@@ -366,27 +417,17 @@ className="text-xl"
 <Modal
 isOpen={showCreateChannelModal}
 onClose={()=>setShowCreateChannelModal(false)}
-title="Tạo Kênh"
+title={t("chat.modalCreateChannelTitle")}
 >
 
 <GradientButton
-onClick={()=>showToast("Tạo kênh thành công")}
+onClick={() => toast.success(t("chat.createChannelOk"))}
 >
-Tạo
+{t("chat.create")}
 </GradientButton>
 
 </Modal>
 
-
-{/* TOAST */}
-
-{toast && (
-<Toast
-message={toast.message}
-type={toast.type}
-onClose={()=>setToast(null)}
-/>
-)}
 
 </>
 

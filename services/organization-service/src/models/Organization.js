@@ -1,5 +1,34 @@
 const { mongoose } = require('/shared/config/mongo');
 
+const joinFormFieldSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, trim: true },
+    label: { type: String, required: true, maxlength: 300 },
+    type: {
+      type: String,
+      enum: ['short_text', 'long_text', 'single_choice', 'radio', 'checkbox'],
+      required: true,
+    },
+    required: { type: Boolean, default: false },
+    options: [{ type: String, maxlength: 200 }],
+  },
+  { _id: false }
+);
+
+const joinApplicationFormSettingsSchema = new mongoose.Schema(
+  {
+    enabled: { type: Boolean, default: false },
+    formVersion: { type: Number, default: 1, min: 1 },
+    defaultRoleOnApprove: {
+      type: String,
+      enum: ['member', 'admin'],
+      default: 'member',
+    },
+    fields: { type: [joinFormFieldSchema], default: [] },
+  },
+  { _id: false }
+);
+
 const organizationSchema = new mongoose.Schema(
   {
     name: {
@@ -29,6 +58,10 @@ const organizationSchema = new mongoose.Schema(
       requireApproval: {
         type: Boolean,
         default: true,
+      },
+      joinApplicationForm: {
+        type: joinApplicationFormSettingsSchema,
+        default: () => ({}),
       },
     },
     isActive: {

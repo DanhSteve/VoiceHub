@@ -50,8 +50,7 @@ class UserService {
         }
       }
 
-      const userProfile = await UserProfile.findOne({ userId })
-        .populate('userId', 'email');
+      const userProfile = await UserProfile.findOne({ userId });
 
       // Cache user profile
       if (redis && userProfile) {
@@ -69,8 +68,7 @@ class UserService {
   // Lấy user profile theo username
   async getUserProfileByUsername(username) {
     try {
-      const userProfile = await UserProfile.findOne({ username })
-        .populate('userId', 'email');
+      const userProfile = await UserProfile.findOne({ username });
 
       return userProfile;
     } catch (error) {

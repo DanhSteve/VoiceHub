@@ -1,82 +1,105 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
-import { GlassCard, GradientButton, NotificationBellBadge, Toast } from '../../components/Shared';
+import { ConfirmDialog, GlassCard, GradientButton, NotificationBellBadge } from '../../components/Shared';
+import { useSocket } from '../../context/SocketContext';
+import { useTheme } from '../../context/ThemeContext';
+import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
 import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
-import { useSocket } from '../../context/SocketContext';
+import { useAppStrings } from '../../locales/appStrings';
+import { PageSearchBar, SearchFilterChips } from '../../features/search';
 
 function NotificationsPage() {
   const navigate = useNavigate();
+  const { isDarkMode } = useTheme();
+  const { t } = useAppStrings();
   const [filter, setFilter] = useState('all');
-  const [notifications, setNotifications] = useState([
-    { id: 1, type: 'task', icon: '✅', title: 'Task được gán', message: 'Sarah Chen đã gán bạn vào task "Thiết kế Landing Page"', time: '5 phút trước', read: false, priority: 'high', action: 'Xem Task' },
-    { id: 2, type: 'mention', icon: '💬', title: '@mentions trong chat', message: 'Mike Ross đã nhắc đến bạn trong #general', time: '15 phút trước', read: false, priority: 'medium', action: 'Xem Chat' },
-    { id: 3, type: 'deadline', icon: '⏰', title: 'Deadline sắp đến', message: 'Task "Review Pull Request" sẽ đến hạn trong 2 giờ', time: '30 phút trước', read: false, priority: 'high', action: 'Cập Nhật' },
-    { id: 4, type: 'meeting', icon: '📅', title: 'Meeting sắp diễn ra', message: 'Họp nhóm hàng ngày bắt đầu lúc 10:00 AM', time: '1 giờ trước', read: true, priority: 'medium', action: 'Tham Gia' },
-    { id: 5, type: 'file', icon: '📁', title: 'File mới được chia sẻ', message: 'Emma Wilson đã upload "BaoCaoQ4.pdf" vào Documents', time: '2 giờ trước', read: true, priority: 'low', action: 'Xem File' },
-    { id: 6, type: 'friend', icon: '👥', title: 'Yêu cầu kết bạn', message: 'Anna Lee đã gửi lời mời kết bạn', time: '3 giờ trước', read: false, priority: 'low', action: 'Xem Profile' },
-    { id: 7, type: 'task', icon: '✅', title: 'Task hoàn thành', message: 'David Kim đã hoàn thành task "Setup CI/CD Pipeline"', time: '5 giờ trước', read: true, priority: 'low', action: 'Xem Chi Tiết' },
-    { id: 8, type: 'system', icon: '🔔', title: 'Cập nhật hệ thống', message: 'VoiceHub đã được cập nhật lên phiên bản 2.1.0', time: '1 ngày trước', read: true, priority: 'low', action: 'Xem Changelog' }
-  ]);
-  const [toast, setToast] = useState(null);
+  const [notifSearch, setNotifSearch] = useState('');
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [deleteNotifConfirmId, setDeleteNotifConfirmId] = useState(null);
   const { on, off } = useSocket();
 
   const getRelativeTime = (input) => {
-    if (!input) return 'Vừa xong';
+    if (!input) return t('time.justNow');
     const target = new Date(input).getTime();
-    if (!Number.isFinite(target)) return 'Vừa xong';
+    if (!Number.isFinite(target)) return t('time.justNow');
 
     const diffMinutes = Math.max(1, Math.floor((Date.now() - target) / 60000));
-    if (diffMinutes < 60) return `${diffMinutes} phút trước`;
+    if (diffMinutes < 60) return t('time.minutesAgo', { n: diffMinutes });
     const diffHours = Math.floor(diffMinutes / 60);
-    if (diffHours < 24) return `${diffHours} giờ trước`;
+    if (diffHours < 24) return t('time.hoursAgo', { n: diffHours });
     const diffDays = Math.floor(diffHours / 24);
-    return `${diffDays} ngày trước`;
+    return t('time.daysAgo', { n: diffDays });
   };
 
   const iconByType = {
     task: '✅',
+    task_assigned: '✅',
+    task_completed: '✅',
     mention: '💬',
+    message: '💬',
     deadline: '⏰',
     meeting: '📅',
     file: '📁',
+    document: '📁',
     friend: '👥',
     system: '🔔',
+    org_join_application: '🏢',
   };
 
-  const actionByType = {
-    task: 'Xem Task',
-    mention: 'Xem Chat',
-    deadline: 'Cập Nhật',
-    meeting: 'Tham Gia',
-    file: 'Xem File',
-    friend: 'Thêm bạn',
-    system: 'Xem Chi Tiết',
+  const getActionLabel = (rawType, mappedType) => {
+    const r = String(rawType || '');
+    if (r === 'task' || r === 'task_assigned' || r === 'task_completed') return t('notifications.actionTask');
+    if (r === 'mention' || r === 'message') return t('notifications.actionChat');
+    if (r === 'deadline') return t('notifications.actionUpdate');
+    if (r === 'meeting') return t('notifications.actionJoin');
+    if (r === 'file' || r === 'document') return t('notifications.actionFile');
+    if (r === 'friend' || r === 'friend_request' || r === 'friend_accepted') return t('notifications.actionFriend');
+    if (r === 'org_join_application') return t('notifications.actionJoinApp');
+    if (r === 'system') return t('notifications.actionDetail');
+    const m = String(mappedType || '');
+    if (m === 'task') return t('notifications.actionTask');
+    if (m === 'mention') return t('notifications.actionChat');
+    if (m === 'friend') return t('notifications.actionFriend');
+    return t('notifications.actionDetail');
   };
 
   const toViewNotification = (item) => {
     const id = item?._id || item?.id;
     const rawType = String(item?.type || 'system');
     const type =
-      rawType === 'friend_request' || rawType === 'friend_accepted' ? 'friend' : rawType;
+      rawType === 'friend_request' || rawType === 'friend_accepted'
+        ? 'friend'
+        : rawType === 'task_assigned' || rawType === 'task_completed'
+          ? 'task'
+          : rawType === 'document'
+            ? 'file'
+            : rawType === 'message'
+              ? 'mention'
+              : rawType === 'org_join_application'
+                ? 'system'
+                : rawType;
     return {
       id,
       type,
       rawType,
-      icon: iconByType[type] || '🔔',
-      title: item?.title || 'Thông báo',
+      icon: iconByType[rawType] || iconByType[type] || '🔔',
+      title: item?.title || t('notifications.defaultTitle'),
       message: item?.content || item?.message || '',
       time: getRelativeTime(item?.createdAt),
       read: Boolean(item?.isRead),
       priority: item?.data?.priority || 'low',
-      action: actionByType[type] || 'Xem Chi Tiết',
+      action: getActionLabel(rawType, type),
       /** Chuông + badge đỏ giống sidebar (chủ yếu lời mời kết bạn) */
       useBellCard: rawType === 'friend_request' || type === 'friend',
     };
   };
 
   const loadNotifications = useCallback(async () => {
+    setNotificationsLoading(true);
     try {
       const response = await api.get('/notifications', { params: { limit: 100 } });
       const payload = response?.data || response;
@@ -84,11 +107,12 @@ function NotificationsPage() {
       const list = Array.isArray(data?.notifications) ? data.notifications : [];
       setNotifications(list.map(toViewNotification));
     } catch (error) {
-      const msg = error?.response?.data?.message || 'Không tải được thông báo từ máy chủ';
-      setToast({ message: msg, type: 'error' });
-      setTimeout(() => setToast(null), 3000);
+      const msg = error?.response?.data?.message || t('notifications.loadFail');
+      toast.error(msg);
+    } finally {
+      setNotificationsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     loadNotifications();
@@ -173,19 +197,14 @@ function NotificationsPage() {
     };
   }, [on, off]);
 
-  const showToast = (message, type = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
-  };
-
   const handleMarkAsRead = async (id) => {
     if (!id) return;
     try {
       await api.patch(`/notifications/${id}/read`);
       setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-      showToast('Đã đánh dấu đã đọc', 'success');
+      toast.success(t('notifications.markRead'));
     } catch (error) {
-      showToast(error?.response?.data?.message || 'Không thể cập nhật trạng thái thông báo', 'error');
+      toast.error(error?.response?.data?.message || t('notifications.markReadErr'));
     }
   };
 
@@ -193,20 +212,21 @@ function NotificationsPage() {
     try {
       await api.patch('/notifications/read-all');
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-      showToast('Đã đánh dấu tất cả đã đọc', 'success');
+      toast.success(t('notifications.markAllRead'));
     } catch (error) {
-      showToast(error?.response?.data?.message || 'Không thể đánh dấu tất cả thông báo', 'error');
+      toast.error(error?.response?.data?.message || t('notifications.markAllErr'));
     }
   };
 
-  const handleDeleteNotification = async (id) => {
+  const confirmDeleteNotification = async () => {
+    const id = deleteNotifConfirmId;
     if (!id) return;
     try {
       await api.delete(`/notifications/${id}`);
       setNotifications((prev) => prev.filter((n) => n.id !== id));
-      showToast('Đã xóa thông báo', 'success');
+      toast.success(t('notifications.deleted'));
     } catch (error) {
-      showToast(error?.response?.data?.message || 'Không thể xóa thông báo', 'error');
+      toast.error(error?.response?.data?.message || t('notifications.deleteErr'));
     }
   };
 
@@ -221,160 +241,187 @@ function NotificationsPage() {
     switch (notif.type) {
       case 'mention':
         navigate('/chat/organization');
-        showToast('Đang mở chat tổ chức', 'info');
+        toast(t('notifications.toastOpenOrgChat'), { icon: '💬' });
         break;
       case 'friend':
         navigate('/chat/friends?tab=requests');
-        showToast('Đang mở lời mời kết bạn', 'info');
+        toast(t('notifications.toastOpenFriendReq'), { icon: '👥' });
         break;
       case 'meeting':
         navigate('/calendar');
-        showToast('Đang mở lịch họp', 'info');
+        toast(t('notifications.toastOpenCalendar'), { icon: '📅' });
         break;
       case 'system':
         navigate('/settings');
-        showToast('Đang mở cài đặt hệ thống', 'info');
+        toast(t('notifications.toastOpenSettings'), { icon: '⚙️' });
         break;
       case 'task':
       case 'deadline':
-        // Tasks page is intentionally locked, route to dashboard context instead.
-        navigate('/dashboard');
-        showToast('Trang công việc đang khóa, đã chuyển về dashboard', 'info');
+        navigate('/tasks');
+        toast(t('notifications.toastOpenTasks'), { icon: '✅' });
         break;
       case 'file':
-        // Documents page is intentionally locked, route to dashboard context instead.
-        navigate('/dashboard');
-        showToast('Trang tài liệu đang khóa, đã chuyển về dashboard', 'info');
+        navigate('/documents');
+        toast(t('notifications.toastOpenDocs'), { icon: '📁' });
         break;
       default:
         navigate('/dashboard');
-        showToast('Đang mở chi tiết thông báo', 'info');
+        toast(t('notifications.toastOpenDetail'), { icon: 'ℹ️' });
     }
   };
 
-  const filteredNotifications =
-    filter === 'all'
-      ? notifications
-      : filter === 'unread'
-        ? notifications.filter((n) => !n.read)
-        : filter === 'friend'
-          ? notifications.filter((n) => n.type === 'friend')
-          : notifications.filter((n) => n.type === filter);
+  const filteredNotifications = useMemo(() => {
+    let list =
+      filter === 'all'
+        ? notifications
+        : filter === 'unread'
+          ? notifications.filter((n) => !n.read)
+          : filter === 'friend'
+            ? notifications.filter((n) => n.type === 'friend')
+            : notifications.filter((n) => n.type === filter);
+    const q = notifSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((n) => {
+      const hay = `${n.title || ''} ${n.message || ''} ${n.action || ''} ${n.type || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [notifications, filter, notifSearch]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  const notifFilterOptions = useMemo(
+    () => [
+      { id: 'all', label: t('notifications.filterAll'), icon: '📋' },
+      { id: 'unread', label: t('notifications.filterUnread'), icon: '⭐' },
+      { id: 'task', label: t('notifications.filterTasks'), icon: '✅' },
+      { id: 'mention', label: t('common.mentions'), icon: '💬' },
+      { id: 'deadline', label: t('notifications.filterDeadline'), icon: '⏰' },
+      { id: 'meeting', label: t('notifications.filterMeetings'), icon: '📅' },
+      { id: 'friend', label: t('notifications.filterFriend'), icon: '🔔' },
+    ],
+    [t]
+  );
+
+  const shell = `${appShellBg(isDarkMode)} ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`;
+  const gc = isDarkMode ? 'border border-slate-800 bg-slate-900/60' : 'border border-slate-200 bg-white shadow-sm';
+  const btnGhost = isDarkMode
+    ? 'border border-slate-800 bg-[#040f2a] font-semibold text-sm hover:bg-slate-800/70'
+    : 'border border-slate-200 bg-white font-semibold text-sm text-slate-800 hover:bg-slate-50';
 
   return (
     <>
       <ThreeFrameLayout
         center={
-          <div className="p-5 lg:p-6 bg-[#020817] text-slate-100 min-h-full">
+          <div className={`p-5 lg:p-6 min-h-full ${shell}`}>
         {/* Header */}
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-extrabold text-white mb-1">Trung Tâm Thông Báo</h1>
-            <p className="text-sm text-gray-400">Theo dõi tất cả hoạt động và cập nhật quan trọng</p>
+        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <h1 className={`mb-1 text-3xl font-extrabold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+              {t('notifications.title')}
+            </h1>
+            <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('notifications.subtitle')}</p>
+            <PageSearchBar
+              className="mt-4 max-w-md"
+              value={notifSearch}
+              onChange={setNotifSearch}
+              placeholder={t('notifications.searchPlaceholder')}
+              isDarkMode={isDarkMode}
+              id="notifications-search"
+            />
           </div>
-          <div className="flex gap-3">
+          <div className="flex shrink-0 flex-wrap gap-3">
             <button 
               onClick={() => navigate('/settings')}
-              className="bg-[#040f2a] border border-slate-800 px-4 py-2 rounded-xl hover:bg-slate-800/70 transition-all font-semibold text-sm"
+              className={`rounded-xl px-4 py-2 transition-all ${btnGhost}`}
             >
-              ⚙️ Cài Đặt Thông Báo
+              {t('notifications.btnNotifSettings')}
             </button>
             <button 
               onClick={handleMarkAllAsRead}
-              className="bg-[#040f2a] border border-slate-800 px-4 py-2 rounded-xl hover:bg-slate-800/70 transition-all font-semibold text-sm"
+              className={`rounded-xl px-4 py-2 transition-all ${btnGhost}`}
             >
-              ✓ Đánh Dấu Đã Đọc Tất Cả
+              {t('notifications.btnMarkAll')}
             </button>
           </div>
         </div>
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4 mb-6">
-          <GlassCard hover className="border border-slate-800 bg-slate-900/60">
+          <GlassCard hover className={gc}>
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-2xl">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-600 to-teal-600 text-2xl">
                 🔔
               </div>
               <div>
-                <div className="text-2xl font-black text-white">{notifications.length}</div>
-                <div className="text-xs text-gray-400">Tổng thông báo</div>
+                <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{notifications.length}</div>
+                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('notifications.statTotal')}</div>
               </div>
             </div>
           </GlassCard>
-          <GlassCard hover className="border border-slate-800 bg-slate-900/60">
+          <GlassCard hover className={gc}>
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-red-500 to-orange-500 flex items-center justify-center text-2xl">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-red-500 to-orange-500 text-2xl">
                 ⭐
               </div>
               <div>
-                <div className="text-2xl font-black text-white">{unreadCount}</div>
-                <div className="text-xs text-gray-400">Chưa đọc</div>
+                <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{unreadCount}</div>
+                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('notifications.statUnread')}</div>
               </div>
             </div>
           </GlassCard>
-          <GlassCard hover className="border border-slate-800 bg-slate-900/60">
+          <GlassCard hover className={gc}>
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-2xl">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 text-2xl">
                 ✅
               </div>
               <div>
-                <div className="text-2xl font-black text-white">{notifications.filter(n => n.type === 'task').length}</div>
-                <div className="text-xs text-gray-400">Công việc</div>
+                <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{notifications.filter(n => n.type === 'task').length}</div>
+                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('notifications.statTasks')}</div>
               </div>
             </div>
           </GlassCard>
-          <GlassCard hover className="border border-slate-800 bg-slate-900/60">
+          <GlassCard hover className={gc}>
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center text-2xl">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-green-500 to-emerald-500 text-2xl">
                 💬
               </div>
               <div>
-                <div className="text-2xl font-black text-white">{notifications.filter(n => n.type === 'mention').length}</div>
-                <div className="text-xs text-gray-400">Mentions</div>
+                <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{notifications.filter(n => n.type === 'mention').length}</div>
+                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('common.mentions')}</div>
               </div>
             </div>
           </GlassCard>
         </div>
 
-        {/* Filters */}
-        <div className="flex gap-2 mb-6">
-          {[
-            { id: 'all', label: 'Tất Cả', icon: '📋' },
-            { id: 'unread', label: 'Chưa Đọc', icon: '⭐' },
-            { id: 'task', label: 'Công Việc', icon: '✅' },
-            { id: 'mention', label: 'Mentions', icon: '💬' },
-            { id: 'deadline', label: 'Deadline', icon: '⏰' },
-            { id: 'meeting', label: 'Meetings', icon: '📅' },
-            { id: 'friend', label: 'Kết bạn', icon: '🔔' },
-          ].map(f => (
-            <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                filter === f.id
-                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
-                  : 'bg-[#040f2a] border border-slate-800 hover:bg-slate-800/70 text-gray-400'
-              }`}
-            >
-              <span className="mr-2">{f.icon}</span>
-              {f.label}
-            </button>
-          ))}
+        {/* Bộ lọc loại + từ khóa (ô tìm phía trên) */}
+        <div className="mb-6">
+          <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+            {t('notifications.filtersHeading')}
+          </p>
+          <SearchFilterChips
+            aria-label={t('notifications.filtersAria')}
+            options={notifFilterOptions}
+            value={filter}
+            onChange={setFilter}
+            isDarkMode={isDarkMode}
+          />
         </div>
 
         {/* Notifications List */}
         <div className="space-y-3">
-          {filteredNotifications.map((notif, idx) => (
-            <GlassCard key={notif.id} hover className={`animate-slideUp border border-slate-800 bg-slate-900/60 ${!notif.read ? 'border-l-4 border-purple-500' : ''}`} style={{animationDelay: `${idx * 0.05}s`}}>
+          {notificationsLoading && (
+            <p className={`text-center text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>{t('notifications.loading')}</p>
+          )}
+          {!notificationsLoading &&
+            filteredNotifications.map((notif, idx) => (
+            <GlassCard key={notif.id} hover className={`animate-slideUp ${gc} ${!notif.read ? (isDarkMode ? 'border-l-4 border-cyan-500' : 'border-l-4 border-cyan-600') : ''}`} style={{animationDelay: `${idx * 0.05}s`}}>
               <div className="flex items-start gap-4">
                 {notif.useBellCard && notif.type === 'friend' ? (
                   <div className="flex-shrink-0 pt-0.5">
                     <NotificationBellBadge
                       count={notif.read ? 0 : 1}
                       sizeClass="h-12 w-12"
-                      textSizeClass="text-2xl"
+                      isDark={isDarkMode}
                     />
                   </div>
                 ) : (
@@ -390,10 +437,10 @@ function NotificationsPage() {
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="font-bold text-white">{notif.title}</h3>
                     {!notif.read && (
-                      <span className="px-2 py-0.5 rounded-full bg-purple-600 text-xs font-bold">MỚI</span>
+                      <span className="rounded-full bg-cyan-600 px-2 py-0.5 text-xs font-bold text-white">{t('common.newBadge')}</span>
                     )}
                     {notif.priority === 'high' && (
-                      <span className="px-2 py-0.5 rounded-full bg-red-600 text-xs font-bold">QUAN TRỌNG</span>
+                      <span className="px-2 py-0.5 rounded-full bg-red-600 text-xs font-bold">{t('common.importantBadge')}</span>
                     )}
                   </div>
                   <p className="text-gray-300 text-sm mb-2">{notif.message}</p>
@@ -410,7 +457,7 @@ function NotificationsPage() {
                       className="!px-5 !py-2.5 !rounded-xl text-sm font-bold whitespace-nowrap shadow-lg"
                       onClick={() => handleOpenNotification(notif)}
                     >
-                      Thêm bạn
+                      {t('notifications.addFriend')}
                     </GradientButton>
                   ) : (
                   <button 
@@ -425,18 +472,14 @@ function NotificationsPage() {
                       onClick={() => handleMarkAsRead(notif.id)}
                       className="bg-[#040f2a] border border-slate-800 px-4 py-2 rounded-lg hover:bg-slate-800/70 transition-all text-xs text-gray-400 hover:text-white"
                     >
-                      Đánh dấu đã đọc
+                      {t('notifications.markOneRead')}
                     </button>
                   )}
                   <button 
-                    onClick={() => {
-                      if (window.confirm('Xóa thông báo này?')) {
-                        handleDeleteNotification(notif.id);
-                      }
-                    }}
+                    onClick={() => setDeleteNotifConfirmId(notif.id)}
                     className="bg-[#040f2a] border border-slate-800 px-4 py-2 rounded-lg hover:bg-slate-800/70 transition-all text-xs text-red-400 hover:text-red-300"
                   >
-                    🗑️ Xóa
+                    {t('notifications.deleteBtn')}
                   </button>
                 </div>
               </div>
@@ -444,24 +487,25 @@ function NotificationsPage() {
           ))}
         </div>
 
-        {filteredNotifications.length === 0 && (
+        {!notificationsLoading && filteredNotifications.length === 0 && (
           <div className="text-center py-20">
             <div className="text-6xl mb-4">🎉</div>
-            <p className="text-xl text-gray-400">Không có thông báo nào!</p>
+            <p className="text-xl text-gray-400">{t('notifications.empty')}</p>
           </div>
         )}
           </div>
         }
       />
 
-    {/* Toast */}
-      {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+    <ConfirmDialog
+      isOpen={deleteNotifConfirmId != null}
+      onClose={() => setDeleteNotifConfirmId(null)}
+      onConfirm={confirmDeleteNotification}
+      title={t('notifications.confirmDeleteTitle')}
+      message={t('notifications.confirmDeleteMsg')}
+      confirmText={t('common.delete')}
+      cancelText={t('nav.cancel')}
+    />
     </>
   );
 }

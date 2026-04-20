@@ -1,6 +1,7 @@
 require('dotenv').config();
 const app = require('./app');
 const { connectDB, connectRedis, disconnectDB, logger } = require('/shared');
+const { startTaskFromFileWorker } = require('./workers/taskFromFileWorker');
 
 const PORT = process.env.PORT || 3009;
 
@@ -9,6 +10,10 @@ connectDB()
   .then(() => {
     // Kết nối Redis
     connectRedis();
+
+    startTaskFromFileWorker().catch((err) => {
+      logger.error('taskFromFileWorker failed:', err.message);
+    });
 
     // Khởi động server
     app.listen(PORT, () => {

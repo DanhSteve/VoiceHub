@@ -8,7 +8,8 @@
 ======================================== */
 
 // Import hooks từ React để build context
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
+import { AuthContext } from './auth-context';
 
 // Import toast để hiển thị notifications
 // Dùng để show "Đăng nhập thành công", "Đăng xuất", etc.
@@ -20,15 +21,11 @@ import authService from '../services/authService';
 
 // Import userService để update user status
 import userService from '../services/userService';
+import { getToken, setToken, removeToken } from '../utils/tokenStorage';
 
 /* ========================================
-   TẠO CONTEXT
-   - createContext(null): tạo Context với giá trị mặc định null
-   - Context này sẽ được provide ở AuthProvider
-   - Các component con dùng useAuth() để access
+   CONTEXT: đối tượng React Context được tạo trong ./auth-context.js (tách file để HMR ổn định).
 ======================================== */
-const AuthContext = createContext(null);
-
 /* ========================================
    CUSTOM HOOK: useAuth()
    Cách dùng: const { user, login, logout } = useAuth();
@@ -88,7 +85,7 @@ function AuthProvider({ children }) {
     const checkAuth = async () => {
       try {
         // Lấy token từ localStorage (được lưu khi login)
-        const token = localStorage.getItem('token');
+        const token = getToken();
         
         // Nếu có token → nghĩa là user đã login trước đó
         if (token) {
@@ -104,7 +101,7 @@ function AuthProvider({ children }) {
         console.error('Auth check failed:', error);
         
         // Xóa token lỗi khỏi localStorage
-        localStorage.removeItem('token');
+        removeToken();
       } finally {
         // Dù thành công hay thất bại cũng set loading = false
         setLoading(false);
@@ -146,7 +143,7 @@ function AuthProvider({ children }) {
       
       // Lưu token vào localStorage để persist login
       // Token này sẽ được gửi kèm mọi API request
-      localStorage.setItem('token', token);
+      setToken(token);
 
       // Cập nhật user state: ưu tiên profile từ user-service (displayName/avatar)
       try {
@@ -333,8 +330,7 @@ function AuthProvider({ children }) {
       // authService.logout() → POST /api/auth/logout
       await authService.logout();
       
-      // Xóa token khỏi localStorage
-      localStorage.removeItem('token');
+      removeToken();
       
       // Set user = null → app sẽ redirect về login
       setUser(null);
@@ -346,7 +342,7 @@ function AuthProvider({ children }) {
       console.error('Logout error:', error);
       
       // Force logout: xóa token và user dù API fail
-      localStorage.removeItem('token');
+      removeToken();
       setUser(null);
     }
   }, []);
@@ -396,8 +392,8 @@ function AuthProvider({ children }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-// Export AuthProvider để dùng trong main.jsx
-export { AuthProvider };
+// AuthContext: re-export từ ./auth-context.js (override cục bộ trong LandingDemoAuth)
+export { AuthProvider, AuthContext };
 
 /* ========================================
    CÁCH DÙNG TRONG COMPONENT:

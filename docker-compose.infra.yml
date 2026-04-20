@@ -26,9 +26,55 @@ services:
     networks:
       - enterprise-network
 
+  # Message broker: DM friend async (socket-service → chat-service)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: enterprise-rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-voicehub}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-voicehub-dev-change-me}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - enterprise-network
+
+  # LLM runtime (self-host) — phục vụ ai-task-worker
+  # Sau khi container chạy: docker exec enterprise-ollama ollama pull qwen2.5:3b-instruct
+  # (hoặc model khác và đặt OLLAMA_MODEL trong services/ai-task-worker/.env cho khớp)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: enterprise-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - enterprise-network
+
+  # OCR runtime (Phase 4) — REST API OCR
+  paddleocr-service:
+    image: blazordevlab/paddleocrapi:latest
+    container_name: enterprise-paddleocr-service
+    ports:
+      - "8000:8000"
+    networks:
+      - enterprise-network
+
 volumes:
   mongodb_data:
   redis_data:
+  rabbitmq_data:
+  ollama_data:
 
 networks:
   enterprise-network:

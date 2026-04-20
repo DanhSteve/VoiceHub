@@ -19,6 +19,7 @@ const notificationSchema = new mongoose.Schema(
         'meeting',
         'document',
         'system',
+        'org_join_application',
       ],
       required: true,
     },

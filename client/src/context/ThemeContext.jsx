@@ -7,31 +7,75 @@
 ======================================== */
 
 // Import hooks để build context
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useLayoutEffect, useMemo, useState } from 'react';
 
-// Tạo ThemeContext - sẽ provide isDarkMode và toggleTheme
+const FONT_SCALE_STORAGE_KEY = 'voicehub-font-scale';
+const FONT_SCALE_REM = {
+  normal: '100%',
+  comfortable: '112.5%',
+  large: '125%',
+};
+
+// Tạo ThemeContext — isDarkMode, toggleTheme, fontScale, setFontScale
 const ThemeContext = createContext();
+
+/** Khi nhúng trong khung demo landing: ghi đè sáng/tối cục bộ, không đổi theme toàn trang */
+const LandingDemoThemeContext = createContext(null);
 
 /* ========================================
    CUSTOM HOOK: useTheme()
    Cách dùng: const { isDarkMode, toggleTheme } = useTheme();
    
-   Component nào cần theme info → dùng hook này
-   VD: Header component muốn show dark/light icon
+   Trong khung preview landing (LandingDemoThemeProvider): theme cục bộ (đồng bộ khi app đổi; toggle trong demo không đổi app).
+   Ngoài đó: theme toàn app (localStorage + class trên <html>).
 ======================================== */
 function useTheme() {
   const context = useContext(ThemeContext);
-  
-  // Check xem có wrap trong ThemeProvider không
+  const demoOverride = useContext(LandingDemoThemeContext);
+
   if (!context) {
     throw new Error('useTheme must be used within ThemeProvider');
   }
-  
+
+  if (demoOverride) {
+    return demoOverride;
+  }
+
   return context;
 }
 
-// Export useTheme để dùng trong components
-export { useTheme };
+/**
+ * Bọc khung demo landing: theme preview tách khỏi ghi localStorage/html.
+ * - Đổi theme ở app thật → preview tự khớp theo.
+ * - Đổi theme trong preview → chỉ state cục bộ, không đổi app thật.
+ */
+function LandingDemoThemeProvider({ children }) {
+  const global = useContext(ThemeContext);
+  if (!global) {
+    throw new Error('LandingDemoThemeProvider must be used within ThemeProvider');
+  }
+
+  const { fontScale, setFontScale, isDarkMode: globalDark } = global;
+  const [demoDark, setDemoDark] = useState(() => globalDark);
+
+  useLayoutEffect(() => {
+    setDemoDark(globalDark);
+  }, [globalDark]);
+
+  const value = useMemo(
+    () => ({
+      isDarkMode: demoDark,
+      toggleTheme: () => setDemoDark((d) => !d),
+      fontScale,
+      setFontScale,
+    }),
+    [demoDark, fontScale, setFontScale]
+  );
+
+  return <LandingDemoThemeContext.Provider value={value}>{children}</LandingDemoThemeContext.Provider>;
+}
+
+export { useTheme, LandingDemoThemeProvider };
 
 /* ========================================
    THEMEPROVIDER COMPONENT
@@ -47,34 +91,39 @@ function ThemeProvider({ children }) {
     // Lấy theme đã lưu từ localStorage
     const saved = localStorage.getItem('theme');
     
-    // Nếu có saved → check = 'dark' không
-    // Nếu không có → default = true (dark mode)
-    return saved ? saved === 'dark' : true;
+    // Có bản ghi → theo đó; chưa có → mặc định sáng (đồng bộ mock đăng nhập/đăng ký).
+    if (saved === 'dark') return true;
+    if (saved === 'light') return false;
+    return false;
   });
 
-  /* ========================================
-     useEffect: APPLY THEME KHI THAY ĐỔI
-     Chạy mỗi khi isDarkMode change
-     - Lưu preference vào localStorage
-     - Add/remove class 'dark' trên <html>
-     - Tailwind sẽ dùng class này để style
-  ======================================== */
-  useEffect(() => {
-    // Lưu theme vào localStorage để persist
+  const [fontScale, setFontScaleState] = useState(() => {
+    const s = localStorage.getItem(FONT_SCALE_STORAGE_KEY);
+    if (s === 'comfortable' || s === 'large' || s === 'normal') return s;
+    return 'normal';
+  });
+
+  useLayoutEffect(() => {
     localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
-    
-    // Lấy <html> element (document.documentElement)
-    // Thêm/xóa class 'dark' để Tailwind apply dark: styles
+    const root = document.documentElement;
     if (isDarkMode) {
-      // Dark mode: remove 'light', add 'dark'
-      document.documentElement.classList.remove('light');
-      document.documentElement.classList.add('dark');
+      root.classList.remove('light');
+      root.classList.add('dark');
     } else {
-      // Light mode: remove 'dark', add 'light'
-      document.documentElement.classList.remove('dark');
-      document.documentElement.classList.add('light');
+      root.classList.remove('dark');
+      root.classList.add('light');
     }
-  }, [isDarkMode]); // Re-run khi isDarkMode thay đổi
+  }, [isDarkMode]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.fontSize = FONT_SCALE_REM[fontScale] || '100%';
+    localStorage.setItem(FONT_SCALE_STORAGE_KEY, fontScale);
+  }, [fontScale]);
+
+  const setFontScale = (value) => {
+    if (FONT_SCALE_REM[value] != null) setFontScaleState(value);
+  };
 
   /* ========================================
      toggleTheme: FUNCTION ĐỂ SWITCH THEME
@@ -88,7 +137,7 @@ function ThemeProvider({ children }) {
   // Return Provider với value chứa state và function
   // Mọi component con có thể access { isDarkMode, toggleTheme }
   return (
-    <ThemeContext.Provider value={{ isDarkMode, toggleTheme }}>
+    <ThemeContext.Provider value={{ isDarkMode, toggleTheme, fontScale, setFontScale }}>
       {children}
     </ThemeContext.Provider>
   );

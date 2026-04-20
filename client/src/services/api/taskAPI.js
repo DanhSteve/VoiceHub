@@ -8,6 +8,12 @@ function buildQueryParams(filters = {}) {
   return params;
 }
 
+/** Gateway permission: extractServerId đọc query (không cần parse JSON body). */
+function orgQuery(organizationId) {
+  if (organizationId == null || organizationId === '') return '';
+  return `?organizationId=${encodeURIComponent(String(organizationId))}`;
+}
+
 export const taskAPI = {
   // Get all tasks — truyền object: { organizationId?, dueFrom?, dueTo?, status?, ... }
   getTasks: (filters = {}) => {
@@ -22,18 +28,18 @@ export const taskAPI = {
   },
 
   // Get task by ID
-  getTask: (id) => {
-    return apiClient.get(`/tasks/${id}`);
+  getTask: (id, opts = {}) => {
+    return apiClient.get(`/tasks/${id}${orgQuery(opts.organizationId)}`);
   },
 
-  // Update task
-  updateTask: (id, updates) => {
-    return apiClient.put(`/tasks/${id}`, updates);
+  // Update task — opts.organizationId giúp API Gateway có ngữ cảnh org (query string)
+  updateTask: (id, updates, opts = {}) => {
+    return apiClient.put(`/tasks/${id}${orgQuery(opts.organizationId)}`, updates);
   },
 
   // Delete task
-  deleteTask: (id) => {
-    return apiClient.delete(`/tasks/${id}`);
+  deleteTask: (id, opts = {}) => {
+    return apiClient.delete(`/tasks/${id}${orgQuery(opts.organizationId)}`);
   },
 
   // Update task status

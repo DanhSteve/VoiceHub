@@ -32,6 +32,10 @@ const services = {
     url: process.env.TASK_SERVICE_URL || 'http://task-service:3009',
     routes: ['/api/tasks', '/api/work'],
   },
+  aiTask: {
+    url: process.env.AI_TASK_SERVICE_URL || 'http://ai-task-service:3020',
+    routes: ['/api/ai/tasks'],
+  },
   document: {
     url: process.env.DOCUMENT_SERVICE_URL || 'http://document-service:3010',
     routes: ['/api/documents'],
@@ -55,6 +59,7 @@ const publicRoutes = [
   '/api/auth/reset-password',
   '/api/auth/verify-email',
   '/health',
+  '/metrics',
   '/favicon.ico',
 ];
 

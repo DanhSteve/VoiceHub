@@ -5,21 +5,30 @@
 const routeActionMap = {
   // Chat Service
   'GET /api/messages': 'chat:read',
+  'GET /api/messages/search': 'chat:read',
   'POST /api/messages': 'chat:write',
+  'POST /api/messages/storage/signed-upload': 'chat:write',
   'PATCH /api/messages': 'chat:write',
   'DELETE /api/messages': 'chat:delete',
   'GET /api/chat/messages': 'chat:read',
   'POST /api/chat/messages': 'chat:write',
+  'POST /api/chat/messages/storage/signed-upload': 'chat:write',
   'PATCH /api/chat/messages': 'chat:write',
   'DELETE /api/chat/messages': 'chat:delete',
 
   // Task Service
   'GET /api/tasks': 'task:read',
   'POST /api/tasks': 'task:write',
+  'PUT /api/tasks': 'task:write',
   'PATCH /api/tasks': 'task:write',
   'DELETE /api/tasks': 'task:delete',
   'GET /api/work': 'task:read',
   'POST /api/work': 'task:write',
+
+  // AI Task Service
+  'POST /api/ai/tasks/extract': 'task:write',
+  'GET /api/ai/tasks/extractions': 'task:read',
+  'POST /api/ai/tasks/confirm': 'task:write',
 
   // Document Service
   'GET /api/documents': 'document:read',
@@ -44,6 +53,7 @@ const routeActionMap = {
   'PUT /api/organizations/:orgId/departments': 'organization:write',
   'DELETE /api/organizations/:orgId/departments': 'organization:delete',
   'GET /api/organizations/:orgId/members': 'organization:read',
+  'POST /api/organizations/:orgId/members/leave': 'organization:read',
   'POST /api/organizations/:orgId/members': 'organization:write',
   'PUT /api/organizations/:orgId/members': 'organization:write',
   'DELETE /api/organizations/:orgId/members': 'organization:delete',

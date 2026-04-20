@@ -6,24 +6,24 @@ const { emitRealtimeEvent } = require('/shared');
 
 const getUserId = (req) => req.user?.id || req.user?.userId || req.user?._id;
 const DEFAULT_DEPARTMENTS = [
-  { name: 'Nhân sự', description: 'Quản lý nhân sự và văn hóa doanh nghiệp' },
-  { name: 'Kế toán', description: 'Quản lý tài chính và kế toán nội bộ' },
-  { name: 'Kinh doanh', description: 'Quản lý bán hàng và phát triển khách hàng' },
-  { name: 'Vận hành', description: 'Điều phối vận hành và tối ưu quy trình' },
+  { name: 'Human Resources', description: 'HR and workplace culture' },
+  { name: 'Accounting', description: 'Finance and internal accounting' },
+  { name: 'Sales', description: 'Sales and customer growth' },
+  { name: 'Operations', description: 'Operations and process optimization' },
 ];
 
 const buildDefaultChannels = (organizationId, departmentId, ownerId) => [
   {
-    name: 'chat-chung',
-    description: 'Kênh trao đổi chung của phòng ban',
+    name: 'general',
+    description: 'Department-wide text chat',
     type: 'chat',
     organization: organizationId,
     department: departmentId,
     leader: ownerId,
   },
   {
-    name: 'voice-chung',
-    description: 'Kênh hội thoại voice của phòng ban',
+    name: 'voice',
+    description: 'Department voice channel',
     type: 'voice',
     organization: organizationId,
     department: departmentId,
@@ -178,6 +178,36 @@ exports.deleteOrganization = async (req, res, next) => {
       },
     });
     res.json({ status: 'success', message: 'Organization deactivated' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Kênh (roomId tin nhắn) mà user được phép xem trong tổ chức — dùng cho chat-service search. */
+exports.getAccessibleChannelIds = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { orgId } = req.params;
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+    const membership = await Membership.findOne({
+      user: userId,
+      organization: orgId,
+      status: 'active',
+    });
+    if (!membership) {
+      return res.status(403).json({ status: 'fail', message: 'Access denied' });
+    }
+    const channels = await Channel.find({ organization: orgId, isActive: true }).select('_id members').lean();
+    const uid = String(userId);
+    const channelIds = channels
+      .filter((ch) => {
+        if (!ch.members || ch.members.length === 0) return true;
+        return ch.members.some((m) => String(m) === uid || String(m?._id || m) === uid);
+      })
+      .map((ch) => String(ch._id));
+    res.json({ status: 'success', data: { channelIds } });
   } catch (error) {
     next(error);
   }

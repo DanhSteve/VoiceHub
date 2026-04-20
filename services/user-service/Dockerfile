@@ -4,6 +4,10 @@ FROM node:20-alpine
 # 2️⃣ Set working dir
 WORKDIR /app
 
+ENV npm_config_fetch_retries=10 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000
+
 # 3️⃣ Copy dependency files
 COPY package*.json ./
 

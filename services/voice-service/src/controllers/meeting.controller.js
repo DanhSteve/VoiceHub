@@ -164,8 +164,27 @@ class MeetingController {
       const { serverId, organizationId, status, page, limit, startFrom, startTo } = req.query;
 
       const filter = {};
-      if (serverId) filter.serverId = serverId;
-      if (organizationId) filter.organizationId = organizationId;
+      // Tránh CastError → 500 khi client gửi id không phải ObjectId hợp lệ
+      if (serverId) {
+        const sid = String(serverId).trim();
+        if (!mongoose.isValidObjectId(sid)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid serverId',
+          });
+        }
+        filter.serverId = new mongoose.Types.ObjectId(sid);
+      }
+      if (organizationId) {
+        const org = String(organizationId).trim();
+        if (!mongoose.isValidObjectId(org)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid organizationId',
+          });
+        }
+        filter.organizationId = new mongoose.Types.ObjectId(org);
+      }
 
       let sort = { startTime: -1 };
 
@@ -207,15 +226,14 @@ class MeetingController {
           });
         }
 
-        let userOid;
-        try {
-          userOid = new mongoose.Types.ObjectId(String(userId));
-        } catch (e) {
+        const uidStr = String(userId).trim();
+        if (!mongoose.isValidObjectId(uidStr)) {
           return res.status(400).json({
             success: false,
             message: 'Invalid user id',
           });
         }
+        const userOid = new mongoose.Types.ObjectId(uidStr);
 
         filter.$or = [{ hostId: userOid }, { 'participants.userId': userOid }];
         filter.startTime = { $gte: from, $lte: to };
@@ -241,6 +259,12 @@ class MeetingController {
       });
     } catch (error) {
       logger.error('Get meetings error:', error);
+      if (error.name === 'CastError' || error.name === 'BSONError') {
+        return res.status(400).json({
+          success: false,
+          message: error.message || 'Invalid query',
+        });
+      }
       res.status(500).json({
         success: false,
         message: error.message,

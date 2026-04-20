@@ -1,6 +1,6 @@
 # Shared Utilities
 
-Thư viện dùng chung cho tất cả các microservices.
+Thư viện dùng chung cho tất cả các microservices Node trong repo VoiceHub. Tổng quan repo: [`../README.md`](../README.md).
 
 ## Cấu trúc
 

@@ -1,0 +1,22 @@
+{
+  "repoId": "1fa4123d-ef6a-4e17-aa84-ddddf09c0aa9",
+  "repoName": "VoiceHub",
+  "server": "https://api.grapuco.com",
+  "language": "javascript",
+  "features": {
+    "embeddings": true,
+    "dataFlowAnalysis": true
+  },
+  "ignore": [
+    "node_modules",
+    "dist",
+    ".next",
+    ".git",
+    ".grapuco",
+    "__pycache__",
+    "vendor",
+    "target",
+    "build"
+  ],
+  "lastPush": "2026-04-18T08:06:02.858Z"
+}

@@ -7,6 +7,18 @@ export const organizationAPI = {
     return response;
   },
 
+  /** Đơn gia nhập đang chờ duyệt của user (sidebar). */
+  getMyPendingJoinApplications: async () => {
+    const response = await apiClient.get('/organizations/my/pending-join-applications');
+    return response;
+  },
+
+  /** Đơn gia nhập cần duyệt (owner/admin), gom cho Trang chủ tổ chức. */
+  getJoinApplicationsToReview: async () => {
+    const response = await apiClient.get('/organizations/my/join-applications-to-review');
+    return response;
+  },
+
   // Get single organization
   getOrganization: async (orgId) => {
     const response = await apiClient.get(`/organizations/${orgId}`);
@@ -67,9 +79,45 @@ export const organizationAPI = {
     return response;
   },
 
+  /** Người dùng hiện tại tự rời tổ chức */
+  leaveOrganization: async (orgId) => {
+    const response = await apiClient.post(`/organizations/${orgId}/members/leave`);
+    return response;
+  },
+
   // Join organization via invite link (beta)
   joinByInviteLink: async (orgId, token) => {
     const response = await apiClient.post(`/organizations/${orgId}/members/join-link`, { token });
+    return response;
+  },
+
+  /** Form gia nhập (owner/admin) */
+  getJoinApplicationForm: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/join-application-form`);
+    return response;
+  },
+  updateJoinApplicationForm: async (orgId, data) => {
+    const response = await apiClient.put(`/organizations/${orgId}/join-application-form`, data);
+    return response;
+  },
+  /** Schema công khai (user đã đăng nhập, trước khi vào org) */
+  getJoinApplicationFormPublic: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/join-application-form/public`);
+    return response;
+  },
+  submitJoinApplication: async (orgId, answers) => {
+    const response = await apiClient.post(`/organizations/${orgId}/join-applications`, { answers });
+    return response;
+  },
+  listJoinApplications: async (orgId, params = {}) => {
+    const response = await apiClient.get(`/organizations/${orgId}/join-applications`, { params });
+    return response;
+  },
+  reviewJoinApplication: async (orgId, applicationId, body) => {
+    const response = await apiClient.patch(
+      `/organizations/${orgId}/join-applications/${applicationId}`,
+      body
+    );
     return response;
   },
 

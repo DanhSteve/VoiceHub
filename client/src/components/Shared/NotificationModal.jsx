@@ -8,13 +8,13 @@ const sanitizeNoticeMessage = (rawMessage) => {
   return message || 'Thao tác đã được xử lý.';
 };
 
-function NotificationModal({ notice, onClose }) {
+function NotificationModal({ notice, onClose, layerClassName = 'z-[200]' }) {
   const type = notice?.type || 'success';
   const title = notice?.title || (type === 'fail' ? 'Thông báo lỗi' : type === 'info' ? 'Thông tin' : 'Thông báo');
   const message = sanitizeNoticeMessage(notice?.message);
 
   return (
-    <Modal isOpen={Boolean(notice)} onClose={onClose} title={title} size="sm">
+    <Modal isOpen={Boolean(notice)} onClose={onClose} title={title} size="sm" layerClassName={layerClassName}>
       <div className="space-y-4">
         <div
           className={`rounded-xl border px-3 py-2 text-sm ${

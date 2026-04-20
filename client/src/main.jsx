@@ -31,9 +31,7 @@ import './index.css';
    cho tất cả components con qua Context API
 ======================================== */
 
-// Import Toaster để hiển thị toast notifications
-// Library: react-hot-toast - nhẹ, đẹp, dễ dùng
-import { Toaster } from 'react-hot-toast';
+import VoiceHubToaster from './components/Shared/VoiceHubToaster';
 
 // Import AuthProvider để quản lý authentication state
 // File: ./context/AuthContext.jsx
@@ -49,6 +47,7 @@ import { SocketProvider } from './context/SocketContext';
 // File: ./context/ThemeContext.jsx
 // Cung cấp: theme state, toggleTheme(), theme colors
 import { ThemeProvider } from './context/ThemeContext';
+import { LocaleProvider } from './context/LocaleContext';
 
 /* ========================================
    RENDER ỨNG DỤNG VÀO DOM
@@ -95,6 +94,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           - Provide: isDark, colors, toggleTheme()
           - File: ./context/ThemeContext.jsx */}
       <ThemeProvider>
+        <LocaleProvider>
         {/* AuthProvider: quản lý authentication state
             - Provide: user, token, login(), logout()
             - Lưu token vào localStorage
@@ -115,46 +115,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             {/* Toaster: hiển thị toast notifications
                 - Đặt ở đây để dùng được ở mọi nơi
                 - toast.success(), toast.error() ở bất kỳ component nào */}
-            <Toaster
-              // Vị trí hiển thị toast: góc trên bên phải
-              position="top-right"
-              
-              // Options cho tất cả toasts
-              toastOptions={{
-                // Thời gian hiển thị: 3 giây (3000ms)
-                duration: 3000,
-                
-                // Style mặc định cho toast
-                style: {
-                  // Background màu slate đậm (dark mode friendly)
-                  background: '#1e293b',
-                  // Text màu trắng
-                  color: '#fff',
-                },
-                
-                // Style riêng cho success toast
-                success: {
-                  iconTheme: {
-                    // Icon màu xanh lá (green-500)
-                    primary: '#10b981',
-                    // Background icon màu trắng
-                    secondary: '#fff',
-                  },
-              },
-              
-              // Style riêng cho error toast
-              error: {
-                iconTheme: {
-                  // Icon màu đỏ (red-500)
-                  primary: '#ef4444',
-                  // Background icon màu trắng
-                  secondary: '#fff',
-                },
-              },
-            }}
-          />
+            <VoiceHubToaster />
           </SocketProvider>
         </AuthProvider>
+        </LocaleProvider>
       </ThemeProvider>
     </BrowserRouter>
   </React.StrictMode>

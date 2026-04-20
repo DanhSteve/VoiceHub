@@ -13,6 +13,15 @@ router.get('/health', (req, res) => {
   });
 });
 
+router.get('/metrics', (req, res) => {
+  res.json({
+    success: true,
+    service: 'api-gateway',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Apply authentication middleware cho tất cả routes (trừ public routes)
 router.use(authMiddleware);
 

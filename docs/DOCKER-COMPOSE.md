@@ -83,3 +83,23 @@ Thường gặp trên **Docker Desktop (Windows)** khi build **nhiều image son
    ```
 
 5. Kiểm tra **ổ đĩa còn trống** (image layer cần dung lượng khi export).
+
+## MongoDB: Atlas vs container `mongodb`
+
+- Các service trong repo thường đọc **`MONGODB_URI` từ `services/*/.env`** (thường là **MongoDB Atlas**).
+- Service `mongodb` trong [`docker-compose.infra.yml`](docker-compose.infra.yml) **chỉ cần** nếu bạn **chủ động** trỏ URI về `mongodb://...@mongodb:27017/...`. Nếu vẫn dùng Atlas thì container Mongo local có thể chạy nhưng **không** là nguồn dữ liệu mà app đang đọc.
+
+## Volume ẩn `/app/node_modules`
+
+- Nhiều service mount `./services/...:/app` và thêm volume ẩn `/app/node_modules` để giữ `node_modules` từ image.
+- Sau khi đổi **Dockerfile** hoặc **package.json**, nếu lệnh thiếu gói (ví dụ `nodemon: not found`), hãy **build lại image** và **tạo lại container**; trường hợp hiếm cần xóa volume ẩn đó rồi `up` lại.
+
+## Healthcheck (tùy chọn)
+
+- Có thể thêm `healthcheck` cho `mongodb` / `redis` và dùng `depends_on: condition: service_healthy` để giảm race khi chuyển sang **Mongo local** (Compose v2).
+
+## Điều hướng SPA & lỗi API (debug nhanh)
+
+- **Client** (`client/.env`): `VITE_API_URL` mặc định trỏ gateway, ví dụ `http://localhost:3000/api`. Nếu API lệch port → request fail, toast, có thể thấy “không chuyển trang” do redirect **401** (token hết hạn) trong interceptor.
+- **`ProtectedRoute`**: chỉ cho vào route khi đã đăng nhập; mất token → về `/`.
+- **401 / 404**: mở DevTools → Network xem URL và status; gateway log thường in path và service đích (`[API-Gateway] Incoming GET /api/...`).

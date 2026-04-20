@@ -7,6 +7,7 @@
 
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import BrandPageLoader from './Shared/BrandPageLoader';
 
 /**
  * ProtectedRoute Component
@@ -25,14 +26,10 @@ const ProtectedRoute = ({ children }) => {
   // Nếu đang loading (check auth) → hiển thị loading
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-        <div className="text-center">
-          <div className="text-8xl mb-4 animate-bounce">🚀</div>
-          <div className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-transparent">
-            Đang kiểm tra...
-          </div>
-        </div>
-      </div>
+      <BrandPageLoader
+        message="Đang kiểm tra..."
+        subMessage="Đang xác minh phiên đăng nhập"
+      />
     );
   }
 

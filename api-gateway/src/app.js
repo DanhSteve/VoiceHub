@@ -1,10 +1,20 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { services } = require('./config/services');
 require('dotenv').config();
 
 const app = express();
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.GATEWAY_RATE_LIMIT_MAX || 300),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !req.path.startsWith('/api'),
+});
+app.use(apiLimiter);
 const VOICE_SIGNAL_PATH = process.env.VOICE_SIGNAL_PATH || '/voice-socket';
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -38,6 +48,22 @@ app.use(
     ws: false,
     xfwd: true,
     logLevel: 'warn',
+    on: {
+      error(err, req, res) {
+        console.error('[API-Gateway] /socket.io proxy error:', err?.code || err?.message, '| upstream:', services.socket.url);
+        if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              success: false,
+              message: 'Socket service unreachable via gateway',
+              hint:
+                'Set SOCKET_SERVICE_URL to a reachable URL (Docker: http://socket-service:3017; host: http://127.0.0.1:3017). Or use client VITE_SOCKET_DIRECT_URL=http://127.0.0.1:3017 to bypass gateway for Socket.IO.',
+            })
+          );
+        }
+      },
+    },
   })
 );
 

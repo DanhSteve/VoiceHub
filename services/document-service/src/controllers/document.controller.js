@@ -80,7 +80,7 @@ class DocumentController {
   // Lấy danh sách documents
   async getDocuments(req, res) {
     try {
-      const { organizationId, serverId, uploadedBy, tags, isPublic, page, limit } = req.query;
+      const { organizationId, serverId, uploadedBy, tags, isPublic, page, limit, q: qParam } = req.query;
 
       const filter = { isActive: true };
 
@@ -89,6 +89,13 @@ class DocumentController {
       if (uploadedBy) filter.uploadedBy = uploadedBy;
       if (tags) filter.tags = { $in: tags.split(',') };
       if (isPublic !== undefined) filter.isPublic = isPublic === 'true';
+
+      if (qParam != null && String(qParam).trim() !== '') {
+        const esc = String(qParam)
+          .trim()
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filter.name = { $regex: esc, $options: 'i' };
+      }
 
       const result = await documentService.getDocuments(filter, {
         page: parseInt(page) || 1,

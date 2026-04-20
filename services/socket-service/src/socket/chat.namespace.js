@@ -1,5 +1,7 @@
 const axios = require('axios');
 const { emitToRoom, emitToUser } = require('./realtimeHub');
+const { publishFriendDm } = require('../messaging/rabbitPublisher');
+const redisPresence = require('../presence/redisPresence');
 
 // URL nội bộ tới chat-service trong docker-compose
 const CHAT_SERVICE_URL = process.env.CHAT_SERVICE_URL || 'http://chat-service:3006';
@@ -85,25 +87,48 @@ module.exports = function registerChatNamespace(io) {
       io.emit('users:online', Array.from(onlineUserSockets.keys()));
       // Kết nối socket đầu tiên → online trong DB
       if (prevCount === 0) {
+        redisPresence.setOnline(key);
         syncPresenceUserStatus(key, 'online');
       }
     }
 
     // ====== FRIEND DM: gửi tin nhắn ======
-    socket.on('friend:send', async ({ receiverId, content, messageType = 'text' }) => {
+    socket.on('friend:send', async ({ receiverId, content, messageType = 'text', replyToMessageId }) => {
       try {
         if (!receiverId || !content) {
           return socket.emit('error', { message: 'receiverId and content are required' });
         }
 
-        // Lấy token từ auth handshake để forward sang chat-service
+        let useQueue =
+          process.env.FRIEND_DM_USE_QUEUE !== 'false' && Boolean(process.env.RABBITMQ_URL);
+        if (replyToMessageId) {
+          useQueue = false;
+        }
+
+        if (useQueue && userId) {
+          const pub = await publishFriendDm({
+            senderId: userId,
+            receiverId,
+            content,
+            messageType,
+          });
+          if (pub.ok) {
+            redisPresence.refreshTtl(String(userId));
+            return;
+          }
+          console.warn('[socket-service] friend:send queue publish failed, falling back to HTTP');
+        }
+
         const token = normalizeToken(
           socket.handshake.auth?.token || socket.handshake.headers?.authorization
         );
 
+        const body = { receiverId, content, messageType };
+        if (replyToMessageId) body.replyToMessageId = replyToMessageId;
+
         const resp = await axios.post(
           `${CHAT_SERVICE_URL}/api/messages`,
-          { receiverId, content, messageType },
+          body,
           token
             ? { headers: { Authorization: `Bearer ${token}` } }
             : undefined
@@ -112,7 +137,6 @@ module.exports = function registerChatNamespace(io) {
         const payload = resp?.data || resp;
         const message = payload?.data || payload;
 
-        // Broadcast cho người nhận + echo lại cho người gửi
         emitToUser(receiverId, 'friend:new_message', message);
         socket.emit('friend:sent', message);
       } catch (err) {
@@ -151,7 +175,7 @@ module.exports = function registerChatNamespace(io) {
         if (current <= 1) {
           onlineUserSockets.delete(key);
           io.emit('user:disconnected', key);
-          // Hết socket (đóng app / mất mạng) → offline trong DB (chờ PATCH xong)
+          redisPresence.clear(key);
           await syncPresenceUserStatus(key, 'offline');
         } else {
           onlineUserSockets.set(key, current - 1);

@@ -33,6 +33,11 @@ const messageSchema = new mongoose.Schema(
     organizationId: {
       type: mongoose.Schema.Types.ObjectId,
     },
+    /** Tin nhắn kênh trả lời một tin khác (cùng roomId). */
+    replyToMessageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Message',
+    },
     // Soft delete - giữ message nhưng đánh dấu đã xóa
     isDeleted: {
       type: Boolean,
@@ -60,6 +65,29 @@ const messageSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /** Metadata file/hình (Firebase Storage); TTL & cleanup */
+    fileMeta: {
+      storagePath: { type: String },
+      storageBucket: { type: String },
+      originalName: { type: String },
+      mimeType: { type: String },
+      byteSize: { type: Number },
+      /** dm | org_room | meeting */
+      retentionContext: {
+        type: String,
+        enum: ['dm', 'org_room', 'meeting'],
+      },
+      storageTier: {
+        type: String,
+        enum: ['temp', 'chat', 'task'],
+        default: 'temp',
+      },
+      /** Thời điểm GC xóa object Storage + metadata */
+      expiresAt: { type: Date },
+      /** Đã copy sang vùng task — không GC temp path này theo chat TTL */
+      promotedToTask: { type: Boolean, default: false },
+      taskId: { type: mongoose.Schema.Types.ObjectId },
+    },
   },
   {
     timestamps: true,
@@ -71,6 +99,8 @@ messageSchema.index({ senderId: 1, createdAt: -1 });
 messageSchema.index({ receiverId: 1, createdAt: -1 });
 messageSchema.index({ roomId: 1, createdAt: -1 });
 messageSchema.index({ organizationId: 1, createdAt: -1 });
+messageSchema.index({ 'fileMeta.expiresAt': 1 });
+messageSchema.index({ 'fileMeta.storagePath': 1 });
 
 const Message = mongoose.model('Message', messageSchema);
 

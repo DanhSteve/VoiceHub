@@ -1,5 +1,5 @@
 const userService = require('../services/user.service');
-const { logger } = require('/shared');
+const { logger, getRedisClient } = require('/shared');
 
 class UserController {
   // Tạo user profile mới
@@ -237,6 +237,97 @@ class UserController {
       });
     } catch (error) {
       logger.error('Update status error:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  /**
+   * Cập nhật status từ dịch vụ nội bộ (socket-service presence).
+   * PATCH body: { userId, status } — đã qua internalServiceAuth.
+   */
+  /**
+   * Batch đọc presence "nóng" từ Redis (socket-service ghi vh:presence:*).
+   * friend-service / gateway có thể gọi để merge với profile.
+   */
+  async internalPresenceBatch(req, res) {
+    try {
+      const { userIds } = req.body || {};
+      if (!Array.isArray(userIds) || userIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'userIds must be a non-empty array',
+        });
+      }
+
+      const PREFIX = process.env.PRESENCE_REDIS_PREFIX || 'vh:presence:';
+      const slice = userIds.slice(0, 200).map((id) => String(id));
+      const out = {};
+
+      let redis;
+      try {
+        redis = getRedisClient();
+      } catch {
+        redis = null;
+      }
+
+      if (redis) {
+        const pipeline = redis.pipeline();
+        for (const id of slice) {
+          pipeline.get(`${PREFIX}${id}`);
+        }
+        const results = await pipeline.exec();
+        slice.forEach((id, i) => {
+          const val = results[i]?.[1];
+          out[id] = val === 'online' ? 'online' : 'offline';
+        });
+      } else {
+        for (const id of slice) {
+          out[id] = 'offline';
+        }
+      }
+
+      res.json({
+        success: true,
+        data: out,
+      });
+    } catch (error) {
+      logger.error('internalPresenceBatch error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  async patchInternalStatus(req, res) {
+    try {
+      const { userId, status } = req.body || {};
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId is required',
+        });
+      }
+
+      if (!status || !['online', 'offline', 'away', 'busy'].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid status',
+        });
+      }
+
+      const userProfile = await userService.updateStatus(userId, status);
+
+      res.json({
+        success: true,
+        data: userProfile,
+      });
+    } catch (error) {
+      logger.error('Internal patch status error:', error);
       res.status(400).json({
         success: false,
         message: error.message,

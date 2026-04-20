@@ -1,34 +1,45 @@
-import { useEffect } from 'react';
+import { useTheme } from '../../context/ThemeContext';
 
-const Toast = ({ message, type = "success", onClose }) => {
-  const colors = {
-    success: "from-green-500 to-emerald-500",
-    error: "from-red-500 to-orange-500",
-    info: "from-blue-500 to-cyan-500",
-    warning: "from-yellow-500 to-orange-500"
-  };
+/**
+ * Thông báo nổi góc màn hình (dùng chung với showToast + useState trong trang).
+ */
+function Toast({ message, type = 'success', onClose }) {
+  const { isDarkMode } = useTheme();
 
-  const icons = {
-    success: "✓",
-    error: "✕",
-    info: "ℹ",
-    warning: "⚠"
-  };
+  const dark =
+    type === 'error'
+      ? 'border-red-500/40 bg-red-950/95 text-red-50'
+      : type === 'info'
+        ? 'border-sky-500/40 bg-sky-950/95 text-sky-50'
+        : 'border-emerald-500/40 bg-emerald-950/95 text-emerald-50';
 
-  useEffect(() => {
-    const timer = setTimeout(onClose, 3000);
-    return () => clearTimeout(timer);
-  }, [onClose]);
+  const light =
+    type === 'error'
+      ? 'border-red-200 bg-white text-red-900 shadow-red-100/50'
+      : type === 'info'
+        ? 'border-sky-200 bg-white text-sky-900 shadow-sky-100/50'
+        : 'border-emerald-200 bg-white text-emerald-900 shadow-emerald-100/50';
 
   return (
-    <div className={`fixed top-6 right-6 glass-strong rounded-xl px-6 py-4 flex items-center gap-3 animate-slideDown z-50 border-l-4 ${colors[type]}`}>
-      <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${colors[type]} flex items-center justify-center text-white font-bold`}>
-        {icons[type]}
-      </div>
-      <span className="text-white font-semibold">{message}</span>
-      <button onClick={onClose} className="ml-4 text-gray-400 hover:text-white transition-colors">✕</button>
+    <div
+      className={`fixed bottom-6 right-6 z-[300] flex max-w-sm items-center gap-3 rounded-xl border px-4 py-3 shadow-lg backdrop-blur-md ${
+        isDarkMode ? dark : light
+      }`}
+      role="status"
+    >
+      <p className="flex-1 text-sm font-medium">{message}</p>
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded-lg p-1 opacity-80 transition hover:opacity-100"
+          aria-label="Đóng"
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
-};
+}
 
 export default Toast;

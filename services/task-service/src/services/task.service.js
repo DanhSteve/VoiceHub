@@ -21,20 +21,34 @@ class TaskService {
         tags,
       } = taskData;
 
-      // Kiểm tra organization tồn tại
+      // Kiểm tra organization — organization-service yêu cầu x-user-id (protect) + membership
       if (organizationId) {
-        try {
-          await axios.get(`${ORGANIZATION_SERVICE_URL}/api/organizations/${organizationId}`);
-        } catch (error) {
+        const orgRes = await axios.get(`${ORGANIZATION_SERVICE_URL}/api/organizations/${organizationId}`, {
+          headers: { 'x-user-id': String(createdBy) },
+          timeout: 15000,
+          validateStatus: () => true,
+        });
+        if (orgRes.status === 401) {
+          throw new Error('Cannot verify organization (missing or invalid user context)');
+        }
+        if (orgRes.status === 403) {
+          throw new Error('You are not a member of this organization');
+        }
+        if (orgRes.status === 404) {
           throw new Error('Organization not found');
+        }
+        if (orgRes.status !== 200) {
+          throw new Error('Cannot verify organization');
         }
       }
 
       // Kiểm tra assigneeId nếu có
       if (assigneeId) {
-        try {
-          await axios.get(`${USER_SERVICE_URL}/api/users/${assigneeId}`);
-        } catch (error) {
+        const userRes = await axios.get(`${USER_SERVICE_URL}/api/users/${assigneeId}`, {
+          timeout: 15000,
+          validateStatus: () => true,
+        });
+        if (userRes.status !== 200 || !userRes.data?.success) {
           throw new Error('Assignee user not found');
         }
       }
@@ -96,7 +110,8 @@ class TaskService {
       const tasks = await Task.find(filter)
         .sort(sort)
         .limit(limit * 1)
-        .skip((page - 1) * limit);
+        .skip((page - 1) * limit)
+        .lean();
 
       const total = await Task.countDocuments(filter);
 
@@ -137,6 +152,7 @@ class TaskService {
         'priority',
         'dueDate',
         'tags',
+        'attachments',
       ];
       const updateFields = {};
 
@@ -144,6 +160,15 @@ class TaskService {
         if (updateData[field] !== undefined) {
           updateFields[field] = updateData[field];
         }
+      }
+
+      if (updateFields.attachments !== undefined) {
+        const arr = Array.isArray(updateFields.attachments) ? updateFields.attachments : [];
+        updateFields.attachments = arr.map((a) => ({
+          name: a?.name != null ? String(a.name).slice(0, 500) : 'file',
+          url: a?.url != null ? String(a.url) : '',
+          ...(a?.documentId ? { documentId: a.documentId } : {}),
+        }));
       }
 
       // Nếu status là done, set completedAt
