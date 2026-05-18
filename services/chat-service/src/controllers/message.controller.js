@@ -805,6 +805,22 @@ class MessageController {
       const { messageId } = req.params;
       const userId = req.user?.id || req.user?._id;
 
+      const existing = await messageService.getMessageById(messageId);
+      if (existing?.organizationId && existing?.roomId) {
+        const { matrix } = await fetchAccessibleChannelPermissionMatrix(
+          String(existing.organizationId),
+          req
+        );
+        const perms = matrix[String(existing.roomId)] || {};
+        const isSender = String(existing.senderId || '') === String(userId || '');
+        if (!isSender && !Boolean(perms.canDelete)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Bạn không có quyền xóa tin nhắn trong kênh này',
+          });
+        }
+      }
+
       const message = await messageService.deleteMessage(messageId, userId);
 
       if (!message) {

@@ -50,39 +50,23 @@ function truncateText(value, maxLength = 56) {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-const OBJECT_ID_RE = /^[a-f\d]{24}$/i;
 
-function isValidObjectId(id) {
-  return OBJECT_ID_RE.test(String(id || '').trim());
-}
-
-function parseTaskStatisticsPayload(payload) {
-  const layer = payload?.data ?? payload;
-  const stats = layer?.data ?? layer;
-  return stats && typeof stats === 'object' ? stats : null;
-}
-
-/** Gom `done` từ GET /api/tasks/statistics?organizationId= cho từng org. */
-async function sumTaskDoneAcrossOrgs(orgIds) {
-  const ids = orgIds.map((id) => String(id || '').trim()).filter(isValidObjectId);
-  if (ids.length === 0) {
-    return { total: 0, orgCount: 0, allFailed: false };
+/** Màu ô heatmap theo mức hoạt động (task + tin nhắn trong ngày). */
+function activityCellClass(total, isDarkMode = true) {
+  const n = Math.max(0, Number(total) || 0);
+  if (isDarkMode) {
+    if (n === 0) return 'bg-white/[0.04]';
+    if (n === 1) return 'bg-cyan-900/55';
+    if (n <= 3) return 'bg-cyan-700/60';
+    if (n <= 6) return 'bg-cyan-500/65';
+    return 'bg-cyan-400/75';
   }
-  const results = await Promise.allSettled(ids.map((id) => taskAPI.getStatistics(id)));
-  let total = 0;
-  let successCount = 0;
-  results.forEach((result) => {
-    if (result.status !== 'fulfilled') return;
-    const stats = parseTaskStatisticsPayload(result.value);
-    if (!stats) return;
-    successCount += 1;
-    total += Number(stats.done) || 0;
-  });
-  return {
-    total,
-    orgCount: ids.length,
-    allFailed: successCount === 0,
-  };
+  if (n === 0) return 'bg-slate-100';
+  if (n === 1) return 'bg-cyan-100';
+  if (n <= 3) return 'bg-cyan-200';
+  if (n <= 6) return 'bg-cyan-400/85';
+  return 'bg-cyan-500';
+
 }
 
 function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
@@ -511,7 +495,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   const displayPresenceFriends = useMemo(() => {
     const set = new Set((onlineUsers || []).map(String));
     return presenceFriends.map((p) => {
-      const idStr = String(p.id);
+      const idStr = String(p?.id ?? '');
       const inLiveList = set.has(idStr);
       if (socketConnected) {
         return { ...p, status: inLiveList ? 'online' : 'offline' };
@@ -944,9 +928,9 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                 <p className={`mt-1 text-[11px] ${textSub}`}>{t('dashboard.personalActivityHint')}</p>
               </div>
               <div className={`text-xs ${textSub}`}>
-                {t('dashboard.personalActivityCount', {
-                  n: personalActivityDays.reduce((sum, item) => sum + item.total, 0),
-                })}
+
+                {personalActivityDays.reduce((sum, item) => sum + (item?.total || 0), 0)} activities
+
               </div>
             </div>
             <div className="grid grid-cols-7 gap-1.5">
@@ -960,7 +944,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   })}
                   className={`aspect-square rounded-[4px] border ${
                     isDarkMode ? 'border-white/[0.05]' : 'border-white'
-                  } ${activityCellClass(day.total)}`}
+                  } ${activityCellClass(day.total, isDarkMode)}`}
                 />
               ))}
             </div>
@@ -1231,7 +1215,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   <div
                     className={`mt-1 flex-1 rounded-lg border ${
                       isDarkMode ? 'border-white/[0.05]' : 'border-white'
-                    } ${activityCellClass(day.total)}`}
+                    } ${activityCellClass(day.total, isDarkMode)}`}
                   />
                   <div className={`mt-1 line-clamp-2 text-[10px] leading-snug ${textSub}`}>
                     {truncateText(day.note || 'Chưa có hoạt động', 34)}
@@ -1370,10 +1354,12 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               <GlassCard className={modalGlass}>
                 <h4 className={`font-bold mb-4 ${textHeading}`}>{t('dashboard.modalStatsTitle')}</h4>
                 <div className="space-y-3">
-                  {Object.entries(selectedStat.drilldown).filter(([key]) => !['projects', 'nguoiDongGopNhieuNhat', 'roles', 'channels'].includes(key)).map(([key, value]) => (
-                    <div key={key} className="flex items-center justify-between gap-3">
-                      <span className={`shrink-0 ${textMuted}`}>{drilldownLabel(key)}:</span>
-                      <span className={`text-right font-bold ${textHeading}`}>{value}</span>
+
+                  {Object.entries(selectedStat.drilldown || {}).filter(([key]) => !['projects', 'nguoiDongGopNhieuNhat', 'roles', 'channels'].includes(key)).map(([key, value]) => (
+                    <div key={key} className="flex items-center justify-between">
+                      <span className={`${textMuted} capitalize`}>{key}:</span>
+                      <span className={`font-bold ${textHeading}`}>{value}</span>
+
                     </div>
                   ))}
                 </div>
@@ -1398,7 +1384,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               </div>
             )}
 
-            {selectedStat.drilldown.projects && (
+            {Array.isArray(selectedStat.drilldown?.projects) && selectedStat.drilldown.projects.length > 0 && (
               <div>
                 <h4 className={`mb-4 font-bold ${textHeading}`}>{t('dashboard.modalProjectsTitle')}</h4>
                 <div className="space-y-3">
@@ -1427,7 +1413,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               </div>
             )}
 
-            {selectedStat.drilldown.nguoiDongGopNhieuNhat && (
+            {Array.isArray(selectedStat.drilldown?.nguoiDongGopNhieuNhat) && selectedStat.drilldown.nguoiDongGopNhieuNhat.length > 0 && (
               <div>
                 <h4 className={`mb-4 font-bold ${textHeading}`}>{t('dashboard.topContributors')}</h4>
                 <div className="space-y-2">
@@ -1447,7 +1433,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               </div>
             )}
 
-            {selectedStat.drilldown.roles && (
+            {Array.isArray(selectedStat.drilldown?.roles) && selectedStat.drilldown.roles.length > 0 && (
               <div>
                 <h4 className={`mb-4 font-bold ${textHeading}`}>{t('dashboard.roleDistribution')}</h4>
                 <div className="space-y-2">
@@ -1471,7 +1457,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               </div>
             )}
 
-            {selectedStat.drilldown.channels && (
+            {Array.isArray(selectedStat.drilldown?.channels) && selectedStat.drilldown.channels.length > 0 && (
               <div>
                 <h4 className={`mb-4 font-bold ${textHeading}`}>{t('dashboard.activeChannels')}</h4>
                 <div className="space-y-2">

@@ -35,6 +35,12 @@ function UnifiedChatComposer({
   showAiToggle = false,
   aiEnabled = false,
   onAiToggle,
+  /** Hiện nút Gửi (Enter vẫn gửi được khi tắt) */
+  showSendButton = true,
+  /** Ô nhập phẳng, không viền/nền bọc trong */
+  flatInner = false,
+  /** Một dòng (input text) thay vì textarea */
+  singleLine = false,
   mentionItems = [],
 }) {
   const { isDarkMode } = useTheme();
@@ -197,9 +203,11 @@ function UnifiedChatComposer({
   const fmtBtn = isDarkMode
     ? 'rounded-md p-2 text-gray-400 transition hover:bg-white/10 hover:text-white disabled:opacity-40'
     : 'rounded-md p-2 text-slate-500 transition hover:bg-slate-200 hover:text-slate-900 disabled:opacity-40';
-  const composerInner = isDarkMode
-    ? 'relative flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-[#12141c] px-2 py-2 shadow-inner'
-    : 'relative flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 shadow-inner';
+  const composerInner = flatInner
+    ? 'relative flex flex-col gap-1.5'
+    : isDarkMode
+      ? 'relative flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-[#12141c] px-2 py-2 shadow-inner'
+      : 'relative flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 shadow-inner';
   const plusBtnClass = isDarkMode
     ? 'h-9 w-9 shrink-0 rounded-lg text-2xl leading-none text-gray-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50'
     : 'h-9 w-9 shrink-0 rounded-lg text-2xl leading-none text-slate-600 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50';
@@ -212,6 +220,40 @@ function UnifiedChatComposer({
   const textareaClass = isDarkMode
     ? 'max-h-40 min-h-[44px] flex-1 resize-y bg-transparent px-2 py-2 text-sm leading-relaxed text-white outline-none placeholder:text-gray-500 disabled:opacity-60'
     : 'max-h-40 min-h-[44px] flex-1 resize-y bg-transparent px-2 py-2 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60';
+  const inputClass = isDarkMode
+    ? 'h-9 min-w-0 flex-1 bg-transparent px-2 text-sm text-white outline-none placeholder:text-gray-500 disabled:opacity-60'
+    : 'h-9 min-w-0 flex-1 bg-transparent px-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60';
+
+  const handleInputChange = (nextRaw) => {
+    const nextValue = singleLine ? String(nextRaw).replace(/[\r\n]+/g, ' ') : nextRaw;
+    onChange?.(nextValue);
+    if (!safeMentionItems.length) return;
+    const el = inputRef.current;
+    const cursor =
+      el && typeof el.selectionStart === 'number' ? el.selectionStart : nextValue.length;
+    const head = nextValue.slice(0, cursor);
+    const match = head.match(/(?:^|\s)@([^\s@]*)$/);
+    if (match) {
+      setMentionQuery(match[1] || '');
+      setShowPlusMenu(false);
+      setShowMentionMenu(true);
+    } else if (showMentionMenu) {
+      setShowMentionMenu(false);
+      setMentionQuery('');
+    }
+  };
+
+  const handleInputKeyDown = (event) => {
+    if (showMentionMenu && filteredMentionItems.length > 0 && event.key === 'Enter') {
+      event.preventDefault();
+      insertMention(filteredMentionItems[0].label);
+      return;
+    }
+    if (event.key === 'Enter' && (!singleLine ? !event.shiftKey : true)) {
+      event.preventDefault();
+      handleSend();
+    }
+  };
   const actionBtn = isDarkMode
     ? 'h-9 rounded-md text-gray-300 transition hover:bg-white/10 hover:text-white disabled:opacity-50'
     : 'h-9 rounded-md text-slate-600 transition hover:bg-slate-200 hover:text-slate-900 disabled:opacity-50';
@@ -276,7 +318,7 @@ function UnifiedChatComposer({
             </div>
           </div>
         )}
-        <div className="flex items-end gap-2">
+        <div className={`flex gap-2 ${singleLine ? 'items-center' : 'items-end'}`}>
         {safePlusItems.length > 0 && (
           <>
             <button
@@ -317,46 +359,32 @@ function UnifiedChatComposer({
           </>
         )}
 
-        <textarea
-          ref={inputRef}
-          value={value}
-          rows={richToolbar ? 3 : 1}
-          onSelect={syncSelection}
-          onKeyUp={syncSelection}
-          onMouseUp={syncSelection}
-          onBlur={syncSelection}
-          onChange={(event) => {
-            const nextValue = event.target.value;
-            onChange?.(nextValue);
-            syncSelection();
-            if (!safeMentionItems.length) return;
-            const cursor = event.target.selectionStart ?? nextValue.length;
-            const head = nextValue.slice(0, cursor);
-            const match = head.match(/(?:^|\s)@([^\s@]*)$/);
-            if (match) {
-              setMentionQuery(match[1] || '');
-              setShowPlusMenu(false);
-              setShowMentionMenu(true);
-            } else if (showMentionMenu) {
-              setShowMentionMenu(false);
-              setMentionQuery('');
-            }
-          }}
-          onKeyDown={(event) => {
-            if (showMentionMenu && filteredMentionItems.length > 0 && event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              insertMention(filteredMentionItems[0].label);
-              return;
-            }
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              handleSend();
-            }
-          }}
-          disabled={disabled}
-          placeholder={placeholder}
-          className={textareaClass}
-        />
+
+        {singleLine ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={value}
+            onChange={(event) => handleInputChange(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            disabled={disabled}
+            placeholder={placeholder}
+            className={inputClass}
+            autoComplete="off"
+          />
+        ) : (
+          <textarea
+            ref={inputRef}
+            value={value}
+            rows={richToolbar ? 3 : 1}
+            onChange={(event) => handleInputChange(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            disabled={disabled}
+            placeholder={placeholder}
+            className={textareaClass}
+          />
+        )}
+
 
         <div className="flex shrink-0 flex-col items-end gap-2">
           <div className="flex items-center gap-1">
@@ -393,14 +421,16 @@ function UnifiedChatComposer({
               </button>
             )}
           </div>
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={disabled || sendDisabled}
-            className="rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-cyan-900/25 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {sendLabel}
-          </button>
+          {showSendButton && (
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={disabled || sendDisabled}
+              className="rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-cyan-900/25 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {sendLabel}
+            </button>
+          )}
         </div>
         </div>
       </div>

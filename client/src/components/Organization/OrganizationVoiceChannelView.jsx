@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import toast from 'react-hot-toast';
 import { MicOff } from 'lucide-react';
 import api from '../../services/api';
+import { loadVoiceAudioPrefs, saveVoiceAudioPrefs } from '../../pages/Voice/voiceAudioPrefs';
 import { useAuth } from '../../context/AuthContext';
 import { useLocale } from '../../context/LocaleContext';
 import { useAppStrings } from '../../locales/appStrings';
@@ -66,12 +67,16 @@ function buildInitials(name) {
 export default function OrganizationVoiceChannelView({
   channelId,
   channelDisplayName = '',
+  organizationId = '',
+  channelLabel = '',
   isDarkMode,
   canVoice,
   landingDemo = false,
   onConnectionStateChange,
   onAudioStateChange,
   onControlActionsReady,
+  onRoomSessionEnd,
+  onDisconnect,
 }) {
   const { user } = useAuth();
   const { locale } = useLocale();
@@ -80,17 +85,19 @@ export default function OrganizationVoiceChannelView({
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState('');
   const [participants, setParticipants] = useState([]);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isSpeakerOff, setIsSpeakerOff] = useState(false);
+  const initialAudioPrefs = loadVoiceAudioPrefs();
+  const [isMuted, setIsMuted] = useState(Boolean(initialAudioPrefs.micMuted));
+  const [isSpeakerOff, setIsSpeakerOff] = useState(Boolean(initialAudioPrefs.speakerOff));
   /** Năng lượng tín hiệu mic local (luôn theo track); UI chỉ sáng viền khi !isMuted */
   const [localVoiceEnergy, setLocalVoiceEnergy] = useState(false);
   const [remoteSpeakingMap, setRemoteSpeakingMap] = useState({});
-  const [callTick, setCallTick] = useState(0);
+  const [joinedAtMs, setJoinedAtMs] = useState(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
 
   const currentRoomRef = useRef('');
-  const joinedAtRef = useRef(null);
   const audioElsRef = useRef(new Map());
   const audioLevelMonitorsRef = useRef(new Map());
+  const teardownRef = useRef(null);
   const mediasoupRef = useRef({
     socket: null,
     device: null,
@@ -201,17 +208,23 @@ export default function OrganizationVoiceChannelView({
   };
 
   useEffect(() => {
-    const id = window.setInterval(() => setCallTick((x) => x + 1), 1000);
+    if (!joinedAtMs || landingDemo || !channelId || !canVoice) {
+      setElapsedSec(0);
+      return undefined;
+    }
+    setElapsedSec(Math.max(0, Math.floor((Date.now() - joinedAtMs) / 1000)));
+    const id = window.setInterval(() => {
+      setElapsedSec(Math.max(0, Math.floor((Date.now() - joinedAtMs) / 1000)));
+    }, 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [joinedAtMs, landingDemo, channelId, canVoice]);
 
   const elapsedLabel = useMemo(() => {
-    if (!joinedAtRef.current || landingDemo || !channelId || !canVoice) {
+    if (!joinedAtMs || landingDemo || !channelId || !canVoice) {
       return '00:00';
     }
-    const sec = Math.max(0, Math.floor((Date.now() - joinedAtRef.current) / 1000));
-    return formatCallDuration(sec);
-  }, [callTick, channelId, landingDemo, canVoice]);
+    return formatCallDuration(elapsedSec);
+  }, [joinedAtMs, elapsedSec, channelId, landingDemo, canVoice]);
 
   useEffect(() => {
     participants.forEach((participant) => {
@@ -367,8 +380,12 @@ export default function OrganizationVoiceChannelView({
       mediasoupRef.current.remoteStreams.clear();
       socket?.disconnect();
       mediasoupRef.current.socket = null;
-      joinedAtRef.current = null;
+      setJoinedAtMs(null);
+      setElapsedSec(0);
+      onConnectionStateChange?.('idle');
     };
+
+    teardownRef.current = teardown;
 
     (async () => {
       try {
@@ -378,7 +395,6 @@ export default function OrganizationVoiceChannelView({
         setParticipants([]);
         setRemoteSpeakingMap({});
         currentRoomRef.current = String(channelId);
-        joinedAtRef.current = Date.now();
 
         await api.get(`/voice/rooms/${encodeURIComponent(String(channelId))}/bootstrap`, {
           skipGlobalErrorHandling: true,
@@ -388,7 +404,12 @@ export default function OrganizationVoiceChannelView({
         if (!mediaDevices?.getUserMedia) {
           throw new Error(t('orgPanel.voiceMediaUnsupported'));
         }
+        const joinPrefs = loadVoiceAudioPrefs();
         const localStream = await mediaDevices.getUserMedia({ audio: true, video: false });
+        const joinAudioTrack = localStream.getAudioTracks()[0];
+        if (joinAudioTrack && joinPrefs.micMuted) {
+          joinAudioTrack.enabled = false;
+        }
         mediasoupRef.current.localStream = localStream;
 
         stopAudioLevelMonitor('local');
@@ -435,6 +456,10 @@ export default function OrganizationVoiceChannelView({
           audioElsRef.current.delete(payload.socketId);
         });
 
+        socket.on('voice:roomClosed', (payload) => {
+          onRoomSessionEnd?.(payload);
+        });
+
         await new Promise((resolve, reject) => {
           if (socket.connected) {
             resolve();
@@ -455,6 +480,8 @@ export default function OrganizationVoiceChannelView({
         const joinResp = await requestSocket('voice:joinRoom', {
           roomId: String(channelId),
           displayName: localDisplayName,
+          organizationId: organizationId || undefined,
+          channelLabel: channelLabel || channelDisplayName || undefined,
         });
         const device = new DeviceClass();
         await device.load({ routerRtpCapabilities: joinResp.rtpCapabilities });
@@ -548,15 +575,31 @@ export default function OrganizationVoiceChannelView({
           }
         });
 
-        setIsMuted(!audioTrack);
+        const wantMuted = loadVoiceAudioPrefs().micMuted;
+        if (mediasoupRef.current.audioProducer) {
+          if (wantMuted) {
+            await mediasoupRef.current.audioProducer.pause();
+          } else {
+            await mediasoupRef.current.audioProducer.resume();
+          }
+        }
+        if (audioTrack) {
+          audioTrack.enabled = !wantMuted;
+        }
+        setIsMuted(wantMuted);
+        // Chỉ bắt đầu đồng hồ khi join/produce thành công và room đã vào trạng thái connected.
+        setJoinedAtMs(Date.now());
+        setElapsedSec(0);
         onConnectionStateChange?.('connected');
       } catch (e) {
+        if (cancelled) return;
         console.error(e);
         const msg = e?.message || t('orgPanel.voiceConnectError');
         setError(msg);
         onConnectionStateChange?.('error');
         toast.error(msg);
-        joinedAtRef.current = null;
+        setJoinedAtMs(null);
+        setElapsedSec(0);
       } finally {
         if (!cancelled) setJoining(false);
       }
@@ -564,20 +607,40 @@ export default function OrganizationVoiceChannelView({
 
     return () => {
       cancelled = true;
+      teardownRef.current = null;
       teardown();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnect khi đổi kênh; tên hiển thị lấy lúc mount
   }, [channelId, landingDemo, canVoice]);
 
-  const toggleMute = async () => {
-    const producer = mediasoupRef.current.audioProducer;
-    if (!producer) return;
-    if (isMuted) {
-      await producer.resume();
-    } else {
-      await producer.pause();
+  const handleLeaveVoice = async () => {
+    try {
+      await teardownRef.current?.();
+    } catch {
+      /* ignore */
     }
-    setIsMuted((prev) => !prev);
+    setJoining(false);
+    setError('');
+    onConnectionStateChange?.('idle');
+    onDisconnect?.();
+  };
+
+  const toggleMute = async () => {
+    const next = !isMuted;
+    const producer = mediasoupRef.current.audioProducer;
+    const localTrack = mediasoupRef.current.localStream?.getAudioTracks?.()?.[0];
+    if (producer) {
+      if (next) {
+        await producer.pause();
+      } else {
+        await producer.resume();
+      }
+    }
+    if (localTrack) {
+      localTrack.enabled = !next;
+    }
+    saveVoiceAudioPrefs({ micMuted: next });
+    setIsMuted(next);
   };
 
   const sortedRemote = useMemo(() => {
@@ -674,7 +737,14 @@ export default function OrganizationVoiceChannelView({
       <VoiceControlBridge
         onControlActionsReady={onControlActionsReady}
         toggleMute={toggleMute}
-        toggleSpeaker={() => setIsSpeakerOff((prev) => !prev)}
+        disconnect={handleLeaveVoice}
+        toggleSpeaker={() => {
+          setIsSpeakerOff((prev) => {
+            const next = !prev;
+            saveVoiceAudioPrefs({ speakerOff: next });
+            return next;
+          });
+        }}
       />
 
       <div
@@ -763,9 +833,9 @@ export default function OrganizationVoiceChannelView({
   );
 }
 
-function VoiceControlBridge({ onControlActionsReady, toggleMute, toggleSpeaker }) {
+function VoiceControlBridge({ onControlActionsReady, toggleMute, toggleSpeaker, disconnect }) {
   useEffect(() => {
-    onControlActionsReady?.({ toggleMute, toggleSpeaker });
-  }, [onControlActionsReady, toggleMute, toggleSpeaker]);
+    onControlActionsReady?.({ toggleMute, toggleSpeaker, disconnect });
+  }, [onControlActionsReady, toggleMute, toggleSpeaker, disconnect]);
   return null;
 }

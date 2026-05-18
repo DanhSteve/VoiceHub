@@ -68,7 +68,7 @@ async function ensureDefaultOrgRoles(organizationId) {
         organizationId: oid,
         permissions,
         isDefault: name === ORG_ROLE_MEMBER,
-        priority: name === ORG_ROLE_ADMIN ? 100 : name === ORG_ROLE_HR ? 50 : 10,
+        priority: name === ORG_ROLE_ADMIN ? 200 : name === ORG_ROLE_HR ? 180 : 20,
         ...extra,
       };
       const res = await axios.post(`${ROLE_PERMISSION_BASE}/api/roles`, body, {
