@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocale } from '../../context/LocaleContext';
 import { channelNameToDisplaySlug, displayDepartmentName } from '../../utils/orgEntityDisplay';
 import { Modal } from '../Shared';
+import { useAppStrings } from '../../locales/appStrings';
+import { PageSearchBar } from '../../features/search';
 
 /**
  * Chuyển tiếp tin tới một hoặc nhiều kênh chat (theo phòng ban).
@@ -18,6 +20,7 @@ export default function ForwardChannelModal({
   loading = false,
   onConfirm,
 }) {
+  const { t } = useAppStrings();
   const { locale } = useLocale();
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(() => ({ ...initialSelected }));
@@ -80,15 +83,15 @@ export default function ForwardChannelModal({
         {organizationName ? ` trong ${organizationName}` : ''}.
       </p>
 
-      <div className="relative mb-3">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">🔍</span>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Tìm kiếm"
-          className="w-full rounded-xl border border-indigo-500/40 bg-[#040f2a] py-2.5 pl-10 pr-3 text-sm text-white outline-none placeholder:text-gray-500"
-        />
-      </div>
+      <PageSearchBar
+        className="mb-3"
+        value={search}
+        onChange={setSearch}
+        placeholder={t('searchUi.searchAria')}
+        isDarkMode
+        size="sm"
+        id="forward-channel-search"
+      />
 
       <div className="mb-3 max-h-52 overflow-y-auto rounded-xl border border-white/10 bg-black/20">
         {loading && (

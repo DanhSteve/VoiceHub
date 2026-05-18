@@ -163,6 +163,15 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    if (error?.config?.skipGlobalErrorHandling) {
+      return Promise.reject({
+        message: error.response?.data?.message || error.message || 'Đã xảy ra lỗi',
+        status: error.response?.status,
+        data: error.response?.data,
+        code: error.code,
+      });
+    }
+
     console.error('[API] Request error:', {
       message: error.message,
       code: error.code,

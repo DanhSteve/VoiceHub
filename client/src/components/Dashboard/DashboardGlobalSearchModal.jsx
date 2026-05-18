@@ -3,6 +3,7 @@ import { ChevronLeft, Loader2 } from 'lucide-react';
 import Modal from '../Shared/Modal';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
+import { useLocale } from '../../context/LocaleContext';
 import { useDebouncedValue } from '../../features/search/useDebouncedValue';
 import {
   buildDashboardPageOptions,
@@ -15,6 +16,7 @@ import {
 export default function DashboardGlobalSearchModal({ isOpen, onClose, layer1Query = '' }) {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
+  const { locale } = useLocale();
 
   const [step, setStep] = useState('page');
   const [selectedPageId, setSelectedPageId] = useState(null);
@@ -153,6 +155,7 @@ export default function DashboardGlobalSearchModal({ isOpen, onClose, layer1Quer
       subfilterId: selectedSubfilterId,
       detailQuery: debouncedDetail,
       t,
+      locale,
       context: {
         ...(contextFriendId ? { friendId: contextFriendId } : {}),
         ...(contextOrgId ? { orgId: contextOrgId } : {}),
@@ -182,6 +185,7 @@ export default function DashboardGlobalSearchModal({ isOpen, onClose, layer1Quer
     selectedSubfilterId,
     debouncedDetail,
     t,
+    locale,
     contextFriendId,
     contextOrgId,
   ]);

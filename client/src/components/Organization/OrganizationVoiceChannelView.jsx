@@ -380,7 +380,9 @@ export default function OrganizationVoiceChannelView({
         currentRoomRef.current = String(channelId);
         joinedAtRef.current = Date.now();
 
-        await api.get(`/voice/rooms/${encodeURIComponent(String(channelId))}/bootstrap`);
+        await api.get(`/voice/rooms/${encodeURIComponent(String(channelId))}/bootstrap`, {
+          skipGlobalErrorHandling: true,
+        }).catch(() => null);
 
         const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : null;
         if (!mediaDevices?.getUserMedia) {

@@ -5,7 +5,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import CreateTaskFromAiModal from '../Chat/CreateTaskFromAiModal';
 import { getAiTaskEligibility, AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
-import { Bell, CheckSquare2, Filter, Hash, Home, LayoutGrid, List, Mic, MicOff, PhoneOff, Plus, Search, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
+import { Bell, CheckSquare2, Filter, Hash, Home, LayoutGrid, List, Mic, MicOff, PhoneOff, Plus, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
 import { Modal } from '../Shared';
 import UnifiedChatComposer from '../Chat/UnifiedChatComposer';
 import ChatUploadProgressBar from '../Chat/ChatUploadProgressBar';
@@ -17,6 +17,7 @@ import { shouldPlaceToolbarBelowBubble } from '../../utils/messageToolbarPlaceme
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
 import OrgWorkspaceSearch from '../../features/search/components/OrgWorkspaceSearch';
+import { PageSearchBar } from '../../features/search';
 import OrganizationVoiceChannelView from './OrganizationVoiceChannelView';
 
 function messageDayKey(iso) {
@@ -1083,16 +1084,31 @@ const OrganizationMainPanel = ({
               </div>
             </div>
 
-            {workspaceTab !== 'tasks' && (selectedOrganization?._id || selectedOrganization?.id) && (
-              <div className="mt-2 w-full min-w-0" role="search" aria-label={t('orgPanel.workspaceSearchAria')}>
-                <OrgWorkspaceSearch
-                  organizationId={selectedOrganization?._id || selectedOrganization?.id}
-                  serverId={selectedOrganization?.serverId}
-                  channels={chatChannels}
+            {workspaceTab === 'tasks' ? (
+              <div className="mt-2 w-full min-w-0" role="search" aria-label={t('tasks.searchAria')}>
+                <PageSearchBar
+                  value={taskSearchQuery}
+                  onChange={setTaskSearchQuery}
+                  placeholder={t('tasks.searchPlaceholder')}
                   isDarkMode={isDarkMode}
-                  onJumpToResult={onWorkspaceSearchJump}
+                  id="org-task-search-header"
+                  size="md"
+                  fullWidth
+                  aria-label={t('tasks.searchAria')}
                 />
               </div>
+            ) : (
+              (selectedOrganization?._id || selectedOrganization?.id) && (
+                <div className="mt-2 w-full min-w-0" role="search" aria-label={t('orgPanel.workspaceSearchAria')}>
+                  <OrgWorkspaceSearch
+                    organizationId={selectedOrganization?._id || selectedOrganization?.id}
+                    serverId={selectedOrganization?.serverId}
+                    channels={chatChannels}
+                    isDarkMode={isDarkMode}
+                    onJumpToResult={onWorkspaceSearchJump}
+                  />
+                </div>
+              )
             )}
 
             
@@ -1107,7 +1123,7 @@ const OrganizationMainPanel = ({
                   : t('orgPanel.msgCountLine', { n: messages.length })}
             </p>
             <p className={`hidden max-w-[min(100%,280px)] text-right text-xs sm:block ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-400'}`}>
-              {isVoiceChannel ? '\u00a0' : t('orgPanel.searchHintAbove')}
+              {isVoiceChannel || workspaceTab === 'tasks' ? '\u00a0' : t('orgPanel.searchHintAbove')}
             </p>
           </div>
 
@@ -1149,15 +1165,6 @@ const OrganizationMainPanel = ({
                       </button>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className={`flex items-center gap-2 rounded-xl px-3 py-2 ${isDarkMode ? 'bg-white/[0.04] text-[#9aa0ae]' : 'bg-white border border-slate-200 text-slate-600'}`}>
-                        <Search className="h-3.5 w-3.5" />
-                        <input
-                          value={taskSearchQuery}
-                          onChange={(e) => setTaskSearchQuery(e.target.value)}
-                          placeholder="Tìm task..."
-                          className={`w-40 bg-transparent text-xs outline-none ${isDarkMode ? 'placeholder:text-[#6d7380]' : 'placeholder:text-slate-400'}`}
-                        />
-                      </div>
                       <div className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${isDarkMode ? 'bg-white/[0.04] text-[#aab0bf]' : 'bg-white border border-slate-200 text-slate-600'}`}>
                         <Filter className="h-3.5 w-3.5" />
                         <select

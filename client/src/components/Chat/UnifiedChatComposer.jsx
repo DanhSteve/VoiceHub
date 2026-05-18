@@ -46,6 +46,7 @@ function UnifiedChatComposer({
   const mentionButtonRef = useRef(null);
   const mentionMenuRef = useRef(null);
   const inputRef = useRef(null);
+  const selectionRef = useRef({ start: 0, end: 0 });
 
   const safePlusItems = useMemo(
     () => (Array.isArray(plusItems) ? plusItems.filter((item) => item && item.label) : []),
@@ -95,28 +96,43 @@ function UnifiedChatComposer({
     onSend?.();
   };
 
-  const insertWrap = (before, after = before) => {
+  const syncSelection = () => {
+    const el = inputRef.current;
+    if (!el || typeof el.selectionStart !== 'number') return;
+    selectionRef.current = {
+      start: el.selectionStart,
+      end: el.selectionEnd ?? el.selectionStart,
+    };
+  };
+
+  const insertWrap = (before, after = before, selectRange) => {
     if (disabled) return;
     const el = inputRef.current;
     const cur = value ?? '';
-    if (el && typeof el.selectionStart === 'number') {
-      const start = el.selectionStart;
-      const end = el.selectionEnd ?? start;
-      const sel = cur.slice(start, end);
-      const next = `${cur.slice(0, start)}${before}${sel}${after}${cur.slice(end)}`;
-      onChange?.(next);
-      requestAnimationFrame(() => {
-        try {
-          el.focus();
-          const pos = start + before.length + sel.length + after.length;
-          el.setSelectionRange(pos, pos);
-        } catch {
-          /* ignore */
+    const saved = selectionRef.current;
+    const start =
+      el && typeof el.selectionStart === 'number' ? el.selectionStart : saved.start;
+    const end = el && typeof el.selectionEnd === 'number' ? el.selectionEnd ?? start : saved.end;
+    const sel = cur.slice(start, end);
+    const next = `${cur.slice(0, start)}${before}${sel}${after}${cur.slice(end)}`;
+    onChange?.(next);
+    requestAnimationFrame(() => {
+      try {
+        el?.focus();
+        if (!el) return;
+        if (typeof selectRange === 'function') {
+          const range = selectRange({ start, end, sel, before, after, next });
+          if (range) {
+            el.setSelectionRange(range.start, range.end);
+            return;
+          }
         }
-      });
-      return;
-    }
-    onChange?.(`${cur}${before}${after}`);
+        const pos = start + before.length + sel.length + after.length;
+        el.setSelectionRange(pos, pos);
+      } catch {
+        /* ignore */
+      }
+    });
   };
 
   const insertMention = (label) => {
@@ -166,7 +182,12 @@ function UnifiedChatComposer({
       } else {
         insertWrap('@');
       }
-    } else if (kind === 'link') insertWrap('[', '](url)');
+    }     else if (kind === 'link') {
+      insertWrap('[', '](url)', ({ start, sel, before }) => {
+        const urlStart = start + before.length + sel.length + 2;
+        return { start: urlStart, end: urlStart + 3 };
+      });
+    }
   };
 
   const defaultWrapper = isDarkMode
@@ -213,6 +234,10 @@ function UnifiedChatComposer({
               disabled={disabled}
               title={title}
               ref={k === 'mention' ? mentionButtonRef : undefined}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                syncSelection();
+              }}
               onClick={() => fmt(k)}
               className={fmtBtn}
             >
@@ -296,9 +321,14 @@ function UnifiedChatComposer({
           ref={inputRef}
           value={value}
           rows={richToolbar ? 3 : 1}
+          onSelect={syncSelection}
+          onKeyUp={syncSelection}
+          onMouseUp={syncSelection}
+          onBlur={syncSelection}
           onChange={(event) => {
             const nextValue = event.target.value;
             onChange?.(nextValue);
+            syncSelection();
             if (!safeMentionItems.length) return;
             const cursor = event.target.selectionStart ?? nextValue.length;
             const head = nextValue.slice(0, cursor);
