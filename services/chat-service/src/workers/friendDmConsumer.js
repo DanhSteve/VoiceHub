@@ -2,6 +2,7 @@ const amqp = require('amqplib');
 const { getRedisClient } = require('/shared');
 const messageService = require('../services/message.service');
 const { emitRealtimeEvent } = require('/shared');
+const { assertDmCanSend } = require('../utils/verifyDmRelationship');
 
 const EXCHANGE = process.env.RABBITMQ_EXCHANGE || 'voicehub.topic';
 const QUEUE = process.env.RABBITMQ_FRIEND_DM_QUEUE || 'voicehub.friend.dm';
@@ -25,6 +26,8 @@ async function processPayload(data) {
     receiverId,
     content,
     messageType = 'text',
+    replyToMessageId,
+    authorization,
   } = data;
 
   if (!senderId || !receiverId || !content) {
@@ -37,12 +40,33 @@ async function processPayload(data) {
     return;
   }
 
-  const message = await messageService.createMessage({
+  try {
+    await assertDmCanSend({
+      peerId: receiverId,
+      authorizationHeader: authorization,
+    });
+  } catch (dmErr) {
+    await emitRealtimeEvent({
+      event: 'friend:send_failed',
+      userId: String(senderId),
+      payload: {
+        receiverId: String(receiverId),
+        code: dmErr.code || 'dm_forbidden',
+        message: dmErr.message || 'Cannot send message',
+        ...(dmErr.blockerId ? { blockerId: String(dmErr.blockerId) } : {}),
+      },
+    });
+    return;
+  }
+
+  const messageData = {
     senderId,
     receiverId,
     content,
     messageType: messageType || 'text',
-  });
+  };
+  if (replyToMessageId) messageData.replyToMessageId = replyToMessageId;
+  const message = await messageService.createMessage(messageData);
 
   await emitRealtimeEvent({
     event: 'friend:new_message',

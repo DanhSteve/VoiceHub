@@ -17,8 +17,9 @@ import {
 import { useAppStrings } from '../../locales/appStrings';
 import { useLocale } from '../../context/LocaleContext';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
+import { LOCAL_CUSTOM_KEY } from '../../utils/dmCalendarReminders';
 
-const LOCAL_CUSTOM_KEY = 'voicehub:calendar:localCustom';
+const CALENDAR_LOCAL_KEY = LOCAL_CUSTOM_KEY;
 
 function parseTimeInputToDisplay(hhmm, loc) {
   if (!hhmm || !String(hhmm).includes(':')) return '';
@@ -44,6 +45,9 @@ function CalendarPage() {
   const [showCreateEventModal, setShowCreateEventModal] = useState(false);
   const [editingEventId, setEditingEventId] = useState(null);
   const [createType, setCreateType] = useState('meeting');
+  /** Gắn nhắc hẹn / sự kiện local với bạn DM (từ chat) */
+  const [dmPeerFriendId, setDmPeerFriendId] = useState('');
+  const [dmPeerFriendName, setDmPeerFriendName] = useState('');
   const [eventForm, setEventForm] = useState({
     title: '',
     date: '',
@@ -165,6 +169,19 @@ function CalendarPage() {
     const prefillAttendees = Array.isArray(state.prefillAttendees)
       ? state.prefillAttendees.map((x) => String(x || '').trim()).filter(Boolean)
       : [];
+    const prefillType = String(state.prefillType || '').trim();
+    const friendId = String(state.friendId || '').trim();
+    const friendName = String(state.friendName || '').trim();
+
+    if (prefillType === 'reminder' || prefillType === 'meeting' || prefillType === 'deadline') {
+      setCreateType(prefillType);
+    }
+    if (friendId) setDmPeerFriendId(friendId);
+    if (friendName) setDmPeerFriendName(friendName);
+    if (state.prefillDate) {
+      const d = String(state.prefillDate).trim();
+      if (d) setSelectedDate(new Date(`${d}T12:00:00`));
+    }
 
     openCreateModal(prefillTitle || null);
     if (prefillAttendees.length > 0) {
@@ -172,6 +189,26 @@ function CalendarPage() {
     }
     navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
   }, [location.pathname, location.search, location.state, navigate]);
+
+  useEffect(() => {
+    const openCreate = searchParams.get('openCreate');
+    const friendId = String(searchParams.get('friendId') || '').trim();
+    const friendName = String(searchParams.get('friendName') || '').trim();
+    const type = String(searchParams.get('type') || '').trim();
+    if (openCreate !== '1' || !friendId) return;
+
+    if (type === 'reminder' || type === 'meeting' || type === 'deadline') {
+      setCreateType(type);
+    }
+    setDmPeerFriendId(friendId);
+    if (friendName) setDmPeerFriendName(friendName);
+    openCreateModal(
+      friendName
+        ? t('calendar.reminderWithFriend', { name: friendName })
+        : null
+    );
+    navigate(`${location.pathname}`, { replace: true });
+  }, [searchParams, navigate, location.pathname, t]);
 
   const openEditModal = (eventData) => {
     if (!eventData) return;
@@ -288,13 +325,13 @@ function CalendarPage() {
   const persistLocalList = useCallback((updater) => {
     try {
       let list = [];
-      const raw = localStorage.getItem(LOCAL_CUSTOM_KEY) || localStorage.getItem('calendar:events');
+      const raw = localStorage.getItem(CALENDAR_LOCAL_KEY) || localStorage.getItem('calendar:events');
       if (raw) {
         const p = JSON.parse(raw);
         if (Array.isArray(p)) list = p;
       }
       const next = typeof updater === 'function' ? updater(list) : updater;
-      localStorage.setItem(LOCAL_CUSTOM_KEY, JSON.stringify(next));
+      localStorage.setItem(CALENDAR_LOCAL_KEY, JSON.stringify(next));
       reloadLocal();
     } catch {
       toast.error(t('calendar.toastLocalSaveFail'));
@@ -326,6 +363,8 @@ function CalendarPage() {
       startAt = null;
     }
 
+    const peerId = String(dmPeerFriendId || '').trim();
+    const peerName = String(dmPeerFriendName || '').trim();
     const nextEvent = {
       id: editingEventId || `local:${Date.now()}`,
       kind: 'local',
@@ -343,6 +382,12 @@ function CalendarPage() {
       priority: createType === 'deadline' ? 'high' : undefined,
       color: colorByType[createType] || colorByType.reminder,
       startAt: startAt ? startAt.toISOString() : null,
+      ...(peerId
+        ? {
+            friendId: peerId,
+            friendName: peerName || undefined,
+          }
+        : {}),
     };
 
     if (editingEventId) {
@@ -357,6 +402,8 @@ function CalendarPage() {
 
     setShowCreateEventModal(false);
     resetEventForm();
+    setDmPeerFriendId('');
+    setDmPeerFriendName('');
   };
 
   const handleDeleteEvent = (eventId, source) => {

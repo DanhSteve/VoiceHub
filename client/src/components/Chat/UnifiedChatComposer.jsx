@@ -36,6 +36,7 @@ function UnifiedChatComposer({
   aiEnabled = false,
   onAiToggle,
   mentionItems = [],
+  onPaste,
 }) {
   const { isDarkMode } = useTheme();
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -341,6 +342,9 @@ function UnifiedChatComposer({
               setShowMentionMenu(false);
               setMentionQuery('');
             }
+          }}
+          onPaste={(event) => {
+            onPaste?.(event);
           }}
           onKeyDown={(event) => {
             if (showMentionMenu && filteredMentionItems.length > 0 && event.key === 'Enter' && !event.shiftKey) {
