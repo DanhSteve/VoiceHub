@@ -9,7 +9,7 @@ import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
 import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
 import { useAppStrings } from '../../locales/appStrings';
-import { PageSearchBar, SearchFilterChips } from '../../features/search';
+import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 
 function NotificationsPage() {
   const navigate = useNavigate();
@@ -378,14 +378,6 @@ function NotificationsPage() {
               {t('notifications.title')}
             </h1>
             <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('notifications.subtitle')}</p>
-            <PageSearchBar
-              className="mt-4 max-w-md"
-              value={notifSearch}
-              onChange={setNotifSearch}
-              placeholder={t('notifications.searchPlaceholder')}
-              isDarkMode={isDarkMode}
-              id="notifications-search"
-            />
           </div>
           <div className="flex shrink-0 flex-wrap gap-3">
             <button 
@@ -402,6 +394,24 @@ function NotificationsPage() {
             </button>
           </div>
         </div>
+
+        <PageSearchToolbar
+          className="-mx-5 mb-6 lg:-mx-6"
+          value={notifSearch}
+          onChange={setNotifSearch}
+          placeholder={t('notifications.searchPlaceholder')}
+          isDarkMode={isDarkMode}
+          id="notifications-search"
+          aria-label={t('searchUi.searchAria')}
+        >
+          <SearchFilterChips
+            aria-label={t('notifications.filtersAria')}
+            options={notifFilterOptions}
+            value={filter}
+            onChange={setFilter}
+            isDarkMode={isDarkMode}
+          />
+        </PageSearchToolbar>
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4 mb-6">
@@ -449,20 +459,6 @@ function NotificationsPage() {
               </div>
             </div>
           </GlassCard>
-        </div>
-
-        {/* Bộ lọc loại + từ khóa (ô tìm phía trên) */}
-        <div className="mb-6">
-          <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-            {t('notifications.filtersHeading')}
-          </p>
-          <SearchFilterChips
-            aria-label={t('notifications.filtersAria')}
-            options={notifFilterOptions}
-            value={filter}
-            onChange={setFilter}
-            isDarkMode={isDarkMode}
-          />
         </div>
 
         {/* Notifications List */}

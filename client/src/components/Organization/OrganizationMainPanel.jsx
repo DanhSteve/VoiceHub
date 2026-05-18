@@ -5,6 +5,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import CreateTaskFromAiModal from '../Chat/CreateTaskFromAiModal';
 import { getAiTaskEligibility, AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
+
 import {
   Bell,
   ChevronsDown,
@@ -19,6 +20,7 @@ import {
   Settings,
   Zap,
 } from 'lucide-react';
+
 import { Modal } from '../Shared';
 import UnifiedChatComposer from '../Chat/UnifiedChatComposer';
 import ChatUploadProgressBar from '../Chat/ChatUploadProgressBar';
@@ -29,6 +31,7 @@ import TasksKanbanDnd, { COL_DONE, COL_PROGRESS, COL_TODO } from '../Tasks/Tasks
 import { shouldPlaceToolbarBelowBubble } from '../../utils/messageToolbarPlacement';
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
+
 import OrganizationVoiceChannelView from './OrganizationVoiceChannelView';
 import OrganizationWorkspaceStructureSidebar from './OrganizationWorkspaceStructureSidebar';
 import OrganizationSidebarAudioBar from './OrganizationSidebarAudioBar';
@@ -867,6 +870,7 @@ const OrganizationMainPanel = ({
                       Danh sách
                     </button>
                   </div>
+
                   <div className="flex flex-wrap items-center gap-2">
                     <div
                       className={`flex items-center gap-2 rounded-xl px-3 py-2 ${isDarkMode ? 'bg-white/[0.04] text-[#9aa0ae]' : 'bg-white border border-slate-200 text-slate-600'}`}
@@ -878,6 +882,7 @@ const OrganizationMainPanel = ({
                         placeholder="Tìm task..."
                         className={`w-40 bg-transparent text-xs outline-none ${isDarkMode ? 'placeholder:text-[#6d7380]' : 'placeholder:text-slate-400'}`}
                       />
+
                     </div>
                     <div
                       className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${isDarkMode ? 'bg-white/[0.04] text-[#aab0bf]' : 'bg-white border border-slate-200 text-slate-600'}`}
@@ -896,7 +901,9 @@ const OrganizationMainPanel = ({
                         ))}
                       </select>
                     </div>
+
                     {canCreateWorkspaceTask ? (
+
                       <button
                         type="button"
                         onClickCapture={(event) => {

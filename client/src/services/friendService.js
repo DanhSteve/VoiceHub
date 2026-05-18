@@ -53,8 +53,8 @@ const friendService = {
 
   // Lấy các lời mời chờ duyệt - GET /friends/pending
   // Return: [{ id, from: {...}, createdAt, ... }]
-  getPendingRequests: async () => {
-    return await api.get('/friends/pending');
+  getPendingRequests: async (config = {}) => {
+    return await api.get('/friends/pending', config);
   },
 
   // Chặn user - POST /friends/block

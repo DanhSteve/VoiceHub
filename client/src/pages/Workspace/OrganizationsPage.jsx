@@ -21,11 +21,13 @@ import { taskAPI } from '../../services/api/taskAPI';
 import { useLandingSafeNavigate } from '../../hooks/useLandingSafeNavigate';
 import { appShellBg } from '../../theme/shellTheme';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
+
 import {
   divisionChannelsFromStructure,
   mergeChannelsById,
 } from '../../utils/orgChannelScope';
 import { isOrgMembershipStructureAdmin } from '../../components/Organization/roleRbacUtils';
+
 
 const unwrapData = (payload) => payload?.data ?? payload;
 
@@ -880,7 +882,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       const list = Array.isArray(data?.messages) ? data.messages : Array.isArray(data) ? data : [];
       // Sắp xếp cũ -> mới để hiển thị tự nhiên trong màn chat
       list.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-      setMessages(list);
+      const enriched = await enrichMessagesBusinessCards(list);
+      setMessages(enriched);
     } catch (error) {
       setMessages([]);
       if (error?.status !== 403) {
@@ -1737,13 +1740,31 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       return;
     } else if (kind === 'contact') {
       messageType = 'business_card';
-      content = JSON.stringify({
+      let fields = normalizeBusinessCardFields({
         userId: payload?.userId || '',
         fullName: payload?.fullName || '',
         phone: payload?.phone || '',
         email: payload?.email || '',
-        avatar: payload?.avatar || '',
         username: payload?.username || '',
+      });
+      const uid = fields.userId;
+      if (uid && !uid.startsWith('manual-') && (!fields.phone || !fields.email || !looksLikeEmail(fields.email))) {
+        try {
+          const res = await userService.getProfile(uid);
+          const body = unwrapData(res);
+          const profile = body?.data ?? body;
+          fields = applyProfileToBusinessCard(fields, profile);
+        } catch {
+          /* giữ snapshot từ form chọn liên hệ */
+        }
+      }
+      content = JSON.stringify({
+        userId: fields.userId,
+        fullName: fields.fullName,
+        phone: fields.phone,
+        email: fields.email && looksLikeEmail(fields.email) ? fields.email : '',
+        avatar: payload?.avatar || '',
+        username: fields.username || payload?.username || '',
         role: payload?.role || '',
       });
     } else if (kind === 'poll') {
@@ -1773,7 +1794,11 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
         messageType,
         organizationId: selectedOrganizationId || undefined,
       });
-      const normalized = unwrapData(created);
+      let normalized = unwrapData(created);
+      if (messageType === 'business_card') {
+        const [one] = await enrichMessagesBusinessCards([normalized]);
+        normalized = one || normalized;
+      }
       setMessages((prev) => [...prev, normalized]);
       notifySuccess(t('organizations.customSent'));
     } catch (error) {
@@ -2535,11 +2560,13 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
           size="md"
         >
           <div className="space-y-4">
-            <input
+            <PageSearchBar
               value={inviteSearch}
-              onChange={(event) => setInviteSearch(event.target.value)}
+              onChange={setInviteSearch}
               placeholder={t('organizations.searchFriendsPh')}
-              className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-gray-500"
+              isDarkMode={isDarkMode}
+              size="sm"
+              id="org-invite-friend-search"
             />
 
             <div className="max-h-72 space-y-2 overflow-y-auto pr-1 scrollbar-overlay">

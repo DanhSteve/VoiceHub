@@ -6,7 +6,7 @@ import { ConfirmDialog, Dropdown, GlassCard, GradientButton, Modal } from '../..
 import { useTheme } from '../../context/ThemeContext';
 import { threeFramePageHeader } from '../../theme/shellTheme';
 import { useAppStrings } from '../../locales/appStrings';
-import { PageSearchBar, SearchFilterChips } from '../../features/search';
+import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 import api from '../../services/api';
 
 const DEMO_DOCS = [];
@@ -174,15 +174,15 @@ function DocumentsPage() {
                   </GradientButton>
                 </div>
               </div>
-              <div className="mb-4 max-w-xl space-y-2">
-                <PageSearchBar
-                  value={docNameQuery}
-                  onChange={setDocNameQuery}
-                  placeholder={t('documents.searchPlaceholder')}
-                  isDarkMode={isDarkMode}
-                  id="documents-name-search"
-                  aria-label={t('documents.searchAria')}
-                />
+              <PageSearchToolbar
+                className="-mx-6"
+                value={docNameQuery}
+                onChange={setDocNameQuery}
+                placeholder={t('documents.searchPlaceholder')}
+                isDarkMode={isDarkMode}
+                id="documents-name-search"
+                aria-label={t('documents.searchAria')}
+              >
                 <SearchFilterChips
                   aria-label={t('documents.listFilterAria')}
                   options={docListFilterOptions}
@@ -191,7 +191,7 @@ function DocumentsPage() {
                   isDarkMode={isDarkMode}
                   size="sm"
                 />
-              </div>
+              </PageSearchToolbar>
               {/* Storage Bar */}
               <GlassCard>
                 <div className="flex items-center justify-between mb-2">
