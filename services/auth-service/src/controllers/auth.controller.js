@@ -1,5 +1,22 @@
 const authService = require('../services/auth.service');
 
+function resolveFrontendUrl(req) {
+  // Ưu tiên origin của request (browser gọi từ http://<ip>:5173).
+  const origin = req?.headers?.origin;
+  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
+
+  const referer = req?.headers?.referer;
+  if (referer && String(referer).trim()) {
+    try {
+      return new URL(String(referer)).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return String(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+}
+
 class AuthController {
   // Đăng ký
   async register(req, res) {
@@ -47,13 +64,17 @@ class AuthController {
       console.log('[AuthController] Calling authService.register()...');
       const startTime = Date.now();
       
-      const result = await authService.register({
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.register(
+        {
         email,
         password,
         firstName,
         lastName,
         dateOfBirth,
-      });
+        },
+        frontendUrl
+      );
 
       const duration = Date.now() - startTime;
       console.log(`[AuthController] ✅ Registration service completed in ${duration}ms`);
@@ -252,7 +273,8 @@ class AuthController {
         });
       }
 
-      const result = await authService.forgotPassword(email);
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.forgotPassword(email, frontendUrl);
 
       res.json({
         success: true,
@@ -283,7 +305,8 @@ class AuthController {
         });
       }
 
-      const result = await authService.resendVerificationEmail(email);
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.resendVerificationEmail(email, frontendUrl);
 
       res.json({
         success: true,

@@ -36,7 +36,8 @@ function isAuthPublicUrl(url) {
 }
 
 // Đồng bộ với services/api.js: dev dùng '/api' → Vite proxy; prod dùng VITE_API_URL
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+// Tránh hardcode http://localhost:3000 khi mở UI qua IP LAN.
+const API_URL = import.meta.env.DEV ? '/api' : import.meta.env.VITE_API_URL || '/api';
 
 const normalizeToken = (rawToken) => {
   if (!rawToken) return null;

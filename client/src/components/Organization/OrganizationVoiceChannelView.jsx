@@ -12,6 +12,11 @@ import { getUserDisplayName } from '../../utils/helpers';
 const getSignalBaseUrl = () => {
   const explicit = import.meta.env.VITE_VOICE_SIGNAL_URL;
   if (explicit) return explicit;
+  // Dev: dùng cùng origin (Vite) để tránh hardcode gateway localhost:
+  // client sẽ proxy /voice-socket về API Gateway trong vite.config.js.
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
   return apiUrl.replace(/\/api\/?$/, '');
 };
@@ -279,13 +284,21 @@ export default function OrganizationVoiceChannelView({
     const consumeProducer = async (producerMeta) => {
       const { recvTransport, device } = mediasoupRef.current;
       if (!recvTransport || !device) return;
+      const producerId = String(producerMeta?.producerId || '');
+      if (!producerId) return;
+
+      // Tránh consume trùng cùng 1 producer (có thể xảy ra khi event/new list bắn sát nhau).
+      const alreadyConsumed = Array.from(mediasoupRef.current.consumers.values()).some(
+        (c) => String(c?.appData?.producerId || '') === producerId
+      );
+      if (alreadyConsumed) return;
 
       ensureRemoteParticipant(producerMeta);
 
       const consumeResp = await requestSocket('voice:consume', {
         roomId: currentRoomRef.current,
         transportId: recvTransport.id,
-        producerId: producerMeta.producerId,
+        producerId,
         rtpCapabilities: device.rtpCapabilities,
       });
 
@@ -295,7 +308,7 @@ export default function OrganizationVoiceChannelView({
         producerId: consumerParams.producerId,
         kind: consumerParams.kind,
         rtpParameters: consumerParams.rtpParameters,
-        appData: {},
+        appData: { producerId },
       });
 
       mediasoupRef.current.consumers.set(consumer.id, consumer);
@@ -367,7 +380,9 @@ export default function OrganizationVoiceChannelView({
         currentRoomRef.current = String(channelId);
         joinedAtRef.current = Date.now();
 
-        await api.get(`/voice/rooms/${encodeURIComponent(String(channelId))}/bootstrap`);
+        await api.get(`/voice/rooms/${encodeURIComponent(String(channelId))}/bootstrap`, {
+          skipGlobalErrorHandling: true,
+        }).catch(() => null);
 
         const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : null;
         if (!mediaDevices?.getUserMedia) {
@@ -384,7 +399,8 @@ export default function OrganizationVoiceChannelView({
         const token = normalizeToken(getToken()) || normalizeToken(localStorage.getItem('token'));
         const socket = io(`${getSignalBaseUrl()}/voice`, {
           path: getSignalPath(),
-          transports: ['websocket', 'polling'],
+          // Qua reverse proxy HTTPS, ưu tiên polling trước để giảm lỗi WS handshake sớm.
+          transports: ['polling', 'websocket'],
           auth: token ? { token } : {},
         });
         mediasoupRef.current.socket = socket;
@@ -509,6 +525,25 @@ export default function OrganizationVoiceChannelView({
           try {
             await consumeProducer(producerMeta);
           } catch (e) {
+            const msg = String(e?.message || '');
+            // Producer vừa được tạo có thể cần một nhịp để router/transport đồng bộ.
+            if (msg.includes('Router cannot consume producer')) {
+              try {
+                await new Promise((r) => setTimeout(r, 500));
+                const latest = await requestSocket('voice:getProducers', {
+                  roomId: String(channelId),
+                });
+                const hit = (latest?.producers || []).find(
+                  (p) => String(p?.producerId || '') === String(producerMeta?.producerId || '')
+                );
+                if (hit && hit.kind === 'audio') {
+                  await consumeProducer(hit);
+                  return;
+                }
+              } catch (retryErr) {
+                console.error('consume new producer retry failed', retryErr);
+              }
+            }
             console.error('consume new producer failed', e);
           }
         });

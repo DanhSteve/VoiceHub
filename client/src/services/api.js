@@ -41,7 +41,8 @@ import toast from 'react-hot-toast';
    /api/friends/* → friend-service (port 3014)
 ======================================== */
 // Dev: dùng '/api' để request cùng origin → Vite proxy forward tới API Gateway (port 3000)
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+// Tránh hardcode http://localhost:3000 khi mở UI qua IP LAN.
+const API_URL = import.meta.env.DEV ? '/api' : import.meta.env.VITE_API_URL || '/api';
 
 /* ========================================
    TẠO AXIOS INSTANCE
@@ -160,6 +161,15 @@ api.interceptors.response.use(
   (error) => {
     if (error?.code === 'LANDING_EMBED_WRITE_BLOCKED' || error?.isLandingEmbedBlock) {
       return Promise.reject(error);
+    }
+
+    if (error?.config?.skipGlobalErrorHandling) {
+      return Promise.reject({
+        message: error.response?.data?.message || error.message || 'Đã xảy ra lỗi',
+        status: error.response?.status,
+        data: error.response?.data,
+        code: error.code,
+      });
     }
 
     console.error('[API] Request error:', {

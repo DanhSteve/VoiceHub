@@ -61,6 +61,8 @@ app.post('/internal/realtime/publish', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3017;
+const SOCKET_PING_INTERVAL_MS = Math.max(10000, Number(process.env.SOCKET_PING_INTERVAL_MS || 25000));
+const SOCKET_PING_TIMEOUT_MS = Math.max(20000, Number(process.env.SOCKET_PING_TIMEOUT_MS || 60000));
 
 const server = http.createServer(app);
 
@@ -70,6 +72,8 @@ const io = new Server(server, {
     methods: ['GET', 'POST'],
     credentials: true,
   },
+  pingInterval: SOCKET_PING_INTERVAL_MS,
+  pingTimeout: SOCKET_PING_TIMEOUT_MS,
 });
 
 async function attachRedisAdapterIfEnabled() {
@@ -104,6 +108,9 @@ function startListen() {
           : String(socketCorsOrigin);
     console.log(`Socket Service đang chạy trên cổng ${PORT}`);
     console.log(`[socket-service] Allowed origins: ${originLabel}`);
+    console.log(
+      `[socket-service] pingInterval=${SOCKET_PING_INTERVAL_MS}ms pingTimeout=${SOCKET_PING_TIMEOUT_MS}ms offlineGrace=${Math.max(0, Number(process.env.PRESENCE_OFFLINE_GRACE_MS || 12000))}ms`
+    );
     const presenceToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
     console.log(
       `[socket-service] Presence → user-service: USER_SERVICE_URL=${process.env.USER_SERVICE_URL || 'http://user-service:3004'} ` +

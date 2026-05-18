@@ -1,7 +1,12 @@
 const notificationService = require('../services/notification.service');
+const { publishDispatchJob } = require('../messaging/notificationDispatch.publisher');
 const { logger } = require('/shared');
 
 class NotificationController {
+  _asyncDispatchEnabled() {
+    return String(process.env.NOTIFICATION_ASYNC_DISPATCH || 'false').toLowerCase() === 'true';
+  }
+
   // Tạo notification mới
   async createNotification(req, res) {
     try {
@@ -14,6 +19,14 @@ class NotificationController {
         });
       }
 
+      if (this._asyncDispatchEnabled()) {
+        await publishDispatchJob({
+          kind: 'single',
+          userId,
+          notification: { type, title, content, data, actionUrl },
+        });
+        return res.status(202).json({ success: true, queued: true });
+      }
       const notification = await notificationService.createNotification({
         userId,
         type,
@@ -48,6 +61,14 @@ class NotificationController {
         });
       }
 
+      if (this._asyncDispatchEnabled()) {
+        await publishDispatchJob({
+          kind: 'bulk',
+          userIds,
+          notification: { type, title, content, data, actionUrl },
+        });
+        return res.status(202).json({ success: true, queued: true });
+      }
       const notifications = await notificationService.createBulkNotifications(userIds, {
         type,
         title,

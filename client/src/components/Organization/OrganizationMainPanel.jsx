@@ -5,7 +5,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import CreateTaskFromAiModal from '../Chat/CreateTaskFromAiModal';
 import { getAiTaskEligibility, AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
-import { Bell, CheckSquare2, Filter, Hash, Home, LayoutGrid, List, Mic, MicOff, PhoneOff, Plus, Search, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
+import { Bell, CheckSquare2, Filter, Hash, Home, LayoutGrid, List, Mic, MicOff, PhoneOff, Plus, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
 import { Modal } from '../Shared';
 import UnifiedChatComposer from '../Chat/UnifiedChatComposer';
 import ChatUploadProgressBar from '../Chat/ChatUploadProgressBar';
@@ -17,6 +17,7 @@ import { shouldPlaceToolbarBelowBubble } from '../../utils/messageToolbarPlaceme
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
 import OrgWorkspaceSearch from '../../features/search/components/OrgWorkspaceSearch';
+import { PageSearchBar } from '../../features/search';
 import OrganizationVoiceChannelView from './OrganizationVoiceChannelView';
 
 function messageDayKey(iso) {
@@ -189,6 +190,35 @@ const OrganizationMainPanel = ({
     toggleSpeaker: null,
   });
 
+  // Sidebar trái (cấu trúc): cho phép nới rộng thêm tối đa +20px bằng kéo chuột.
+  const LEFT_ASIDE_BASE_W = 252;
+  const [leftAsideW, setLeftAsideW] = useState(LEFT_ASIDE_BASE_W);
+  const leftAsideResizeRef = useRef(null);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      const st = leftAsideResizeRef.current;
+      if (!st || !st.active) return;
+      const x = e?.clientX ?? 0;
+      const dx = x - st.startX; // kéo sang phải => tăng width
+      const next = Math.round(st.startW + dx);
+      const clamped = Math.max(st.minW, Math.min(st.maxW, next));
+      setLeftAsideW(clamped);
+      e?.preventDefault?.();
+    };
+    const onUp = () => {
+      const st = leftAsideResizeRef.current;
+      if (!st || !st.active) return;
+      leftAsideResizeRef.current = null;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
   const openWorkspaceChat = () => {
     setWorkspaceTab('chat');
     onWorkspaceTabChange?.('chat');
@@ -306,8 +336,8 @@ const OrganizationMainPanel = ({
         ? 'flex h-full min-h-0 flex-col bg-[#0b0e14]'
         : 'flex h-full min-h-0 flex-col bg-sky-50/40',
       aside: isDarkMode
-        ? 'flex w-[252px] shrink-0 flex-col border-r border-white/[0.06] bg-[#0c0f15]'
-        : 'flex w-[252px] shrink-0 flex-col border-r border-sky-200/70 bg-white/95',
+        ? 'flex shrink-0 flex-col border-r border-white/[0.06] bg-[#0c0f15]'
+        : 'flex shrink-0 flex-col border-r border-sky-200/70 bg-white/95',
       main: isDarkMode
         ? 'flex min-h-0 min-w-0 flex-1 flex-col bg-[#080a0f]'
         : 'flex min-h-0 min-w-0 flex-1 flex-col bg-sky-50/25',
@@ -585,7 +615,22 @@ const OrganizationMainPanel = ({
     <>
     <div className={workspace.shell}>
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <aside className={workspace.aside}>
+        <aside className={`${workspace.aside} relative`} style={{ width: leftAsideW }}>
+          <div
+            className="absolute inset-y-0 right-0 z-20 w-2 cursor-col-resize"
+            title="Kéo để nới sidebar (tối đa +20px)"
+            onMouseDown={(e) => {
+              if (e.button !== 0) return;
+              leftAsideResizeRef.current = {
+                active: true,
+                startX: e.clientX,
+                startW: leftAsideW,
+                minW: LEFT_ASIDE_BASE_W,
+                maxW: LEFT_ASIDE_BASE_W + 20,
+              };
+              e.preventDefault();
+            }}
+          />
           <div className={`flex min-h-0 flex-1 flex-col border-b px-3 py-3 ${isDarkMode ? 'border-white/[0.06]' : 'border-sky-200/70'}`}>
             <div
               className={`mb-3 rounded-xl border p-3 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white'}`}
@@ -996,55 +1041,6 @@ const OrganizationMainPanel = ({
                 className={`min-w-0 text-[13px] ${isDarkMode ? 'text-[#9aa0ae]' : 'text-slate-600'}`}
                 aria-label={t('orgPanel.workspaceBreadcrumbAria')}
               >
-                <button
-                  type="button"
-                  onClick={() => onWorkspaceTabChange?.('chat')}
-                  className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'} hover:underline`}
-                >
-                  {orgName}
-                </button>
-                <span className={`mx-1.5 ${isDarkMode ? 'text-[#4e5258]' : 'text-slate-400'}`}>›</span>
-                <button type="button" onClick={() => onSelectBranch?.(selectedBranchId)} className="hover:underline">
-                  {branchName}
-                </button>
-                <span className={`mx-1.5 ${isDarkMode ? 'text-[#4e5258]' : 'text-slate-400'}`}>›</span>
-                <button type="button" onClick={() => onSelectDivision?.(selectedDivisionId)} className="hover:underline">
-                  {divisionName}
-                </button>
-                <span className={`mx-1.5 ${isDarkMode ? 'text-[#4e5258]' : 'text-slate-400'}`}>›</span>
-                <button
-                  type="button"
-                  onClick={() => onSelectDepartment?.(selectedDepartment?._id || selectedDepartment?.id)}
-                  className="hover:underline"
-                >
-                  {deptName}
-                </button>
-                <span className={`mx-1.5 ${isDarkMode ? 'text-[#4e5258]' : 'text-slate-400'}`}>›</span>
-                <button type="button" onClick={() => onSelectTeam?.(selectedTeamId)} className="hover:underline">
-                  {teamName}
-                </button>
-                <span className={`mx-1.5 ${isDarkMode ? 'text-[#4e5258]' : 'text-slate-400'}`}>›</span>
-                <button
-                  type="button"
-                  className="text-[#5865F2] hover:underline"
-                  onClick={() => {
-                    if (workspaceTab === 'tasks') {
-                      onWorkspaceTabChange?.('tasks');
-                      return;
-                    }
-                    if (selectedChannelId) onSelectChannel?.(selectedChannelId);
-                  }}
-                >
-                  {workspaceTab === 'tasks'
-                    ? '#cong-viec'
-                    : t('orgPanel.channelHash', {
-                        name: isVoiceChannel
-                          ? chSlug
-                            ? `🔊 ${chSlug}`
-                            : t('organizations.channelNameFallback')
-                          : chSlug || t('organizations.channelNameFallback'),
-                      })}
-                </button>
               </nav>
               <div className="flex flex-wrap items-center gap-2">
                 <div
@@ -1088,16 +1084,31 @@ const OrganizationMainPanel = ({
               </div>
             </div>
 
-            {workspaceTab !== 'tasks' && (selectedOrganization?._id || selectedOrganization?.id) && (
-              <div className="mt-2 w-full min-w-0" role="search" aria-label={t('orgPanel.workspaceSearchAria')}>
-                <OrgWorkspaceSearch
-                  organizationId={selectedOrganization?._id || selectedOrganization?.id}
-                  serverId={selectedOrganization?.serverId}
-                  channels={chatChannels}
+            {workspaceTab === 'tasks' ? (
+              <div className="mt-2 w-full min-w-0" role="search" aria-label={t('tasks.searchAria')}>
+                <PageSearchBar
+                  value={taskSearchQuery}
+                  onChange={setTaskSearchQuery}
+                  placeholder={t('tasks.searchPlaceholder')}
                   isDarkMode={isDarkMode}
-                  onJumpToResult={onWorkspaceSearchJump}
+                  id="org-task-search-header"
+                  size="md"
+                  fullWidth
+                  aria-label={t('tasks.searchAria')}
                 />
               </div>
+            ) : (
+              (selectedOrganization?._id || selectedOrganization?.id) && (
+                <div className="mt-2 w-full min-w-0" role="search" aria-label={t('orgPanel.workspaceSearchAria')}>
+                  <OrgWorkspaceSearch
+                    organizationId={selectedOrganization?._id || selectedOrganization?.id}
+                    serverId={selectedOrganization?.serverId}
+                    channels={chatChannels}
+                    isDarkMode={isDarkMode}
+                    onJumpToResult={onWorkspaceSearchJump}
+                  />
+                </div>
+              )
             )}
 
             
@@ -1112,7 +1123,7 @@ const OrganizationMainPanel = ({
                   : t('orgPanel.msgCountLine', { n: messages.length })}
             </p>
             <p className={`hidden max-w-[min(100%,280px)] text-right text-xs sm:block ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-400'}`}>
-              {isVoiceChannel ? '\u00a0' : t('orgPanel.searchHintAbove')}
+              {isVoiceChannel || workspaceTab === 'tasks' ? '\u00a0' : t('orgPanel.searchHintAbove')}
             </p>
           </div>
 
@@ -1154,15 +1165,6 @@ const OrganizationMainPanel = ({
                       </button>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className={`flex items-center gap-2 rounded-xl px-3 py-2 ${isDarkMode ? 'bg-white/[0.04] text-[#9aa0ae]' : 'bg-white border border-slate-200 text-slate-600'}`}>
-                        <Search className="h-3.5 w-3.5" />
-                        <input
-                          value={taskSearchQuery}
-                          onChange={(e) => setTaskSearchQuery(e.target.value)}
-                          placeholder="Tìm task..."
-                          className={`w-40 bg-transparent text-xs outline-none ${isDarkMode ? 'placeholder:text-[#6d7380]' : 'placeholder:text-slate-400'}`}
-                        />
-                      </div>
                       <div className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${isDarkMode ? 'bg-white/[0.04] text-[#aab0bf]' : 'bg-white border border-slate-200 text-slate-600'}`}>
                         <Filter className="h-3.5 w-3.5" />
                         <select

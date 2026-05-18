@@ -19,6 +19,23 @@ export default defineConfig(({ mode }) => {
   const socketProxyTarget = String(env.VITE_SOCKET_PROXY_TARGET || '').trim() || defaultBackendOrigin;
   const devHost = String(env.VITE_HOST || '0.0.0.0').trim();
   const fixedDevPort = 5173;
+  const rawAllowedHosts = String(env.VITE_ALLOWED_HOSTS || '').trim();
+  const allowedHosts = rawAllowedHosts
+    ? rawAllowedHosts.split(',').map((h) => String(h || '').trim()).filter(Boolean)
+    : true;
+  const hmrHost = String(env.VITE_HMR_HOST || '').trim();
+  const hmrProtocol = String(env.VITE_HMR_PROTOCOL || '').trim();
+  const hmrClientPort = Number(String(env.VITE_HMR_CLIENT_PORT || '').trim());
+  const hmrPort = Number(String(env.VITE_HMR_PORT || '').trim());
+  const hmr =
+    hmrHost || hmrProtocol || Number.isFinite(hmrClientPort) || Number.isFinite(hmrPort)
+      ? {
+          ...(hmrHost ? { host: hmrHost } : {}),
+          ...(hmrProtocol ? { protocol: hmrProtocol } : {}),
+          ...(Number.isFinite(hmrClientPort) ? { clientPort: hmrClientPort } : {}),
+          ...(Number.isFinite(hmrPort) ? { port: hmrPort } : {}),
+        }
+      : undefined;
 
   return {
   plugins: [
@@ -56,6 +73,8 @@ export default defineConfig(({ mode }) => {
     host: devHost,
     port: fixedDevPort,
     strictPort: true,
+    allowedHosts,
+    ...(hmr ? { hmr } : {}),
     proxy: {
       '/api': {
         target: apiProxyTarget,
@@ -68,6 +87,13 @@ export default defineConfig(({ mode }) => {
         changeOrigin: true,
         ws: true,
       },
+        // Dev: proxy signaling mediasoup (/voice-socket) qua API Gateway.
+        // Đây là đường mà client socket.io sẽ kết nối tới (xài option `path`).
+        [String(env.VITE_VOICE_SIGNAL_PATH || '/voice-socket').trim()]: {
+          target: apiProxyTarget,
+          changeOrigin: true,
+          ws: true,
+        },
     },
   },
   build: {

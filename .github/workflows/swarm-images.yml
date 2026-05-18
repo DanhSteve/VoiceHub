@@ -1,0 +1,78 @@
+name: Build and Push Swarm Images
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "api-gateway/**"
+      - "services/**"
+      - "shared/**"
+      - ".github/workflows/swarm-images.yml"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api-gateway
+            context: ./api-gateway
+          - image: auth-service
+            context: ./services/auth-service
+          - image: user-service
+            context: ./services/user-service
+          - image: organization-service
+            context: ./services/organization-service
+          - image: friend-service
+            context: ./services/friend-service
+          - image: role-permission-service
+            context: ./services/role-permission-service
+          - image: chat-service
+            context: ./services/chat-service
+          - image: task-service
+            context: ./services/task-service
+          - image: ai-task-service
+            context: ./services/ai-task-service
+          - image: ai-task-worker
+            context: ./services/ai-task-worker
+          - image: document-service
+            context: ./services/document-service
+          - image: voice-service
+            context: ./services/voice-service
+          - image: notification-service
+            context: ./services/notification-service
+          - image: webhook-service
+            context: ./services/webhook-service
+          - image: socket-service
+            context: ./services/socket-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/voicehub/${{ matrix.image }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/voicehub/${{ matrix.image }}:latest

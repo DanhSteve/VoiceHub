@@ -11,6 +11,7 @@ const EXTRACT_QUEUE = process.env.RABBITMQ_TASK_AI_EXTRACT_QUEUE || 'task-ai.ext
 const SYNC_QUEUE = process.env.RABBITMQ_TASK_AI_SYNC_QUEUE || 'task-ai.sync';
 const DLQ_QUEUE = process.env.RABBITMQ_TASK_AI_DLQ_QUEUE || 'task-ai.dlq';
 const MAX_AI_JOB_RETRIES = Math.max(0, parseInt(process.env.AI_TASK_JOB_MAX_RETRIES || '8', 10) || 8);
+const WORKER_MODE = String(process.env.AI_TASK_WORKER_MODE || 'both').toLowerCase();
 
 async function fetchChatMessage(messageId) {
   const chatUrl = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
@@ -410,75 +411,83 @@ async function start() {
     process.exit(0);
   };
 
-  console.log(`[ai-task-worker] listening queue=${EXTRACT_QUEUE}`);
+  const shouldConsumeExtract = WORKER_MODE === 'extract' || WORKER_MODE === 'both';
+  const shouldConsumeSync = WORKER_MODE === 'sync' || WORKER_MODE === 'both';
+  if (!shouldConsumeExtract && !shouldConsumeSync) {
+    throw new Error(`Invalid AI_TASK_WORKER_MODE=${WORKER_MODE}. Expected extract|sync|both`);
+  }
 
-  const extractConsume = await ch.consume(
-    EXTRACT_QUEUE,
-    async (msg) => {
-      if (!msg) return;
-      const retryCount = getRetryCount(msg);
-      try {
-        const payload = JSON.parse(msg.content.toString('utf8'));
-        await processExtractJob(payload);
-        ch.ack(msg);
-      } catch (err) {
-        console.error('[ai-task-worker] job failed:', err.message);
-        const transient = isTransientJobError(err);
-        if (transient && retryCount < MAX_AI_JOB_RETRIES) {
-          ch.sendToQueue(EXTRACT_QUEUE, msg.content, {
-            persistent: true,
-            contentType: 'application/json',
-            headers: { 'x-retry-count': retryCount + 1 },
-          });
-          ch.ack(msg);
-          return;
-        }
+  if (shouldConsumeExtract) {
+    console.log(`[ai-task-worker] listening queue=${EXTRACT_QUEUE} mode=${WORKER_MODE}`);
+    const extractConsume = await ch.consume(
+      EXTRACT_QUEUE,
+      async (msg) => {
+        if (!msg) return;
+        const retryCount = getRetryCount(msg);
         try {
-          await publishToDlq(ch, EXTRACT_QUEUE, msg, err);
-        } catch (dlqErr) {
-          console.error('[ai-task-worker] DLQ publish failed:', dlqErr.message);
-        }
-        ch.ack(msg);
-      }
-    },
-    { noAck: false }
-  );
-  extractConsumerTag = extractConsume.consumerTag;
-
-  console.log(`[ai-task-worker] listening queue=${SYNC_QUEUE}`);
-
-  const syncConsume = await ch.consume(
-    SYNC_QUEUE,
-    async (msg) => {
-      if (!msg) return;
-      const retryCount = getRetryCount(msg);
-      try {
-        const payload = JSON.parse(msg.content.toString('utf8'));
-        await processSyncJob(payload);
-        ch.ack(msg);
-      } catch (err) {
-        console.error('[ai-task-worker] sync job failed:', err.message);
-        const transient = isTransientJobError(err);
-        if (transient && retryCount < MAX_AI_JOB_RETRIES) {
-          ch.sendToQueue(SYNC_QUEUE, msg.content, {
-            persistent: true,
-            contentType: 'application/json',
-            headers: { 'x-retry-count': retryCount + 1 },
-          });
+          const payload = JSON.parse(msg.content.toString('utf8'));
+          await processExtractJob(payload);
           ch.ack(msg);
-          return;
+        } catch (err) {
+          console.error('[ai-task-worker] extract job failed:', err.message);
+          const transient = isTransientJobError(err);
+          if (transient && retryCount < MAX_AI_JOB_RETRIES) {
+            ch.sendToQueue(EXTRACT_QUEUE, msg.content, {
+              persistent: true,
+              contentType: 'application/json',
+              headers: { 'x-retry-count': retryCount + 1 },
+            });
+            ch.ack(msg);
+            return;
+          }
+          try {
+            await publishToDlq(ch, EXTRACT_QUEUE, msg, err);
+          } catch (dlqErr) {
+            console.error('[ai-task-worker] extract DLQ publish failed:', dlqErr.message);
+          }
+          ch.ack(msg);
         }
+      },
+      { noAck: false }
+    );
+    extractConsumerTag = extractConsume.consumerTag;
+  }
+
+  if (shouldConsumeSync) {
+    console.log(`[ai-task-worker] listening queue=${SYNC_QUEUE} mode=${WORKER_MODE}`);
+    const syncConsume = await ch.consume(
+      SYNC_QUEUE,
+      async (msg) => {
+        if (!msg) return;
+        const retryCount = getRetryCount(msg);
         try {
-          await publishToDlq(ch, SYNC_QUEUE, msg, err);
-        } catch (dlqErr) {
-          console.error('[ai-task-worker] DLQ publish failed:', dlqErr.message);
+          const payload = JSON.parse(msg.content.toString('utf8'));
+          await processSyncJob(payload);
+          ch.ack(msg);
+        } catch (err) {
+          console.error('[ai-task-worker] sync job failed:', err.message);
+          const transient = isTransientJobError(err);
+          if (transient && retryCount < MAX_AI_JOB_RETRIES) {
+            ch.sendToQueue(SYNC_QUEUE, msg.content, {
+              persistent: true,
+              contentType: 'application/json',
+              headers: { 'x-retry-count': retryCount + 1 },
+            });
+            ch.ack(msg);
+            return;
+          }
+          try {
+            await publishToDlq(ch, SYNC_QUEUE, msg, err);
+          } catch (dlqErr) {
+            console.error('[ai-task-worker] sync DLQ publish failed:', dlqErr.message);
+          }
+          ch.ack(msg);
         }
-        ch.ack(msg);
-      }
-    },
-    { noAck: false }
-  );
-  syncConsumerTag = syncConsume.consumerTag;
+      },
+      { noAck: false }
+    );
+    syncConsumerTag = syncConsume.consumerTag;
+  }
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);

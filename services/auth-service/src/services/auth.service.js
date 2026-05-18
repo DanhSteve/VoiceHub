@@ -22,7 +22,7 @@ async function ensureMongoReady(scope = 'AUTH') {
 
 class AuthService {
   // Đăng ký user mới
-  async register(userData) {
+  async register(userData, frontendUrl) {
     try {
       const { email, password, firstName, lastName, dateOfBirth } = userData;
 
@@ -112,7 +112,7 @@ class AuthService {
         console.log('[AuthService] Email will be sent in background to avoid timeout');
         
         // Gửi email trong background - không await
-        const emailPromise = emailService.sendVerificationEmail(email, emailVerificationToken);
+        const emailPromise = emailService.sendVerificationEmail(email, emailVerificationToken, frontendUrl);
         console.log('[AuthService] Email promise created, waiting for result...');
         
         emailPromise
@@ -339,7 +339,7 @@ class AuthService {
   }
 
   // Quên mật khẩu - tạo reset token
-  async forgotPassword(email) {
+  async forgotPassword(email, frontendUrl) {
     try {
       const userAuth = await UserAuth.findOne({ email });
       if (!userAuth) {
@@ -360,7 +360,7 @@ class AuthService {
 
       let emailScheduled = false;
       if (emailService.isAvailable()) {
-        const emailResult = await emailService.sendPasswordResetEmail(email, passwordResetToken);
+        const emailResult = await emailService.sendPasswordResetEmail(email, passwordResetToken, frontendUrl);
         emailScheduled = !!emailResult;
       }
 
@@ -371,8 +371,13 @@ class AuthService {
 
       // Dev fallback: trả token để test local khi SMTP chưa cấu hình
       if (!emailScheduled && process.env.NODE_ENV !== 'production') {
+        const baseNormalized = String(
+          (frontendUrl && String(frontendUrl).trim()) ||
+            process.env.FRONTEND_URL ||
+            'http://localhost:5173'
+        ).replace(/\/+$/, '');
         response.resetToken = passwordResetToken;
-        response.resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${passwordResetToken}`;
+        response.resetUrl = `${baseNormalized}/reset-password?token=${passwordResetToken}`;
       }
 
       return response;
@@ -382,7 +387,7 @@ class AuthService {
   }
 
   // Gửi lại email xác thực
-  async resendVerificationEmail(email) {
+  async resendVerificationEmail(email, frontendUrl) {
     try {
       const normalizedEmail = String(email || '').trim().toLowerCase();
       if (!normalizedEmail) {
@@ -416,7 +421,11 @@ class AuthService {
 
       let emailScheduled = false;
       if (emailService.isAvailable()) {
-        const emailResult = await emailService.sendVerificationEmail(userAuth.email, emailVerificationToken);
+        const emailResult = await emailService.sendVerificationEmail(
+          userAuth.email,
+          emailVerificationToken,
+          frontendUrl
+        );
         emailScheduled = !!emailResult;
       }
 
@@ -427,8 +436,13 @@ class AuthService {
 
       // Dev fallback: trả token để test local khi SMTP chưa cấu hình
       if (!emailScheduled && process.env.NODE_ENV !== 'production') {
+        const baseNormalized = String(
+          (frontendUrl && String(frontendUrl).trim()) ||
+            process.env.FRONTEND_URL ||
+            'http://localhost:5173'
+        ).replace(/\/+$/, '');
         response.verificationToken = emailVerificationToken;
-        response.verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${emailVerificationToken}`;
+        response.verificationUrl = `${baseNormalized}/verify-email?token=${emailVerificationToken}`;
       }
 
       return response;

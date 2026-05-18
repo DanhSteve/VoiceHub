@@ -16,6 +16,23 @@ const NOTIFICATION_SERVICE_URL =
   process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3003';
 const NOTIFICATION_INTERNAL_TOKEN = String(process.env.NOTIFICATION_INTERNAL_TOKEN || '').trim();
 
+function resolveFrontendUrl(req) {
+  // Ưu tiên origin của request để không bị dính localhost khi client mở từ IP LAN.
+  const origin = req?.headers?.origin;
+  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
+
+  const referer = req?.headers?.referer;
+  if (referer && String(referer).trim()) {
+    try {
+      return new URL(String(referer)).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return FRONTEND_URL;
+}
+
 function notificationServiceAxiosOpts() {
   const opts = { timeout: 8000 };
   if (NOTIFICATION_INTERNAL_TOKEN) {
@@ -49,7 +66,7 @@ async function getActiveOrgUserIds(orgId) {
   return [...new Set((userIds || []).map((id) => String(id)).filter(Boolean))];
 }
 
-async function notifyModeratorsNewApplication({ orgId, orgName, applicationId }) {
+async function notifyModeratorsNewApplication({ orgId, orgName, applicationId, frontendUrl }) {
   const admins = await Membership.find({
     organization: orgId,
     status: 'active',
@@ -71,7 +88,7 @@ async function notifyModeratorsNewApplication({ orgId, orgName, applicationId })
           organizationId: String(orgId),
           applicationId: String(applicationId),
         },
-        actionUrl: `${FRONTEND_URL}/organizations/${encodeURIComponent(
+        actionUrl: `${frontendUrl}/organizations/${encodeURIComponent(
           String(orgId)
         )}/settings?tab=join`,
       },
@@ -88,6 +105,7 @@ async function createPendingJoinApplication({
   answers = {},
   req,
 }) {
+  const frontendUrl = resolveFrontendUrl(req);
   const orgId = String(org._id);
   const jf = org.settings?.joinApplicationForm || {};
   const formFields = Array.isArray(jf.fields) ? jf.fields : [];
@@ -127,6 +145,7 @@ async function createPendingJoinApplication({
     orgId,
     orgName: org.name,
     applicationId: application._id,
+    frontendUrl,
   });
 
   const modUserIds = await Membership.distinct('user', {
@@ -434,9 +453,10 @@ exports.createInviteLink = async (req, res, next) => {
       { expiresIn: INVITE_LINK_EXPIRES_IN }
     );
 
-    const inviteUrl = `${FRONTEND_URL}/organizations?orgId=${encodeURIComponent(
-      orgId
-    )}&inviteToken=${encodeURIComponent(token)}`;
+    const frontendUrl = resolveFrontendUrl(req);
+    const inviteUrl = `${frontendUrl}/organizations?orgId=${encodeURIComponent(orgId)}&inviteToken=${encodeURIComponent(
+      token
+    )}`;
 
     res.json({
       status: 'success',

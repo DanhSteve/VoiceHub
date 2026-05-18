@@ -11,8 +11,8 @@
 # Chỉ infra:
 #   docker compose -f docker-compose.infra.yml up -d
 #
-# Chỉ core (cần Mongo/Redis đã chạy):
-#   docker compose -f docker-compose.core.yml up -d
+# Core + infra (core không chứa Mongo/Redis/RabbitMQ — không chạy riêng core.yml được):
+#   docker compose -f docker-compose.infra.yml -f docker-compose.core.yml up -d --build
 
 include:
   - docker-compose.infra.yml

@@ -17,7 +17,15 @@ const corsList = String(process.env.CORS_ORIGIN || '')
   .map((item) => item.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim())
   .filter(Boolean);
 const voiceSocketCors =
-  corsList.length === 0 ? (isProd ? false : true) : corsList.length === 1 ? corsList[0] : corsList;
+  // Dev: cho phép mọi origin để client chạy qua IP LAN vẫn kết nối được.
+  // Production: chỉ whitelist theo CORS_ORIGIN (giữ behavior hiện tại).
+  !isProd
+    ? true
+    : corsList.length === 0
+      ? false
+      : corsList.length === 1
+        ? corsList[0]
+        : corsList;
 
 const io = new Server(server, {
   cors: {

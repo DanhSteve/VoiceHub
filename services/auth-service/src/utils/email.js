@@ -55,7 +55,7 @@ class EmailService {
    * @param {string} email - Email người nhận
    * @param {string} verificationToken - Token để verify
    */
-  async sendVerificationEmail(email, verificationToken) {
+  async sendVerificationEmail(email, verificationToken, frontendUrl) {
     console.log('[EmailService] 📨 sendVerificationEmail called');
     console.log('[EmailService] Email:', email);
     console.log('[EmailService] Token length:', verificationToken ? verificationToken.length : 0);
@@ -75,7 +75,12 @@ class EmailService {
       }
 
       console.log(`[EmailService] ✅ Service available, sending verification email to: ${email}`);
-      const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${verificationToken}`;
+      const base =
+        (frontendUrl && String(frontendUrl).trim()) ||
+        process.env.FRONTEND_URL ||
+        'http://localhost:5173';
+      const baseNormalized = String(base).replace(/\/+$/, '');
+      const verificationUrl = `${baseNormalized}/verify-email?token=${verificationToken}`;
       console.log(`[EmailService] Verification URL: ${verificationUrl}`);
       console.log(`[EmailService] From: ${process.env.EMAIL_USER}`);
       console.log(`[EmailService] To: ${email}`);
@@ -192,14 +197,19 @@ class EmailService {
    * @param {string} email - Email người nhận
    * @param {string} resetToken - Token để reset password
    */
-  async sendPasswordResetEmail(email, resetToken) {
+  async sendPasswordResetEmail(email, resetToken, frontendUrl) {
     try {
       if (!this.isAvailable()) {
         console.warn('[EmailService] Password reset email skipped: service not configured');
         return null;
       }
 
-      const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+      const base =
+        (frontendUrl && String(frontendUrl).trim()) ||
+        process.env.FRONTEND_URL ||
+        'http://localhost:5173';
+      const baseNormalized = String(base).replace(/\/+$/, '');
+      const resetUrl = `${baseNormalized}/reset-password?token=${resetToken}`;
 
       const mailOptions = {
         from: `"${process.env.EMAIL_FROM_NAME || 'VoiceChat App'}" <${process.env.EMAIL_USER}>`,

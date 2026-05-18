@@ -102,8 +102,8 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     const loadBellBadge = async () => {
       try {
         const [frRes, ntRes] = await Promise.allSettled([
-          friendService.getPendingRequests(),
-          api.get('/notifications', { params: { limit: 1 } }),
+          friendService.getPendingRequests({ skipGlobalErrorHandling: true }),
+          api.get('/notifications', { params: { limit: 1 }, skipGlobalErrorHandling: true }),
         ]);
         let pending = 0;
         if (frRes.status === 'fulfilled') {

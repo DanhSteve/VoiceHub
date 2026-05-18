@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, cloneElement, Children, isValidElement } from 'react';
+import { useEffect, useState, useRef, useCallback, cloneElement, Children, isValidElement } from 'react';
 import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
 import { threeFrameRightPanel } from '../../theme/shellTheme';
@@ -15,6 +15,9 @@ function OrganizationMemberPeekDock({ children }) {
   const [open, setOpen] = useState(false);
   const [memberMenuOpen, setMemberMenuOpen] = useState(false);
   const dockRef = useRef(null);
+  const BASE_W = 384;
+  const [openW, setOpenW] = useState(BASE_W);
+  const resizingRef = useRef(null);
 
   const handleMemberMenuClosed = useCallback(() => {
     requestAnimationFrame(() => {
@@ -22,6 +25,30 @@ function OrganizationMemberPeekDock({ children }) {
         setOpen(false);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      const st = resizingRef.current;
+      if (!st || !st.active) return;
+      const x = e?.clientX ?? 0;
+      const dx = x - st.startX; // kéo sang phải => tăng width
+      const next = Math.round(st.startW + dx);
+      const clamped = Math.max(st.minW, Math.min(st.maxW, next));
+      setOpenW(clamped);
+      e?.preventDefault?.();
+    };
+    const onUp = () => {
+      const st = resizingRef.current;
+      if (!st || !st.active) return;
+      resizingRef.current = null;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
   }, []);
 
   const child = Children.only(children);
@@ -39,13 +66,31 @@ function OrganizationMemberPeekDock({ children }) {
       className={`relative h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-out ${threeFrameRightPanel(isDarkMode)} ${
         open ? 'w-96' : 'w-10'
       }`}
+      style={open ? { width: openW } : undefined}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => {
         if (!memberMenuOpen) setOpen(false);
       }}
       title={open ? undefined : t('organizations.memberDockTitle')}
     >
-      <div className="flex h-full w-96 min-w-[384px] flex-row">
+      <div className="flex h-full flex-row" style={{ width: openW, minWidth: BASE_W }}>
+        {open ? (
+          <div
+            className="absolute inset-y-0 left-0 z-30 w-2 cursor-col-resize"
+            title="Kéo để nới panel (tối đa +20px)"
+            onMouseDown={(e) => {
+              if (e.button !== 0) return;
+              resizingRef.current = {
+                active: true,
+                startX: e.clientX,
+                startW: openW,
+                minW: BASE_W,
+                maxW: BASE_W + 20,
+              };
+              e.preventDefault();
+            }}
+          />
+        ) : null}
         <div
           className={`flex w-10 shrink-0 flex-col items-center border-r px-1 py-3 ${
             isDarkMode

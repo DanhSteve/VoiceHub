@@ -7,16 +7,8 @@ from dotenv import load_dotenv
 import logging
 from typing import Optional, Any, Dict
 from pydantic import BaseModel, ConfigDict
-
-from src.handlers import (
-    friend_handler,
-    task_handler,
-    meeting_handler,
-    document_handler,
-    chat_handler,
-    role_handler,
-    organization_handler,
-)
+from src.dispatcher import dispatch_domain_event
+from src.utils.webhook_queue import queue_enabled, publish_webhook_job
 
 load_dotenv()
 
@@ -64,6 +56,14 @@ async def verify_webhook_secret(x_webhook_secret: Optional[str] = Header(None)):
     return True
 
 
+async def handle_domain_webhook(domain: str, data: Dict[str, Any]):
+    if queue_enabled():
+        await publish_webhook_job({"domain": domain, "data": data})
+        return JSONResponse({"success": True, "queued": True, "domain": domain}, status_code=202)
+    await dispatch_domain_event(domain, data)
+    return JSONResponse({"success": True, "message": "Webhook processed"})
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -75,19 +75,7 @@ async def handle_friend_webhook(body: WebhookPayload, x_webhook_secret: str = He
     """Handle friend-related webhooks"""
     await verify_webhook_secret(x_webhook_secret)
     try:
-        data = body.as_dict()
-        event_type = data.get("event_type")
-        
-        if event_type == "friend_request_accepted":
-            await friend_handler.handle_friend_request_accepted(data)
-        elif event_type == "friend_request_sent":
-            await friend_handler.handle_friend_request_sent(data)
-        elif event_type == "friend_removed":
-            await friend_handler.handle_friend_removed(data)
-        else:
-            logger.warning(f"Unknown friend event type: {event_type}")
-        
-        return JSONResponse({"success": True, "message": "Webhook processed"})
+        return await handle_domain_webhook("friend", body.as_dict())
     except Exception as e:
         logger.error(f"Error processing friend webhook: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -98,21 +86,7 @@ async def handle_task_webhook(body: WebhookPayload, x_webhook_secret: str = Head
     """Handle task-related webhooks"""
     await verify_webhook_secret(x_webhook_secret)
     try:
-        data = body.as_dict()
-        event_type = data.get("event_type")
-        
-        if event_type == "task_created":
-            await task_handler.handle_task_created(data)
-        elif event_type == "task_assigned":
-            await task_handler.handle_task_assigned(data)
-        elif event_type == "task_completed":
-            await task_handler.handle_task_completed(data)
-        elif event_type == "task_updated":
-            await task_handler.handle_task_updated(data)
-        else:
-            logger.warning(f"Unknown task event type: {event_type}")
-        
-        return JSONResponse({"success": True, "message": "Webhook processed"})
+        return await handle_domain_webhook("task", body.as_dict())
     except Exception as e:
         logger.error(f"Error processing task webhook: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -123,21 +97,7 @@ async def handle_meeting_webhook(body: WebhookPayload, x_webhook_secret: str = H
     """Handle meeting-related webhooks"""
     await verify_webhook_secret(x_webhook_secret)
     try:
-        data = body.as_dict()
-        event_type = data.get("event_type")
-        
-        if event_type == "meeting_created":
-            await meeting_handler.handle_meeting_created(data)
-        elif event_type == "meeting_started":
-            await meeting_handler.handle_meeting_started(data)
-        elif event_type == "meeting_ended":
-            await meeting_handler.handle_meeting_ended(data)
-        elif event_type == "participant_joined":
-            await meeting_handler.handle_participant_joined(data)
-        else:
-            logger.warning(f"Unknown meeting event type: {event_type}")
-        
-        return JSONResponse({"success": True, "message": "Webhook processed"})
+        return await handle_domain_webhook("meeting", body.as_dict())
     except Exception as e:
         logger.error(f"Error processing meeting webhook: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -148,19 +108,7 @@ async def handle_document_webhook(body: WebhookPayload, x_webhook_secret: str = 
     """Handle document-related webhooks"""
     await verify_webhook_secret(x_webhook_secret)
     try:
-        data = body.as_dict()
-        event_type = data.get("event_type")
-        
-        if event_type == "document_uploaded":
-            await document_handler.handle_document_uploaded(data)
-        elif event_type == "document_updated":
-            await document_handler.handle_document_updated(data)
-        elif event_type == "document_shared":
-            await document_handler.handle_document_shared(data)
-        else:
-            logger.warning(f"Unknown document event type: {event_type}")
-        
-        return JSONResponse({"success": True, "message": "Webhook processed"})
+        return await handle_domain_webhook("document", body.as_dict())
     except Exception as e:
         logger.error(f"Error processing document webhook: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -171,17 +119,7 @@ async def handle_chat_webhook(body: WebhookPayload, x_webhook_secret: str = Head
     """Handle chat-related webhooks"""
     await verify_webhook_secret(x_webhook_secret)
     try:
-        data = body.as_dict()
-        event_type = data.get("event_type")
-        
-        if event_type == "message_created":
-            await chat_handler.handle_message_created(data)
-        elif event_type == "message_mentioned":
-            await chat_handler.handle_message_mentioned(data)
-        else:
-            logger.warning(f"Unknown chat event type: {event_type}")
-        
-        return JSONResponse({"success": True, "message": "Webhook processed"})
+        return await handle_domain_webhook("chat", body.as_dict())
     except Exception as e:
         logger.error(f"Error processing chat webhook: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -192,17 +130,7 @@ async def handle_role_webhook(body: WebhookPayload, x_webhook_secret: str = Head
     """Handle role-related webhooks"""
     await verify_webhook_secret(x_webhook_secret)
     try:
-        data = body.as_dict()
-        event_type = data.get("event_type")
-        
-        if event_type == "role_assigned":
-            await role_handler.handle_role_assigned(data)
-        elif event_type == "role_removed":
-            await role_handler.handle_role_removed(data)
-        else:
-            logger.warning(f"Unknown role event type: {event_type}")
-        
-        return JSONResponse({"success": True, "message": "Webhook processed"})
+        return await handle_domain_webhook("role", body.as_dict())
     except Exception as e:
         logger.error(f"Error processing role webhook: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -213,19 +141,7 @@ async def handle_organization_webhook(body: WebhookPayload, x_webhook_secret: st
     """Handle organization-related webhooks"""
     await verify_webhook_secret(x_webhook_secret)
     try:
-        data = body.as_dict()
-        event_type = data.get("event_type")
-        
-        if event_type == "server_member_added":
-            await organization_handler.handle_server_member_added(data)
-        elif event_type == "server_member_removed":
-            await organization_handler.handle_server_member_removed(data)
-        elif event_type == "organization_created":
-            await organization_handler.handle_organization_created(data)
-        else:
-            logger.warning(f"Unknown organization event type: {event_type}")
-        
-        return JSONResponse({"success": True, "message": "Webhook processed"})
+        return await handle_domain_webhook("organization", body.as_dict())
     except Exception as e:
         logger.error(f"Error processing organization webhook: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")

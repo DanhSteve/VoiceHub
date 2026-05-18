@@ -61,6 +61,7 @@ const GATEWAY_URL =
 const USE_GATEWAY_SOCKET =
   import.meta.env.VITE_SOCKET_USE_GATEWAY === '1' ||
   import.meta.env.VITE_SOCKET_USE_GATEWAY === 'true';
+const DEV_GATEWAY_PORT = String(import.meta.env.VITE_GATEWAY_PORT || '3000').trim();
 
 const SOCKET_NAMESPACE = '/chat';
 const SOCKET_IO_PATH = '/socket.io';
@@ -79,8 +80,23 @@ function getDevSocketBaseUrl() {
   return window.location.origin;
 }
 
+function getDevGatewayBaseUrl() {
+  if (typeof window === 'undefined' || !window.location) {
+    return `http://127.0.0.1:${DEV_GATEWAY_PORT || '3000'}`;
+  }
+  // Khi truy cập qua HTTPS reverse proxy (vd. https://voicehub.local),
+  // phải dùng cùng origin để tránh gọi nhầm https://host:3000 (gateway nội bộ thường chỉ HTTP).
+  if (window.location.origin && window.location.protocol === 'https:') {
+    return window.location.origin;
+  }
+  const protocol = window.location.protocol || 'http:';
+  const hostname = window.location.hostname || '127.0.0.1';
+  return `${protocol}//${hostname}:${DEV_GATEWAY_PORT || '3000'}`;
+}
+
 const SOCKET_BASE_URL =
   DIRECT ||
+  (import.meta.env.DEV && USE_GATEWAY_SOCKET && !GATEWAY_URL ? getDevGatewayBaseUrl() : '') ||
   (import.meta.env.DEV && !USE_GATEWAY_SOCKET ? getDevSocketBaseUrl() : '') ||
   GATEWAY_URL ||
   (import.meta.env.DEV ? 'http://127.0.0.1:3017' : 'http://localhost:3000');
@@ -109,6 +125,8 @@ if (import.meta.env.DEV) {
   if (DIRECT) socketModeLabel = 'direct (VITE_SOCKET_DIRECT_URL)';
   else if (USE_GATEWAY_SOCKET && GATEWAY_URL) {
     socketModeLabel = 'via gateway (VITE_SOCKET_USE_GATEWAY + VITE_SOCKET_URL)';
+  } else if (USE_GATEWAY_SOCKET && import.meta.env.DEV) {
+    socketModeLabel = 'via gateway (auto from browser origin/host)';
   } else if (typeof window !== 'undefined' && window.location?.origin === SOCKET_BASE_URL) {
     socketModeLabel = 'same-origin + Vite proxy /socket.io → :3017';
   } else if (import.meta.env.DEV) {
@@ -122,6 +140,9 @@ if (import.meta.env.DEV) {
     console.log('   VITE_SOCKET_DIRECT_URL:', DIRECT);
   } else if (USE_GATEWAY_SOCKET && GATEWAY_URL) {
     console.log('   VITE_SOCKET_URL:', GATEWAY_URL);
+  } else if (USE_GATEWAY_SOCKET && import.meta.env.DEV) {
+    console.log('   VITE_SOCKET_URL:', '(auto from window.location.origin/hostname)');
+    console.log('   VITE_GATEWAY_PORT:', DEV_GATEWAY_PORT || '3000');
   } else if (GATEWAY_URL && !import.meta.env.DEV) {
     console.log('   VITE_SOCKET_URL:', GATEWAY_URL);
   } else if (import.meta.env.DEV) {

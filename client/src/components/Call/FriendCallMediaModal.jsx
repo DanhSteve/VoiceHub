@@ -12,6 +12,11 @@ import { getUserDisplayName } from '../../utils/helpers';
 const getSignalBaseUrl = () => {
   const explicit = import.meta.env.VITE_VOICE_SIGNAL_URL;
   if (explicit) return explicit;
+  // Dev: dùng cùng origin (Vite) để tránh hardcode gateway localhost:
+  // client sẽ proxy /voice-socket về API Gateway trong vite.config.js.
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
   return apiUrl.replace(/\/api\/?$/, '');
 };
@@ -212,7 +217,9 @@ export default function FriendCallMediaModal() {
       setError('');
       setRemoteTile(null);
       try {
-        await api.get(`/voice/rooms/${encodeURIComponent(roomTarget)}/bootstrap`);
+        await api.get(`/voice/rooms/${encodeURIComponent(roomTarget)}/bootstrap`, {
+          skipGlobalErrorHandling: true,
+        }).catch(() => null);
         if (cancelled) return;
 
         const localStream = await navigator.mediaDevices.getUserMedia({
@@ -232,7 +239,8 @@ export default function FriendCallMediaModal() {
         const token = normalizeToken(localStorage.getItem('token'));
         const socket = io(`${getSignalBaseUrl()}/voice`, {
           path: getSignalPath(),
-          transports: ['websocket', 'polling'],
+          // Qua reverse proxy HTTPS, ưu tiên polling trước để giảm lỗi WS handshake sớm.
+          transports: ['polling', 'websocket'],
           auth: token ? { token } : {},
         });
         mediasoupRef.current.socket = socket;

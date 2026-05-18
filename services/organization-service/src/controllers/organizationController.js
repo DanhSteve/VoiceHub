@@ -748,10 +748,11 @@ exports.getAccessibleChannelIds = async (req, res, next) => {
         canWrite = true;
         canVoice = true;
       } else if (hasDepartmentScopedRole || hasDivisionScopedRole) {
-        // Role khối/phòng ban: chỉ quyền xem theo quy ước đồng bộ role hierarchy.
+        // Role khối/phòng ban: cho phép hoạt động chat/voice trên kênh thuộc phạm vi đã cấp.
+        // Tránh tình trạng UI hiển thị khóa dù user đã được cấp role theo cấu trúc.
         canRead = true;
-        canWrite = false;
-        canVoice = false;
+        canWrite = true;
+        canVoice = true;
       } else if (acl) {
         canRead = Boolean(acl.canRead);
         canWrite = Boolean(acl.canWrite);

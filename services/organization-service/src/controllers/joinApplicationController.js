@@ -9,6 +9,23 @@ const NOTIFICATION_SERVICE_URL =
 const NOTIFICATION_INTERNAL_TOKEN = String(process.env.NOTIFICATION_INTERNAL_TOKEN || '').trim();
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
 
+function resolveFrontendUrl(req) {
+  // Ưu tiên origin của request để không bị dính localhost khi client mở từ IP LAN.
+  const origin = req?.headers?.origin;
+  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
+
+  const referer = req?.headers?.referer;
+  if (referer && String(referer).trim()) {
+    try {
+      return new URL(String(referer)).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return FRONTEND_URL;
+}
+
 function notificationServiceAxiosOpts() {
   const opts = { timeout: 8000 };
   if (NOTIFICATION_INTERNAL_TOKEN) {
@@ -106,7 +123,7 @@ function validateAnswersAgainstForm(formFields, answers) {
   return errors;
 }
 
-async function notifyModeratorsNewApplication({ orgId, orgName, applicationId }) {
+async function notifyModeratorsNewApplication({ orgId, orgName, applicationId, frontendUrl }) {
   const admins = await Membership.find({
     organization: orgId,
     status: 'active',
@@ -128,7 +145,7 @@ async function notifyModeratorsNewApplication({ orgId, orgName, applicationId })
           organizationId: String(orgId),
           applicationId: String(applicationId),
         },
-        actionUrl: `${FRONTEND_URL}/organizations/${encodeURIComponent(
+        actionUrl: `${frontendUrl}/organizations/${encodeURIComponent(
           String(orgId)
         )}/settings?tab=join`,
       },
@@ -278,6 +295,7 @@ exports.submitJoinApplication = async (req, res, next) => {
   try {
     const orgId = req.params.orgId;
     const userId = getUserId(req);
+    const frontendUrl = resolveFrontendUrl(req);
     if (!userId) {
       return res.status(401).json({ status: 'fail', message: 'Not authenticated' });
     }
@@ -362,6 +380,7 @@ exports.submitJoinApplication = async (req, res, next) => {
       orgId,
       orgName: org.name,
       applicationId: doc._id,
+      frontendUrl,
     });
 
     const modUserIds = await Membership.distinct('user', {
@@ -537,6 +556,7 @@ exports.reviewJoinApplication = async (req, res, next) => {
     const action = req.body?.action;
     const rejectionReason = String(req.body?.rejectionReason || '').slice(0, 2000);
     const reviewerId = getUserId(req);
+    const frontendUrl = resolveFrontendUrl(req);
 
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ status: 'fail', message: 'action phải là approve hoặc reject' });
@@ -584,7 +604,7 @@ exports.reviewJoinApplication = async (req, res, next) => {
         title: 'Đơn gia nhập được duyệt',
         content: `Bạn đã được chấp nhận vào "${org.name}".`,
         data: { organizationId: String(orgId), applicationId: String(appDoc._id), decision: 'approved' },
-        actionUrl: `${FRONTEND_URL}/organizations?orgId=${encodeURIComponent(String(orgId))}`,
+        actionUrl: `${frontendUrl}/organizations?orgId=${encodeURIComponent(String(orgId))}`,
       });
 
       await emitRealtimeEvent({
