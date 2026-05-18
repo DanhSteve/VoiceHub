@@ -119,6 +119,11 @@ export const organizationAPI = {
     const response = await apiClient.get(`/organizations/${orgId}/accessible-channel-ids`);
     return response;
   },
+
+  getTaskWorkspaceScope: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/task-workspace-scope`);
+    return response;
+  },
   listChannelAccess: async (orgId, channelId) => {
     const response = await apiClient.get(`/organizations/${orgId}/channels/${channelId}/access`);
     return response;
@@ -129,6 +134,19 @@ export const organizationAPI = {
   },
   revokeChannelAccess: async (orgId, channelId, data) => {
     const response = await apiClient.post(`/organizations/${orgId}/channels/${channelId}/access/revoke`, data);
+    return response;
+  },
+  listChannelRoleAccess: async (orgId, channelId) => {
+    const response = await apiClient.get(
+      `/organizations/${orgId}/channels/${channelId}/role-access`
+    );
+    return response;
+  },
+  saveChannelRoleAccess: async (orgId, channelId, data) => {
+    const response = await apiClient.put(
+      `/organizations/${orgId}/channels/${channelId}/role-access`,
+      data
+    );
     return response;
   },
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   AtSign,
+  Calendar,
+  ChevronDown,
   Hash,
   History,
   Loader2,
@@ -54,16 +56,20 @@ function formatMessagePreview(message) {
  * Thanh tìm kiếm workspace tổ chức (Discord-style): bộ lọc + lịch sử + gợi ý + kết quả.
  */
 export default function OrgWorkspaceSearch({
+  variant = 'bar',
   organizationId,
   serverId,
   channels = [],
   isDarkMode,
   onJumpToResult,
+  onClose,
 }) {
   const { t } = useAppStrings();
+  const isSidebar = variant === 'sidebar';
   const scopeKey = useMemo(() => `org-chat:${organizationId || 'none'}`, [organizationId]);
 
   const [open, setOpen] = useState(false);
+  const effectiveOpen = isSidebar || open;
   const [menuMode, setMenuMode] = useState(null);
   const [inputValue, setInputValue] = useState('');
   const [tokens, setTokens] = useState([]);
@@ -81,9 +87,13 @@ export default function OrgWorkspaceSearch({
     320
   );
 
-  const historyEntries = useMemo(() => loadSearchHistory(scopeKey), [scopeKey, open, historyVersion]);
+  const historyEntries = useMemo(
+    () => loadSearchHistory(scopeKey),
+    [scopeKey, effectiveOpen, historyVersion]
+  );
 
   useEffect(() => {
+    if (isSidebar) return undefined;
     function onDoc(e) {
       if (rootRef.current && !rootRef.current.contains(e.target)) {
         setOpen(false);
@@ -92,10 +102,10 @@ export default function OrgWorkspaceSearch({
     }
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
+  }, [isSidebar]);
 
   useEffect(() => {
-    if (!organizationId || !open || (menuMode !== 'from' && menuMode !== 'mentions')) return;
+    if (!organizationId || !effectiveOpen || (menuMode !== 'from' && menuMode !== 'mentions')) return;
     let cancelled = false;
     setLoadingMembers(true);
     organizationAPI
@@ -116,7 +126,7 @@ export default function OrgWorkspaceSearch({
     return () => {
       cancelled = true;
     };
-  }, [organizationId, open, menuMode]);
+  }, [organizationId, effectiveOpen, menuMode]);
 
   const runSearch = useCallback(async () => {
     if (!organizationId) return;
@@ -146,10 +156,10 @@ export default function OrgWorkspaceSearch({
   }, [organizationId, tokens, inputValue, scopeKey]);
 
   useEffect(() => {
-    if (!open || !organizationId) return;
+    if (!effectiveOpen || !organizationId) return;
     JSON.parse(debouncedKey || '{}');
     runSearch();
-  }, [debouncedKey, open, organizationId, runSearch]);
+  }, [debouncedKey, effectiveOpen, organizationId, runSearch]);
 
   const addToken = (key, value, label, avatar) => {
     setTokens((prev) => {

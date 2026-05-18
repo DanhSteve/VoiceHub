@@ -3,6 +3,14 @@ const Organization = require('../models/Organization');
 const JoinApplication = require('../models/JoinApplication');
 const Branch = require('../models/Branch');
 const Division = require('../models/Division');
+const Team = require('../models/Team');
+const Department = require('../models/Department');
+const {
+  fetchUserRoleNamesInOrg,
+  resolveMemberPlacementScope,
+  placementsMatch,
+  buildSuffixToIdMap,
+} = require('../utils/memberPlacementScope');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const { emitRealtimeEvent } = require('/shared');
@@ -166,14 +174,96 @@ async function createPendingJoinApplication({
   return { application, alreadyPending: false };
 }
 
+const MEMBER_LIST_FULL_ACCESS_ROLES = ['owner', 'admin', 'hr'];
+
 exports.getMembers = async (req, res, next) => {
   try {
-    const members = await Membership.find({ organization: req.params.orgId })
+    const orgId = req.params.orgId;
+    const userId = String(req.user?.id || req.user?.userId || req.user?._id || '');
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Not authenticated' });
+    }
+
+    const viewerMembership = await Membership.findOne({
+      user: userId,
+      organization: orgId,
+      status: 'active',
+    }).lean();
+    if (!viewerMembership) {
+      return res.status(403).json({ status: 'fail', message: 'Access denied' });
+    }
+
+    const members = await Membership.find({ organization: orgId, status: 'active' })
       // organization-service không đăng ký model User; trả userId thô để client tự enrich profile.
       .select('user organization role department branch division team joinedAt status invitedBy createdAt updatedAt')
       .lean();
 
-    res.json({ status: 'success', data: members });
+    const viewerRole = Membership.normalizeRole(viewerMembership.role);
+    if (MEMBER_LIST_FULL_ACCESS_ROLES.includes(viewerRole)) {
+      return res.json({ status: 'success', data: members });
+    }
+
+    const teamIds = [
+      ...new Set(
+        [viewerMembership, ...members]
+          .map((row) => (row?.team ? String(row.team) : ''))
+          .filter(Boolean)
+      ),
+    ];
+    const teams =
+      teamIds.length > 0
+        ? await Team.find({ _id: { $in: teamIds }, organization: orgId })
+            .select('_id division department')
+            .lean()
+        : [];
+    const teamById = new Map(teams.map((team) => [String(team._id), team]));
+
+    const [divisions, departments, viewerRoleNames] = await Promise.all([
+      Division.find({ organization: orgId }).select('_id name').lean(),
+      Department.find({ organization: orgId }).select('_id name division').lean(),
+      fetchUserRoleNamesInOrg(userId, orgId),
+    ]);
+
+    const scopeContext = {
+      divisionBySuffix: buildSuffixToIdMap(divisions),
+      departmentBySuffix: buildSuffixToIdMap(departments),
+      divisions,
+      departments,
+    };
+
+    const viewerPlacement = resolveMemberPlacementScope(
+      viewerMembership,
+      teamById,
+      viewerRoleNames,
+      scopeContext
+    );
+
+    const memberUserIds = [
+      ...new Set(members.map((row) => String(row.user?._id || row.user || '')).filter(Boolean)),
+    ];
+    const roleNamesByUserId = new Map();
+    await Promise.all(
+      memberUserIds.map(async (uid) => {
+        const names = uid === userId ? viewerRoleNames : await fetchUserRoleNamesInOrg(uid, orgId);
+        roleNamesByUserId.set(uid, names);
+      })
+    );
+
+    const filtered = members.filter((member) => {
+      const memberUserId = String(member.user?._id || member.user || '');
+      if (memberUserId === userId) return true;
+      if (!viewerPlacement.divisionId || !viewerPlacement.departmentId) return false;
+      const memberRoleNames = roleNamesByUserId.get(memberUserId) || [];
+      const memberPlacement = resolveMemberPlacementScope(
+        member,
+        teamById,
+        memberRoleNames,
+        scopeContext
+      );
+      return placementsMatch(viewerPlacement, memberPlacement);
+    });
+
+    res.json({ status: 'success', data: filtered });
   } catch (error) {
     next(error);
   }

@@ -44,6 +44,8 @@ import {
   gridWrapperClass,
   tileItemClass,
 } from './voiceMeetingLayout';
+import VoiceAudioSettingsPanel from './VoiceAudioSettingsPanel';
+import { buildAudioConstraints, loadVoiceAudioPrefs, saveVoiceAudioPrefs } from './voiceAudioPrefs';
 
 /** Nút thanh họp: icon + (badge) + chevron + nhãn — tham chiếu layout Zoom/Teams (hình 1) */
 function VoiceToolbarControl({
@@ -97,6 +99,8 @@ const getSignalBaseUrl = () => {
 
 const getSignalPath = () => import.meta.env.VITE_VOICE_SIGNAL_PATH || '/voice-socket';
 const RECENT_VOICE_CALLS_KEY = 'vh.voice.recentCalls';
+
+const initialVoiceAudioPrefs = loadVoiceAudioPrefs();
 
 const normalizeToken = (rawToken) => {
   if (!rawToken) return null;
@@ -224,8 +228,10 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const [audioInputs, setAudioInputs] = useState([]);
   const [audioOutputs, setAudioOutputs] = useState([]);
   const [videoInputs, setVideoInputs] = useState([]);
-  const [selectedMicId, setSelectedMicId] = useState('');
-  const [selectedSpeakerId, setSelectedSpeakerId] = useState('');
+  const [selectedMicId, setSelectedMicId] = useState(initialVoiceAudioPrefs.micDeviceId);
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState(initialVoiceAudioPrefs.speakerDeviceId);
+  const [micVolume, setMicVolume] = useState(initialVoiceAudioPrefs.micVolume);
+  const [speakerVolume, setSpeakerVolume] = useState(initialVoiceAudioPrefs.speakerVolume);
   const [selectedCamId, setSelectedCamId] = useState('');
   const [sendResolution, setSendResolution] = useState('auto');
   const [recvResolution, setRecvResolution] = useState('auto');
@@ -505,8 +511,16 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   }, []);
 
   useEffect(() => {
-    if (settingsOpen && viewStage === 'inRoom') refreshMediaDevices();
-  }, [settingsOpen, viewStage, refreshMediaDevices]);
+    if (settingsOpen) refreshMediaDevices();
+  }, [settingsOpen, refreshMediaDevices]);
+
+  useEffect(() => {
+    if (typeof HTMLMediaElement === 'undefined') return;
+    const vol = Math.min(1, Math.max(0, speakerVolume / 100));
+    document.querySelectorAll('video, audio').forEach((el) => {
+      if ('volume' in el) el.volume = vol;
+    });
+  }, [speakerVolume, pipOpen, participants.length]);
 
   const toggleMeetingFullscreen = useCallback(async () => {
     const el = meetingRootRef.current;
@@ -527,7 +541,34 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
     async (deviceId) => {
       if (!deviceId) return;
       setSelectedMicId(deviceId);
+      saveVoiceAudioPrefs({ micDeviceId: deviceId });
+
       const { localStream, audioProducer } = mediasoupRef.current;
+      const previewStream = prejoinStreamRef.current;
+      const targetStream = localStream || previewStream;
+      if (!targetStream) return;
+
+      if (!audioProducer) {
+        try {
+          const ns = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { ideal: deviceId } },
+            video: false,
+          });
+          const nt = ns.getAudioTracks()[0];
+          if (!nt) return;
+          targetStream.getAudioTracks().forEach((tr) => {
+            targetStream.removeTrack(tr);
+            tr.stop();
+          });
+          targetStream.addTrack(nt);
+          return;
+        } catch (e) {
+          console.error(e);
+          toast.error(t('voiceRoom.micFail'));
+          return;
+        }
+      }
+
       if (!localStream || !audioProducer) return;
       try {
         const ns = await navigator.mediaDevices.getUserMedia({
@@ -753,7 +794,10 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
 
     if (audioEnabled) {
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const micDeviceId = selectedMicId || loadVoiceAudioPrefs().micDeviceId;
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: buildAudioConstraints(micDeviceId),
+        });
         const audioTrack = audioStream.getAudioTracks()[0];
         if (audioTrack) {
           mergedStream.addTrack(audioTrack);
@@ -958,8 +1002,9 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       let localStream = prejoinStreamRef.current;
       if (!localStream) {
         if (audioEnabled || videoEnabled) {
+          const micDeviceId = selectedMicId || loadVoiceAudioPrefs().micDeviceId;
           localStream = await navigator.mediaDevices.getUserMedia({
-            audio: Boolean(audioEnabled),
+            audio: audioEnabled ? buildAudioConstraints(micDeviceId) : false,
             video: Boolean(videoEnabled),
           });
         } else {
@@ -1452,6 +1497,15 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
         icon: FileText,
         onClick: () => navigate('/documents'),
       },
+      {
+        id: 'settings',
+        label: t('voiceRoom.settingsTitle'),
+        icon: Settings,
+        onClick: () => {
+          setSettingsTab('audio');
+          setSettingsOpen(true);
+        },
+      },
     ],
     [navigate, t]
   );
@@ -1570,8 +1624,9 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
             >
               {voiceNav.map((item) => {
                 const active =
-                  (item.id === 'new' && viewStage === 'home') ||
-                  (item.id === 'join' && viewStage === 'prejoin');
+                  (item.id === 'new' && viewStage === 'home' && !settingsOpen) ||
+                  (item.id === 'join' && viewStage === 'prejoin') ||
+                  (item.id === 'settings' && settingsOpen);
                 const Icon = item.icon;
                 return (
                   <button
@@ -2692,15 +2747,17 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
               </div>
             )}
 
+          </div>
+        )}
             {settingsOpen &&
               createPortal(
                 <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
                   <div
                     role="dialog"
                     aria-modal="true"
-                    className="flex max-h-[min(92vh,720px)] w-full max-w-3xl overflow-hidden rounded-2xl bg-white text-gray-900 shadow-2xl"
+                    className={`flex max-h-[min(92vh,720px)] w-full max-w-3xl overflow-hidden rounded-2xl shadow-2xl ${isDarkMode ? 'bg-[#141414] text-gray-100' : 'bg-white text-gray-900'}`}
                   >
-                    <aside className="w-52 shrink-0 border-r border-gray-200 bg-gray-50 py-4">
+                    <aside className={`w-52 shrink-0 border-r py-4 ${isDarkMode ? 'border-white/10 bg-[#0d0d0d]' : 'border-gray-200 bg-gray-50'}`}>
                       <button
                         type="button"
                         className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium ${
@@ -2725,7 +2782,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                       </button>
                     </aside>
                     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                      <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+                      <div className={`flex items-center justify-between border-b px-6 py-4 ${isDarkMode ? 'border-white/10' : 'border-gray-200'}`}>
                         <h2 className="text-lg font-semibold">{t('voiceRoom.settingsTitle')}</h2>
                         <button
                           type="button"
@@ -2738,50 +2795,20 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                       </div>
                       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                         {settingsTab === 'audio' && (
-                          <div className="space-y-6">
-                            <div>
-                              <label className="mb-2 block text-sm font-medium text-blue-700">{t('voiceRoom.micLabel')}</label>
-                              <select
-                                value={selectedMicId}
-                                onChange={(e) => applyMicrophoneDevice(e.target.value)}
-                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm"
-                              >
-                                {audioInputs.length === 0 ? (
-                                  <option value="">{t('voiceRoom.loadingDevices')}</option>
-                                ) : (
-                                  audioInputs.map((d) => (
-                                    <option key={d.deviceId || d.label} value={d.deviceId}>
-                                      {d.label || t('voiceRoom.micFallback', { suffix: d.deviceId?.slice(-6) || '' })}
-                                    </option>
-                                  ))
-                                )}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="mb-2 block text-sm font-medium text-blue-700">{t('voiceRoom.speakerLabel')}</label>
-                              <select
-                                value={selectedSpeakerId}
-                                onChange={(e) => setSelectedSpeakerId(e.target.value)}
-                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm"
-                              >
-                                {audioOutputs.length === 0 ? (
-                                  <option value="">{t('voiceRoom.systemDefault')}</option>
-                                ) : (
-                                  <>
-                                    <option value="">{t('voiceRoom.defaultOpt')}</option>
-                                    {audioOutputs.map((d) => (
-                                      <option key={d.deviceId || d.label} value={d.deviceId}>
-                                        {d.label || t('voiceRoom.speakerFallback', { suffix: d.deviceId?.slice(-6) || '' })}
-                                      </option>
-                                    ))}
-                                  </>
-                                )}
-                              </select>
-                              <p className="mt-1 text-xs text-gray-500">
-                                {t('voiceRoom.speakerHint')}
-                              </p>
-                            </div>
-                          </div>
+                          <VoiceAudioSettingsPanel
+                            t={t}
+                            isDarkMode={isDarkMode}
+                            micId={selectedMicId}
+                            speakerId={selectedSpeakerId}
+                            micVolume={micVolume}
+                            speakerVolume={speakerVolume}
+                            onMicIdChange={setSelectedMicId}
+                            onSpeakerIdChange={setSelectedSpeakerId}
+                            onMicVolumeChange={setMicVolume}
+                            onSpeakerVolumeChange={setSpeakerVolume}
+                            onApplyMic={applyMicrophoneDevice}
+                            active={settingsOpen && settingsTab === 'audio'}
+                          />
                         )}
                         {settingsTab === 'video' && (
                           <div className="space-y-5">
@@ -2871,8 +2898,6 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                 </div>,
                 document.body
               )}
-          </div>
-        )}
       </div>
     </div>
   );

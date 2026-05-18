@@ -30,6 +30,21 @@ const taskSchema = new mongoose.Schema(
       required: true,
       ref: 'Organization',
     },
+    departmentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department',
+      default: null,
+    },
+    teamId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Team',
+      default: null,
+    },
+    departmentName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     status: {
       type: String,
       enum: ['todo', 'in_progress', 'review', 'done', 'cancelled'],
@@ -90,6 +105,8 @@ const taskSchema = new mongoose.Schema(
 // Indexes
 taskSchema.index({ assigneeId: 1, status: 1 });
 taskSchema.index({ organizationId: 1, status: 1 });
+taskSchema.index({ organizationId: 1, departmentId: 1, status: 1 });
+taskSchema.index({ organizationId: 1, teamId: 1, status: 1 });
 taskSchema.index({ serverId: 1 });
 taskSchema.index({ createdBy: 1 });
 taskSchema.index({ dueDate: 1 });

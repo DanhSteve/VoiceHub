@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } fr
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import api from '../../services/api';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import roleAPI from '../../services/api/roleAPI';
 import userService from '../../services/userService';
@@ -9,10 +10,40 @@ import friendService from '../../services/friendService';
 import { ConfirmDialog } from '../Shared';
 import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
+import OrgWorkspaceSearchSidebar from '../../features/search/components/OrgWorkspaceSearchSidebar';
 
 const unwrapBody = (payload) => payload?.data ?? payload;
 
 const MEMBERSHIP_ROLE_ORDER = ['owner', 'admin', 'member'];
+
+function canOrgResourceAction(permissions, resource, action = 'read') {
+  if (!Array.isArray(permissions)) return false;
+  for (const perm of permissions) {
+    const res = perm?.resource;
+    const actions = Array.isArray(perm?.actions) ? perm.actions : [];
+    if (res !== resource && res !== '*') continue;
+    if (
+      actions.includes(action) ||
+      actions.includes('*') ||
+      actions.includes('admin')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Fallback khi chưa lấy được RBAC từ role-permission-service */
+function fallbackOrgTabFlags(myRole) {
+  const role = String(myRole || 'member').toLowerCase();
+  if (role === 'owner' || role === 'admin') {
+    return { tasks: true, files: true };
+  }
+  if (role === 'hr') {
+    return { tasks: true, files: false };
+  }
+  return { tasks: true, files: false };
+}
 
 function memberUserId(m) {
   const u = m?.user;
@@ -141,6 +172,13 @@ function OrganizationMemberSidebar({
   memberDockOpen,
   onMemberMenuOpenChange,
   onMemberMenuClosed,
+  selectedChannelId = '',
+  channelPermissionMatrix = {},
+  workspaceSearchOpen = false,
+  onWorkspaceSearchOpenChange,
+  searchChannels = [],
+  serverId,
+  onWorkspaceSearchJump,
 }) {
   const { t } = useAppStrings();
   const { isDarkMode } = useTheme();
@@ -184,11 +222,62 @@ function OrganizationMemberSidebar({
   const [friendIdsSet, setFriendIdsSet] = useState(null);
   /** Xóa thành viên / Chặn — dùng modal thay cho window.confirm (tránh tiêu đề localhost) */
   const [memberConfirm, setMemberConfirm] = useState(null);
-  /** Tab panel phải — khớp mockup workspace tổ chức */
-  const [sidebarTab, setSidebarTab] = useState('context');
+  /** Tab panel phải — mặc định danh sách thành viên */
+  const [sidebarTab, setSidebarTab] = useState('people');
+  const [orgPermissions, setOrgPermissions] = useState([]);
+  const [orgPermissionsLoaded, setOrgPermissionsLoaded] = useState(false);
   const pendingReviewCount = canReviewJoinApplications ? joinApplicationsToReview.length : 0;
   const joinReviewKey = (orgId, applicationId) => `${orgId}:${applicationId}`;
   const [selectedJoinApplication, setSelectedJoinApplication] = useState(null);
+
+  useEffect(() => {
+    if (!organizationId || !currentUserId) {
+      setOrgPermissions([]);
+      setOrgPermissionsLoaded(false);
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      setOrgPermissionsLoaded(false);
+      try {
+        const payload = await api.get(
+          `/permissions/user/${encodeURIComponent(String(currentUserId))}/server/${encodeURIComponent(String(organizationId))}`
+        );
+        const body = unwrapBody(payload);
+        const list = Array.isArray(body?.data)
+          ? body.data
+          : Array.isArray(body)
+            ? body
+            : [];
+        if (!cancelled) setOrgPermissions(list);
+      } catch {
+        if (!cancelled) setOrgPermissions([]);
+      } finally {
+        if (!cancelled) setOrgPermissionsLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId, currentUserId]);
+
+  const { canShowTasksTab, canShowFilesTab } = useMemo(() => {
+    const fallback = fallbackOrgTabFlags(myRole);
+    if (!orgPermissionsLoaded || !orgPermissions.length) {
+      return { canShowTasksTab: fallback.tasks, canShowFilesTab: fallback.files };
+    }
+    return {
+      canShowTasksTab: canOrgResourceAction(orgPermissions, 'task', 'read'),
+      canShowFilesTab: canOrgResourceAction(orgPermissions, 'document', 'read'),
+    };
+  }, [orgPermissions, orgPermissionsLoaded, myRole]);
+
+  const showSidebarTabs = canShowTasksTab || canShowFilesTab;
+
+  useEffect(() => {
+    if (sidebarTab === 'tasks' && !canShowTasksTab) setSidebarTab('people');
+    if (sidebarTab === 'files' && !canShowFilesTab) setSidebarTab('people');
+  }, [sidebarTab, canShowTasksTab, canShowFilesTab]);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -1164,6 +1253,26 @@ function OrganizationMemberSidebar({
     </button>
   );
 
+  if (workspaceSearchOpen && organizationId) {
+    return (
+      <div
+        className={`flex h-full min-h-0 flex-col ${isDarkMode ? 'bg-[#0a0c12]' : 'bg-sky-50/95'}`}
+      >
+        <OrgWorkspaceSearchSidebar
+          organizationId={organizationId}
+          serverId={serverId}
+          channels={searchChannels}
+          isDarkMode={isDarkMode}
+          onClose={() => onWorkspaceSearchOpenChange?.(false)}
+          onJumpToResult={(payload) => {
+            onWorkspaceSearchJump?.(payload);
+            onWorkspaceSearchOpenChange?.(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className={`flex h-full min-h-0 flex-col ${isDarkMode ? 'bg-[#0a0c12]' : 'bg-sky-50/95'}`}
@@ -1184,54 +1293,34 @@ function OrganizationMemberSidebar({
         </p>
       </div>
 
-      <div
-        className={`grid shrink-0 grid-cols-2 gap-1 border-b px-2 py-2 sm:grid-cols-4 ${
-          isDarkMode ? 'border-white/[0.06] bg-[#0d1118]' : 'border-sky-200/80 bg-sky-50/70'
-        }`}
-      >
-        {tabBtn('context', t('organizations.memberSidebarTabContext'))}
-        {tabBtn('tasks', t('organizations.memberSidebarTabTasks'))}
-        {tabBtn('files', t('organizations.memberSidebarTabFiles'))}
-        {tabBtn('people', 'Người', pendingReviewCount)}
-      </div>
+      {showSidebarTabs ? (
+        <div
+          className={`grid shrink-0 gap-1 border-b px-2 py-2 ${
+            canShowTasksTab && canShowFilesTab ? 'grid-cols-3' : 'grid-cols-2'
+          } ${isDarkMode ? 'border-white/[0.06] bg-[#0d1118]' : 'border-sky-200/80 bg-sky-50/70'}`}
+        >
+          {canShowTasksTab && tabBtn('tasks', t('organizations.memberSidebarTabTasks'))}
+          {canShowFilesTab && tabBtn('files', t('organizations.memberSidebarTabFiles'))}
+          {tabBtn('people', t('organizations.memberSidebarTabPeople'), pendingReviewCount)}
+        </div>
+      ) : null}
 
       <div className="scrollbar-overlay min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {sidebarTab === 'context' && (
-          <div
-            className={`mb-4 rounded-xl border p-3 text-xs ${
-              isDarkMode ? 'border-white/[0.08] bg-white/[0.02] text-[#b4b8c4]' : 'border-slate-200 bg-white text-slate-700'
-            }`}
-          >
-            <div className={`text-[11px] font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-              Bối cảnh tổ chức
-            </div>
-            <div className="mt-2 space-y-1">
-              <div>Tổ chức: {organizationName || t('organizations.memberSidebarOrgFallback')}</div>
-              <div>Vai trò của bạn: {roleLabelMap[String(myRole || '').toLowerCase()] || myRole || 'member'}</div>
-              <div>Trạng thái socket: {socketConnected ? t('organizations.presenceOnline') : t('organizations.presenceOffline')}</div>
-            </div>
-          </div>
-        )}
-
-        {sidebarTab === 'tasks' && (
+        {sidebarTab === 'tasks' && canShowTasksTab && (
           <p
             className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
           >
             {t('organizations.memberSidebarTasksEmpty')}
           </p>
         )}
-        {sidebarTab === 'files' && (
+        {sidebarTab === 'files' && canShowFilesTab && (
           <p
             className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
           >
             {t('organizations.memberSidebarFilesEmpty')}
           </p>
         )}
-        {sidebarTab === 'people' && (
-          <div className="mb-2" />
-        )}
-
-        {loading && (
+        {sidebarTab === 'people' && loading && (
           <div className="space-y-2">
             <div
               className={`h-9 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/10' : 'bg-slate-200/90'}`}
@@ -1244,8 +1333,10 @@ function OrganizationMemberSidebar({
             />
           </div>
         )}
-        {!loading && error && <p className="px-1 text-xs text-rose-300">{error}</p>}
-        {!loading && !error && rows.length === 0 && (
+        {sidebarTab === 'people' && !loading && error && (
+          <p className="px-1 text-xs text-rose-300">{error}</p>
+        )}
+        {sidebarTab === 'people' && !loading && !error && rows.length === 0 && (
           <p className="px-1 text-xs text-gray-500">{t('organizations.membersEmpty')}</p>
         )}
         {!loading &&
