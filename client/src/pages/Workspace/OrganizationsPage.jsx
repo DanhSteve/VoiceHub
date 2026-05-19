@@ -1932,6 +1932,18 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   }, [organizations, location.state, navigate, landingDemo]);
 
   useEffect(() => {
+    if (landingDemo) return;
+    const orgId = location.state?.selectOrganizationId;
+    if (!orgId || !organizations.length) return;
+    const exists = organizations.some((o) => String(o._id) === String(orgId));
+    if (!exists) return;
+    setSelectedOrganizationId(String(orgId));
+    const rest = { ...(location.state || {}) };
+    delete rest.selectOrganizationId;
+    navigate(location.pathname + location.search, { replace: true, state: rest });
+  }, [organizations, location.state, navigate, landingDemo]);
+
+  useEffect(() => {
     if (!shouldRedirectEmptyOrganizations) return;
     navigate('/dashboard', { replace: true });
   }, [shouldRedirectEmptyOrganizations, navigate]);

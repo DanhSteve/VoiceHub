@@ -16,6 +16,18 @@ const {
 } = require('../config/fileRetention');
 const { publishTaskAiSyncEvent } = require('../messaging/taskAiSyncPublisher');
 const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
+const { assertDmCanSend, dmErrorToJson } = require('../utils/verifyDmRelationship');
+
+async function emitDmToParticipants(event, message, extra = {}) {
+  if (!message?.receiverId) return;
+  const sender = String(message.senderId?._id || message.senderId || '');
+  const receiver = String(message.receiverId?._id || message.receiverId || '');
+  const payload = { ...message, ...extra };
+  await Promise.all([
+    emitRealtimeEvent({ event, userId: receiver, payload }),
+    emitRealtimeEvent({ event, userId: sender, payload }),
+  ]);
+}
 
 /** Header gọi organization-service: tin cậy gateway (giống proxy) hoặc Bearer để /auth/me. */
 function headersForOrganizationForward(req) {
@@ -317,6 +329,17 @@ class MessageController {
 
       if (receiverId) {
         messageData.receiverId = receiverId;
+        try {
+          await assertDmCanSend({
+            peerId: receiverId,
+            authorizationHeader: req.headers?.authorization,
+          });
+        } catch (dmErr) {
+          if (dmErr.statusCode) {
+            return res.status(dmErr.statusCode).json(dmErrorToJson(dmErr));
+          }
+          throw dmErr;
+        }
       }
 
       if (roomId) {
@@ -553,6 +576,35 @@ class MessageController {
     }
   }
 
+  /** Tìm trong hội thoại DM với một bạn. */
+  async searchDmMessages(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      const { peerId, q, page, limit } = req.query || {};
+      if (!userId || !peerId) {
+        return res.status(400).json({
+          success: false,
+          message: 'peerId is required',
+        });
+      }
+      const result = await messageService.searchDmMessages(userId, peerId, {
+        q: q || '',
+        page: parseInt(page, 10) || 1,
+        limit: parseInt(limit, 10) || 30,
+      });
+      const messages = await attachSignedReadUrlsToMessages(result.messages || []);
+      res.json({
+        success: true,
+        data: { ...result, messages },
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
   /** Tìm kiếm tin nhắn trong kênh tổ chức — organizationId bắt buộc; roomId giới trong kênh được phép. */
   async searchMessages(req, res) {
     try {
@@ -673,8 +725,67 @@ class MessageController {
   // Lấy danh sách tin nhắn
   async getMessages(req, res) {
     try {
-      const { receiverId, roomId, organizationId, page, limit } = req.query;
       const userId = req.user?.id || req.user?._id;
+      const q = req.query || {};
+      const {
+        receiverId,
+        roomId,
+        organizationId,
+        page,
+        limit,
+        markConversationRead,
+        unreadByPeer,
+        search,
+      } = q;
+      const searchQ = q.q;
+
+      if (String(unreadByPeer || '') === '1') {
+        if (!userId) {
+          return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+        const byPeer = await messageService.countUnreadByPeer(userId);
+        return res.json({ success: true, data: { byPeer } });
+      }
+
+      if (
+        receiverId &&
+        (String(search || '') === '1' || String(search || '') === 'true') &&
+        String(searchQ || '').trim().length >= 1
+      ) {
+        if (!userId) {
+          return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+        const result = await messageService.searchDmMessages(userId, receiverId, {
+          q: searchQ || '',
+          page: parseInt(page, 10) || 1,
+          limit: parseInt(limit, 10) || 30,
+        });
+        const messages = await attachSignedReadUrlsToMessages(result.messages || []);
+        return res.json({
+          success: true,
+          data: { ...result, messages },
+        });
+      }
+
+      if (receiverId && (String(markConversationRead || '') === '1' || markConversationRead === true)) {
+        if (!userId) {
+          return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+        const result = await messageService.markConversationAsRead(userId, receiverId);
+        if (result.modifiedCount > 0) {
+          await emitRealtimeEvent({
+            event: 'friend:messages_read',
+            userId: String(receiverId),
+            payload: {
+              peerId: String(receiverId),
+              readerId: String(userId),
+              readAt: result.readAt,
+              lastReadMessageId: result.lastReadMessageId,
+            },
+          });
+        }
+        return res.json({ success: true, data: result });
+      }
 
       const filter = {};
 
@@ -792,10 +903,112 @@ class MessageController {
         data,
       });
     } catch (error) {
+      const status = error.message === 'Unauthorized' ? 403 : 500;
+      res.status(status).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  /** Đánh dấu đã đọc toàn bộ tin DM từ một bạn. */
+  async markConversationAsRead(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      const { peerId } = req.body || {};
+      if (!userId || !peerId) {
+        return res.status(400).json({
+          success: false,
+          message: 'peerId is required',
+        });
+      }
+
+      const result = await messageService.markConversationAsRead(userId, peerId);
+
+      if (result.modifiedCount > 0) {
+        await emitRealtimeEvent({
+          event: 'friend:messages_read',
+          userId: String(peerId),
+          payload: {
+            peerId: String(peerId),
+            readerId: String(userId),
+            readAt: result.readAt,
+            lastReadMessageId: result.lastReadMessageId,
+          },
+        });
+      }
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
       res.status(500).json({
         success: false,
         message: error.message,
       });
+    }
+  }
+
+  /** Số tin chưa đọc theo từng bạn (DM). */
+  async getUnreadByPeer(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      const byPeer = await messageService.countUnreadByPeer(userId);
+      res.json({ success: true, data: { byPeer } });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  async addReaction(req, res) {
+    try {
+      const { messageId } = req.params;
+      const { emoji } = req.body || {};
+      const userId = req.user?.id || req.user?._id;
+
+      const message = await messageService.addReaction(messageId, userId, emoji);
+      if (!message) {
+        return res.status(404).json({ success: false, message: 'Message not found' });
+      }
+
+      const data = (await attachSignedReadUrlToMessage(message)) || message;
+      await emitDmToParticipants('friend:message_reaction', data);
+
+      res.json({ success: true, data });
+    } catch (error) {
+      const status = error.message === 'Unauthorized' ? 403 : 500;
+      res.status(status).json({ success: false, message: error.message });
+    }
+  }
+
+  async removeReaction(req, res) {
+    try {
+      const { messageId, emoji } = req.params;
+      const userId = req.user?.id || req.user?._id;
+
+      const message = await messageService.removeReaction(
+        messageId,
+        userId,
+        decodeURIComponent(emoji || '')
+      );
+      if (!message) {
+        return res.status(404).json({ success: false, message: 'Message not found' });
+      }
+
+      const data = (await attachSignedReadUrlToMessage(message)) || message;
+      await emitDmToParticipants('friend:message_reaction', data);
+
+      res.json({ success: true, data });
+    } catch (error) {
+      const status = error.message === 'Unauthorized' ? 403 : 500;
+      res.status(status).json({ success: false, message: error.message });
     }
   }
 
@@ -830,10 +1043,19 @@ class MessageController {
         });
       }
 
+      const data = (await attachSignedReadUrlToMessage(message)) || message;
+
       res.json({
         success: true,
         message: 'Message deleted successfully',
+        data,
       });
+
+      if (message?.receiverId && !message?.roomId) {
+        await emitDmToParticipants('friend:message_deleted', data, {
+          messageId: String(messageId),
+        });
+      }
 
       try {
         if (message?.organizationId) {
@@ -877,6 +1099,12 @@ class MessageController {
         message: 'Message recalled successfully',
         data,
       });
+
+      if (message?.receiverId && !message?.roomId) {
+        await emitDmToParticipants('friend:message_recalled', data, {
+          messageId: String(messageId),
+        });
+      }
 
       try {
         if (message?.organizationId) {
@@ -926,6 +1154,10 @@ class MessageController {
           event: 'room:message_edited',
           roomId: String(message.roomId),
           payload: payloadMessage,
+        });
+      } else if (message.receiverId) {
+        await emitDmToParticipants('friend:message_edited', payloadMessage, {
+          messageId: String(messageId),
         });
       }
 

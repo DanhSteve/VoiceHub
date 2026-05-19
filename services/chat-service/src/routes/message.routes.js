@@ -83,6 +83,13 @@ router.delete('/:messageId', messageController.deleteMessage.bind(messageControl
 // Thu hồi tin nhắn (recall)
 router.patch('/:messageId/recall', messageController.recallMessage.bind(messageController));
 
+// Phản hồi emoji
+router.post('/:messageId/reactions', messageController.addReaction.bind(messageController));
+router.delete(
+  '/:messageId/reactions/:emoji',
+  messageController.removeReaction.bind(messageController)
+);
+
 // Chỉnh sửa tin nhắn
 router.patch('/:messageId/edit', messageController.editMessage.bind(messageController));
 

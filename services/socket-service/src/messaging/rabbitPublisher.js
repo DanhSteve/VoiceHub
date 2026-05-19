@@ -41,7 +41,14 @@ async function getChannel() {
 /**
  * Publish friend DM to queue. Returns { ok, correlationId } — không chờ chat-service.
  */
-async function publishFriendDm({ senderId, receiverId, content, messageType = 'text' }) {
+async function publishFriendDm({
+  senderId,
+  receiverId,
+  content,
+  messageType = 'text',
+  replyToMessageId,
+  authorization,
+}) {
   try {
     const ch = await getChannel();
     if (!ch) {
@@ -49,17 +56,18 @@ async function publishFriendDm({ senderId, receiverId, content, messageType = 't
     }
 
     const correlationId = randomUUID();
-    const payload = Buffer.from(
-      JSON.stringify({
-        v: 1,
-        correlationId,
-        senderId: String(senderId),
-        receiverId: String(receiverId),
-        content: String(content),
-        messageType: messageType || 'text',
-        enqueuedAt: new Date().toISOString(),
-      })
-    );
+    const body = {
+      v: 1,
+      correlationId,
+      senderId: String(senderId),
+      receiverId: String(receiverId),
+      content: String(content),
+      messageType: messageType || 'text',
+      enqueuedAt: new Date().toISOString(),
+    };
+    if (replyToMessageId) body.replyToMessageId = String(replyToMessageId);
+    if (authorization) body.authorization = String(authorization);
+    const payload = Buffer.from(JSON.stringify(body));
 
     const published = ch.publish(EXCHANGE, ROUTING_KEY, payload, {
       persistent: true,

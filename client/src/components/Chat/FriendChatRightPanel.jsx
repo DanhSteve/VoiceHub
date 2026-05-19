@@ -1,14 +1,17 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Bell,
   BellOff,
   Check,
+  ChevronRight,
   Clock,
   FolderOpen,
   Forward,
+  Loader2,
   MoreHorizontal,
   Pin,
   PinOff,
+  Plus,
   UserPlus,
   Users,
 } from 'lucide-react';
@@ -16,11 +19,18 @@ import toast from 'react-hot-toast';
 import { useLocale } from '../../context/LocaleContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
+import { meetingAPI } from '../../services/api/meetingAPI';
+import { fetchMutualOrganizations } from '../../utils/mutualOrganizations';
 import UserAvatar from '../Shared/UserAvatar';
+import Modal from '../Shared/Modal';
 import ChatAttachmentContextMenu from './ChatAttachmentContextMenu';
 import { isAvatarImageUrl } from '../../utils/avatarDisplay';
 import { buildMediaAttachmentMenuItems } from '../../utils/buildAttachmentMenuItems';
 import { fileTypeBadge, formatFileSize } from '../../utils/chatFileDisplay';
+import {
+  formatDmEventWhen,
+  getDmRemindersForFriend,
+} from '../../utils/dmCalendarReminders';
 
 function formatShortDate(iso, localeTag) {
   if (!iso) return '';
@@ -54,6 +64,8 @@ export default function FriendChatRightPanel({
   onOpenMediaAt,
   onViewAllMedia,
   onAttachmentAction,
+  onOpenCalendarForFriend,
+  onOpenMutualOrganization,
 }) {
   const { t } = useAppStrings();
   const { locale } = useLocale();
@@ -62,6 +74,15 @@ export default function FriendChatRightPanel({
   const [openFiles, setOpenFiles] = useState(true);
   const [ctxMenu, setCtxMenu] = useState(null);
   const [fileMoreId, setFileMoreId] = useState(null);
+  const [remindersOpen, setRemindersOpen] = useState(false);
+  const [mutualOpen, setMutualOpen] = useState(false);
+  const [peerReminders, setPeerReminders] = useState([]);
+  const [remindersLoading, setRemindersLoading] = useState(false);
+  const [mutualOrgs, setMutualOrgs] = useState({
+    loading: false,
+    count: 0,
+    organizations: [],
+  });
 
   const { mediaItems = [], files = [] } = attachments || {};
   const gridMedia = mediaItems.slice(0, GRID_PREVIEW);
@@ -246,9 +267,101 @@ export default function FriendChatRightPanel({
     );
   };
 
+  const friendId = friend?.id != null ? String(friend.id) : '';
+
+  const loadMutualOrgs = useCallback(
+    (force = false) => {
+      if (!friendId) {
+        setMutualOrgs({ loading: false, count: 0, organizations: [] });
+        return undefined;
+      }
+      let cancelled = false;
+      setMutualOrgs((prev) => ({ ...prev, loading: true }));
+      fetchMutualOrganizations(friendId, { force })
+        .then((data) => {
+          if (cancelled) return;
+          const organizations = Array.isArray(data?.organizations) ? data.organizations : [];
+          setMutualOrgs({
+            loading: false,
+            count: Number(data?.count ?? organizations.length) || 0,
+            organizations,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setMutualOrgs({ loading: false, count: 0, organizations: [] });
+          }
+        });
+      return () => {
+        cancelled = true;
+      };
+    },
+    [friendId]
+  );
+
+  useEffect(() => {
+    const cleanup = loadMutualOrgs(false);
+    return cleanup;
+  }, [loadMutualOrgs]);
+
+  useEffect(() => {
+    if (!friendId || !remindersOpen) return undefined;
+    let cancelled = false;
+    setRemindersLoading(true);
+    const local = getDmRemindersForFriend(friendId, friend?.name || '');
+    const from = new Date();
+    const to = new Date();
+    to.setDate(to.getDate() + 120);
+
+    meetingAPI
+      .getMeetings({ startFrom: from.toISOString(), startTo: to.toISOString() })
+      .then((res) => {
+        if (cancelled) return;
+        const body = res?.data ?? res;
+        const data = body?.data ?? body;
+        const meetings = Array.isArray(data?.meetings) ? data.meetings : [];
+        const peerMeetings = meetings
+          .filter((m) =>
+            (m.participants || []).some(
+              (p) => String(p.userId || p._id || p) === friendId
+            )
+          )
+          .map((m) => ({
+            id: m._id || m.id,
+            title: m.title || t('calendar.tabEvent'),
+            type: 'meeting',
+            source: 'api',
+            startAt: m.startTime,
+            _startAt: m.startTime ? new Date(m.startTime) : null,
+          }));
+        const merged = [...local, ...peerMeetings].sort((a, b) => {
+          const ta = a._startAt?.getTime?.() ?? (a.startAt ? new Date(a.startAt).getTime() : 0);
+          const tb = b._startAt?.getTime?.() ?? (b.startAt ? new Date(b.startAt).getTime() : 0);
+          return ta - tb;
+        });
+        setPeerReminders(merged);
+      })
+      .catch(() => {
+        if (!cancelled) setPeerReminders(local);
+      })
+      .finally(() => {
+        if (!cancelled) setRemindersLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [friendId, friend?.name, remindersOpen, t]);
+
+  const openRemindersModal = () => {
+    const local = getDmRemindersForFriend(friendId, friend?.name || '');
+    setPeerReminders(local);
+    setRemindersOpen(true);
+  };
+
   if (!friend) return null;
 
-  const showComingSoon = (key) => () => toast(t(key), { icon: 'ℹ️' });
+  const mutualCount = mutualOrgs.loading ? '…' : mutualOrgs.count;
 
   return (
     <aside className={shell}>
@@ -293,21 +406,25 @@ export default function FriendChatRightPanel({
         </div>
 
         <div className={hairlineT}>
-          <button
-            type="button"
-            className={quickRow}
-            onClick={showComingSoon('friendChat.remindersSoon')}
-          >
+          <button type="button" className={quickRow} onClick={openRemindersModal}>
             <Clock className="h-5 w-5 shrink-0 opacity-70" />
-            <span>{t('friendChat.remindersList')}</span>
+            <span className="min-w-0 flex-1">{t('friendChat.remindersList')}</span>
+            <ChevronRight className="h-4 w-4 shrink-0 opacity-50" />
           </button>
           <button
             type="button"
             className={`${quickRow} ${hairlineT}`}
-            onClick={showComingSoon('friendChat.mutualGroupsSoon')}
+            onClick={() => setMutualOpen(true)}
           >
             <Users className="h-5 w-5 shrink-0 opacity-70" />
-            <span>{t('friendChat.mutualGroups', { count: 0 })}</span>
+            <span className="min-w-0 flex-1">
+              {mutualOrgs.loading ? (
+                <Loader2 className="inline h-4 w-4 animate-spin opacity-60" />
+              ) : (
+                t('friendChat.mutualGroups', { count: mutualCount })
+              )}
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 opacity-50" />
           </button>
         </div>
 
@@ -387,6 +504,128 @@ export default function FriendChatRightPanel({
         onClose={closeMenu}
         isDarkMode={isDarkMode}
       />
+
+      <Modal
+        isOpen={remindersOpen}
+        onClose={() => setRemindersOpen(false)}
+        title={t('friendChat.remindersList')}
+        size="md"
+      >
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => {
+              setRemindersOpen(false);
+              onOpenCalendarForFriend?.({ prefillType: 'reminder' });
+            }}
+            className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ${
+              isDarkMode
+                ? 'bg-cyan-600 text-white hover:bg-cyan-500'
+                : 'bg-cyan-600 text-white hover:bg-cyan-700'
+            }`}
+          >
+            <Plus className="h-4 w-4" />
+            {t('friendChat.remindersAdd')}
+          </button>
+          {remindersLoading ? (
+            <div className={`flex justify-center py-8 ${labelMuted}`}>
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          ) : peerReminders.length === 0 ? (
+            <p className={`py-6 text-center text-sm ${labelMuted}`}>{t('friendChat.remindersEmpty')}</p>
+          ) : (
+            <ul className="max-h-[min(50vh,360px)] space-y-2 overflow-y-auto">
+              {peerReminders.map((ev) => (
+                <li key={`${ev.source || 'local'}-${ev.id}`}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRemindersOpen(false);
+                      onOpenCalendarForFriend?.({ highlightEventId: ev.id });
+                    }}
+                    className={`flex w-full flex-col rounded-xl border px-3 py-2.5 text-left transition ${
+                      isDarkMode
+                        ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
+                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className={`text-sm font-semibold ${titleMain}`}>{ev.title}</span>
+                    <span className={`mt-0.5 text-xs ${labelMuted}`}>
+                      {formatDmEventWhen(ev, locale)}
+                      {ev.type === 'meeting' && ev.source === 'api' ? ' · Meeting' : ''}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={mutualOpen}
+        onClose={() => setMutualOpen(false)}
+        title={t('friendChat.mutualGroups', { count: mutualOrgs.count })}
+        size="md"
+      >
+        <div className="mb-3 flex justify-end">
+          <button
+            type="button"
+            disabled={mutualOrgs.loading}
+            onClick={() => loadMutualOrgs(true)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+              isDarkMode
+                ? 'bg-white/10 text-slate-200 hover:bg-white/15 disabled:opacity-50'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50'
+            }`}
+          >
+            {t('friendChat.mutualOrgsRefresh')}
+          </button>
+        </div>
+        {mutualOrgs.loading ? (
+          <div className={`flex justify-center py-10 ${labelMuted}`}>
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : mutualOrgs.organizations.length === 0 ? (
+          <p className={`py-8 text-center text-sm ${labelMuted}`}>{t('friendChat.mutualGroupsEmpty')}</p>
+        ) : (
+          <ul className="max-h-[min(50vh,400px)] space-y-2 overflow-y-auto">
+            {mutualOrgs.organizations.map((org) => (
+              <li key={String(org._id)}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMutualOpen(false);
+                    onOpenMutualOrganization?.(org);
+                  }}
+                  className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${
+                    isDarkMode
+                      ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
+                      : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                  }`}
+                >
+                  <div
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold ${
+                      isDarkMode ? 'bg-cyan-500/20 text-cyan-200' : 'bg-cyan-100 text-cyan-800'
+                    }`}
+                  >
+                    {(org.name || 'O').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className={`truncate text-sm font-semibold ${titleMain}`}>{org.name}</div>
+                    {org.myRole && (
+                      <div className={`truncate text-xs ${labelMuted}`}>
+                        {t('friendChat.mutualGroupsOpen')} · {org.myRole}
+                      </div>
+                    )}
+                  </div>
+                  <ChevronRight className={`h-4 w-4 shrink-0 ${labelMuted}`} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </aside>
   );
 }

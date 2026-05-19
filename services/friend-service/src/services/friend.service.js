@@ -17,6 +17,18 @@ const USER_SERVICE_INTERNAL_TOKEN = process.env.USER_SERVICE_INTERNAL_TOKEN || '
 
 const MONGO_UNAVAILABLE_MSG = 'Service temporarily unavailable. Please try again later.';
 
+async function clearFriendsListCache(...userIds) {
+  const redis = getRedisClient();
+  if (!redis) return;
+  for (const rawId of userIds) {
+    const id = String(rawId || '').trim();
+    if (!id) continue;
+    await redis.del(`friends:${id}:accepted`);
+    await redis.del(`friends:${id}:blocked`);
+    await redis.del(`friends:${id}`);
+  }
+}
+
 const MONGO_READY_WAIT_MS = 8000;
 const MONGO_READY_POLL_MS = 300;
 
@@ -186,8 +198,7 @@ class FriendService {
       // Xóa cache
       const redis = getRedisClient();
       if (redis) {
-        await redis.del(`friends:${userId}`);
-        await redis.del(`friends:${friendId}`);
+        await clearFriendsListCache(userId, friendId);
       }
 
       // Gửi webhook
@@ -248,6 +259,10 @@ class FriendService {
   async blockUser(userId, friendId) {
     try {
       await ensureMongoReady();
+      const priorAccepted = await Friend.findOne({ userId, friendId, status: 'accepted' }).lean();
+      const priorAcceptedAt = priorAccepted?.acceptedAt || null;
+      const priorRequestedBy = priorAccepted?.requestedBy || userId;
+
       // Xóa relationship hiện tại
       await Friend.deleteMany({
         $or: [
@@ -261,7 +276,8 @@ class FriendService {
         userId,
         friendId,
         status: 'blocked',
-        requestedBy: userId,
+        requestedBy: priorRequestedBy,
+        acceptedAt: priorAcceptedAt,
       });
 
       await block.save();
@@ -269,7 +285,7 @@ class FriendService {
       // Xóa cache
       const redis = getRedisClient();
       if (redis) {
-        await redis.del(`friends:${userId}`);
+        await clearFriendsListCache(userId);
       }
 
       logger.info(`User blocked: ${userId} blocked ${friendId}`);
@@ -304,10 +320,41 @@ class FriendService {
         throw new Error('Block relationship not found');
       }
 
+      const acceptedAt = block.acceptedAt || new Date();
+      const requestedBy = block.requestedBy || userId;
+
+      await Friend.findOneAndUpdate(
+        { userId, friendId },
+        {
+          $set: {
+            status: 'accepted',
+            requestedBy,
+            acceptedAt,
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+
+      const reverseFriend = await Friend.findOne({ userId: friendId, friendId: userId });
+      if (!reverseFriend) {
+        await new Friend({
+          userId: friendId,
+          friendId: userId,
+          status: 'accepted',
+          requestedBy,
+          acceptedAt,
+        }).save();
+      } else if (reverseFriend.status !== 'accepted') {
+        reverseFriend.status = 'accepted';
+        reverseFriend.acceptedAt = acceptedAt;
+        reverseFriend.requestedBy = requestedBy;
+        await reverseFriend.save();
+      }
+
       // Xóa cache
       const redis = getRedisClient();
       if (redis) {
-        await redis.del(`friends:${userId}`);
+        await clearFriendsListCache(userId);
       }
 
       logger.info(`User unblocked: ${userId} unblocked ${friendId}`);
@@ -332,17 +379,18 @@ class FriendService {
   async getFriends(userId, options = {}) {
     try {
       await ensureMongoReady();
+      const { status = 'accepted', page = 1, limit = 50 } = options;
+
+      const cacheKey = `friends:${userId}:${status}`;
+
       // Kiểm tra cache
       const redis = getRedisClient();
       if (redis) {
-        const cacheKey = `friends:${userId}`;
         const cached = await redis.get(cacheKey);
         if (cached) {
           return JSON.parse(cached);
         }
       }
-
-      const { status = 'accepted', page = 1, limit = 50 } = options;
 
       const friends = await Friend.find({ userId, status })
         .limit(limit * 1)
@@ -399,6 +447,7 @@ class FriendService {
             : f.friendId;
           return {
             friendId: mergedFriend,
+            relationshipStatus: f.status,
             acceptedAt: f.acceptedAt,
             createdAt: f.createdAt,
           };
@@ -410,7 +459,6 @@ class FriendService {
 
       // Cache result
       if (redis) {
-        const cacheKey = `friends:${userId}`;
         await redis.setex(cacheKey, 300, JSON.stringify(result)); // 5 minutes
       }
 
@@ -480,8 +528,7 @@ class FriendService {
       // Xóa cache
       const redis = getRedisClient();
       if (redis) {
-        await redis.del(`friends:${userId}`);
-        await redis.del(`friends:${friendId}`);
+        await clearFriendsListCache(userId, friendId);
       }
 
       logger.info(`Friend removed: ${userId} <-> ${friendId}`);
@@ -554,11 +601,16 @@ class FriendService {
         return { status: 'none' };
       }
 
-      return {
+      const base = {
         status: friend.status,
         requestedBy: friend.requestedBy,
         acceptedAt: friend.acceptedAt,
       };
+      if (friend.status === 'blocked') {
+        base.blockerId = String(friend.userId);
+        base.blockedId = String(friend.friendId);
+      }
+      return base;
     } catch (error) {
       // Buffering timeout hoặc lỗi MongoDB: trả 'none' thay vì throw để search vẫn trả về user
       if (error.name === 'MongooseError' || (error.message && error.message.includes('buffering timed out'))) {

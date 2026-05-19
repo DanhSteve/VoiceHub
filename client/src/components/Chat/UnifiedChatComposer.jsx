@@ -42,6 +42,7 @@ function UnifiedChatComposer({
   /** Một dòng (input text) thay vì textarea */
   singleLine = false,
   mentionItems = [],
+  onPaste,
 }) {
   const { isDarkMode } = useTheme();
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -359,31 +360,49 @@ function UnifiedChatComposer({
           </>
         )}
 
-
-        {singleLine ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={value}
-            onChange={(event) => handleInputChange(event.target.value)}
-            onKeyDown={handleInputKeyDown}
-            disabled={disabled}
-            placeholder={placeholder}
-            className={inputClass}
-            autoComplete="off"
-          />
-        ) : (
-          <textarea
-            ref={inputRef}
-            value={value}
-            rows={richToolbar ? 3 : 1}
-            onChange={(event) => handleInputChange(event.target.value)}
-            onKeyDown={handleInputKeyDown}
-            disabled={disabled}
-            placeholder={placeholder}
-            className={textareaClass}
-          />
-        )}
+        <textarea
+          ref={inputRef}
+          value={value}
+          rows={richToolbar ? 3 : 1}
+          onSelect={syncSelection}
+          onKeyUp={syncSelection}
+          onMouseUp={syncSelection}
+          onBlur={syncSelection}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            onChange?.(nextValue);
+            syncSelection();
+            if (!safeMentionItems.length) return;
+            const cursor = event.target.selectionStart ?? nextValue.length;
+            const head = nextValue.slice(0, cursor);
+            const match = head.match(/(?:^|\s)@([^\s@]*)$/);
+            if (match) {
+              setMentionQuery(match[1] || '');
+              setShowPlusMenu(false);
+              setShowMentionMenu(true);
+            } else if (showMentionMenu) {
+              setShowMentionMenu(false);
+              setMentionQuery('');
+            }
+          }}
+          onPaste={(event) => {
+            onPaste?.(event);
+          }}
+          onKeyDown={(event) => {
+            if (showMentionMenu && filteredMentionItems.length > 0 && event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              insertMention(filteredMentionItems[0].label);
+              return;
+            }
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              handleSend();
+            }
+          }}
+          disabled={disabled}
+          placeholder={placeholder}
+          className={textareaClass}
+        />
 
 
         <div className="flex shrink-0 flex-col items-end gap-2">
