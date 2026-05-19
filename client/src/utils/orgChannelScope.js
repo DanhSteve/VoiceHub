@@ -42,6 +42,46 @@ export function mergeChannelsById(...lists) {
   return [...map.values()];
 }
 
+/**
+ * Lọc cây workspace theo phạm vi suy ra từ kênh user được xem.
+ * Chỉ cần gán quyền trên kênh — khối/phòng/team cha vẫn hiện trong sidebar.
+ */
+export function filterWorkspaceStructureByScope(branches, scope) {
+  if (!scope || scope.canSeeAllStructure) return Array.isArray(branches) ? branches : [];
+  const scopedDivs = new Set((scope.scopedDivisionIds || []).map(String));
+  const scopedDepts = new Set((scope.scopedDepartmentIds || []).map(String));
+  const scopedTeams = new Set((scope.scopedTeamIds || []).map(String));
+  if (!scopedDivs.size && !scopedDepts.size && !scopedTeams.size) return [];
+
+  return (branches || [])
+    .map((branch) => {
+      const nextDivisions = (branch?.divisions || [])
+        .map((division) => {
+          const divId = String(division._id);
+          const divisionOpen = scopedDivs.has(divId);
+          const departments = (division.departments || [])
+            .map((dept) => {
+              const deptId = String(dept._id);
+              const deptOpen = divisionOpen || scopedDepts.has(deptId);
+              const allTeams = Array.isArray(dept.teams) ? dept.teams : [];
+              if (deptOpen || divisionOpen) {
+                return { ...dept, teams: allTeams };
+              }
+              const teamsOnly = allTeams.filter((team) => scopedTeams.has(String(team._id)));
+              if (!teamsOnly.length) return null;
+              return { ...dept, teams: teamsOnly };
+            })
+            .filter(Boolean);
+          if (!divisionOpen && departments.length === 0) return null;
+          return { ...division, departments };
+        })
+        .filter(Boolean);
+      if (!nextDivisions.length) return null;
+      return { ...branch, divisions: nextDivisions };
+    })
+    .filter(Boolean);
+}
+
 /** Lấy kênh cấp khối từ cây workspace structure */
 export function divisionChannelsFromStructure(branches, divisionId) {
   const out = [];

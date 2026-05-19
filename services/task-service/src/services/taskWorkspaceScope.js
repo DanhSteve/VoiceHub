@@ -61,7 +61,10 @@ function buildTaskVisibilityFilter(scope, userId) {
     }
     case 'self':
     default:
-      return { ...base, assigneeId: uid };
+      return {
+        ...base,
+        $or: [{ assigneeId: uid }, { createdBy: uid }],
+      };
   }
 }
 

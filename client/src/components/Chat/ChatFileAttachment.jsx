@@ -1,5 +1,7 @@
-﻿import BusinessCardMessageBody from './BusinessCardMessageBody';
-import { ChatMessageTextContent } from '../../utils/renderChatMessageContent';
+import friendService from '../../services/friendService';
+import toast from 'react-hot-toast';
+import { useTheme } from '../../context/ThemeContext';
+import ChatMessageText from './ChatMessageText';
 
 /**
  * Hiá»ƒn thá»‹ tin nháº¯n file/hÃ¬nh: tháº» tá»‡p thay vÃ¬ chuá»—i URL Firebase dÃ i.
@@ -141,7 +143,7 @@ export async function saveFileWithPicker(url, filename) {
 /**
  * Tháº» tá»‡p: tÃªn, dung lÆ°á»£ng, má»Ÿ / lÆ°u / táº£i.
  */
-export function ChatFileCard({ url, fileMeta, className = '' }) {
+export function ChatFileCard({ url, fileMeta, className = '', compact = false }) {
   const name = resolveDisplayFileName(fileMeta, url);
   const sizeLabel = formatFileSize(fileMeta?.byteSize);
   const mime = fileMeta?.mimeType || '';
@@ -151,6 +153,59 @@ export function ChatFileCard({ url, fileMeta, className = '' }) {
     e?.preventDefault?.();
     window.open(url, '_blank', 'noopener,noreferrer');
   };
+
+  if (compact) {
+    return (
+      <div
+        className={`flex min-w-0 max-w-full flex-col gap-1.5 rounded-lg border border-white/[0.12] bg-[#141821] p-2 text-left ${className}`}
+      >
+        <button
+          type="button"
+          onClick={openFile}
+          className="flex min-w-0 w-full items-center gap-2 text-left transition hover:opacity-95"
+        >
+          <span
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-sky-600/80 to-indigo-700/90 text-base"
+            aria-hidden
+          >
+            {icon}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-semibold text-white">{name}</span>
+            <span className="mt-0.5 block text-[10px] leading-tight text-[#8e9297]">
+              {sizeLabel}
+              <span className="mx-1 text-[#4e5257]">·</span>
+              <span className="text-emerald-400/90">Nhấn để mở</span>
+            </span>
+          </span>
+        </button>
+        <div className="flex gap-1 border-t border-white/[0.08] pt-1.5">
+          <button
+            type="button"
+            title="Lưu tệp"
+            onClick={(e) => {
+              e.stopPropagation();
+              saveFileWithPicker(url, name);
+            }}
+            className="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-white/[0.1] bg-white/[0.04] text-[10px] text-white/90 transition hover:bg-white/[0.08]"
+          >
+            📁 Lưu
+          </button>
+          <button
+            type="button"
+            title="Tải xuống"
+            onClick={(e) => {
+              e.stopPropagation();
+              downloadToDisk(url, name);
+            }}
+            className="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-white/[0.1] bg-white/[0.04] text-[10px] text-white/90 transition hover:bg-white/[0.08]"
+          >
+            ⬇️ Tải
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -218,15 +273,85 @@ function isStorageUrl(s) {
 }
 
 /**
- * Ná»™i dung bubble: text / áº£nh / file â€” khÃ´ng render URL thÃ´ cho file Ä‘Ã­nh kÃ¨m.
+ * Nội dung bubble: text / ảnh / file — không render URL thô cho file đính kèm.
+ * @param {'org'|'friend'|null} mentionVariant — tô màu @mention
  */
-export function ChatMessageAttachmentBody({ message, onImageClick }) {
+export function ChatMessageAttachmentBody({
+  message,
+  compact = false,
+  mentionVariant = null,
+  mentionLabels = [],
+}) {
+  const { isDarkMode } = useTheme();
   const content = message?.content;
   const fm = message?.fileMeta;
   const mt = message?.messageType || 'text';
 
   if (mt === 'business_card') {
-    return <BusinessCardMessageBody message={message} />;
+    let card = {};
+    try {
+      card = typeof content === 'string' ? JSON.parse(content) : content || {};
+    } catch {
+      card = { fullName: String(content || '') };
+    }
+    const targetUserId = String(card.userId || card.id || card.memberId || '').trim();
+    const fullName = String(card.fullName || card.name || '—').trim() || '—';
+    const phone = String(card.phone || '').trim() || '-';
+    const email = String(card.email || '').trim() || '-';
+    const goToFriendChat = () => {
+      const target = targetUserId
+        ? `?openDmUserId=${encodeURIComponent(targetUserId)}&composeText=${encodeURIComponent(`Xin chao ${fullName}`)}`
+        : '';
+      const inWorkspace = typeof window !== 'undefined' && /^\/w\//.test(window.location.pathname);
+      const url = `/chat/friends${target}`;
+      if (inWorkspace) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      window.location.assign(url);
+    };
+    return (
+      <div
+        className={`rounded-xl border border-cyan-500/25 bg-cyan-500/10 p-3 ${compact ? 'min-w-0 max-w-full' : 'min-w-[220px]'}`}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 text-sm font-bold text-white">
+            {String(fullName).slice(0, 1).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-wide text-cyan-100/70">Danh thiếp</div>
+            <div className="truncate text-sm font-semibold text-white">Tên: {fullName}</div>
+            <div className="truncate text-xs text-cyan-100/75">SĐT: {phone}</div>
+            <div className="truncate text-xs text-cyan-100/75">Email: {email}</div>
+          </div>
+        </div>
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            disabled={!targetUserId}
+            onClick={async () => {
+              if (!targetUserId) return;
+              try {
+                await friendService.sendRequest(targetUserId);
+                toast.success('Da gui loi moi ket ban');
+              } catch {
+                toast.error('Khong the gui loi moi ket ban');
+              }
+            }}
+            className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-500 disabled:opacity-50"
+          >
+            Kết bạn
+          </button>
+          <button
+            type="button"
+            onClick={goToFriendChat}
+            className="rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10"
+          >
+            Nhắn tin
+          </button>
+        </div>
+      </div>
+    );
   }
 
 
@@ -248,7 +373,7 @@ export function ChatMessageAttachmentBody({ message, onImageClick }) {
           <img
             src={content}
             alt={alt}
-            className="max-h-64 max-w-full rounded-xl object-contain"
+            className={`max-w-full rounded-xl object-contain ${compact ? 'max-h-36' : 'max-h-64'}`}
           />
         </button>
         <div className="flex justify-end gap-1">
@@ -284,18 +409,24 @@ export function ChatMessageAttachmentBody({ message, onImageClick }) {
   }
 
   if (mt === 'file' && isHttpUrl(content)) {
-    return <ChatFileCard url={content.trim()} fileMeta={fm} />;
+    return <ChatFileCard url={content.trim()} fileMeta={fm} compact={compact} />;
   }
 
   if (isStorageUrl(content) && fm && mt !== 'image') {
-    return <ChatFileCard url={content.trim()} fileMeta={fm} />;
+    return <ChatFileCard url={content.trim()} fileMeta={fm} compact={compact} />;
   }
 
   if (isStorageUrl(content) && !fm) {
-    return <ChatFileCard url={content.trim()} fileMeta={null} />;
+    return <ChatFileCard url={content.trim()} fileMeta={null} compact={compact} />;
   }
 
   return (
-    <ChatMessageTextContent text={content} className="text-inherit" />
+    <ChatMessageText
+      text={content}
+      mentionVariant={mentionVariant}
+      mentionLabels={mentionLabels}
+      isDarkMode={isDarkMode}
+      className="whitespace-pre-wrap break-words leading-relaxed text-inherit"
+    />
   );
 }

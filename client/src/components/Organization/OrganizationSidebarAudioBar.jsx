@@ -372,7 +372,7 @@ export default function OrganizationSidebarAudioBar({
   return (
     <div
       ref={rootRef}
-      className={`relative flex w-full items-center justify-center gap-1.5 border-t px-3 py-2 ${barBorder}`}
+      className={`relative flex w-full items-center justify-center gap-1.5 border-t px-3 py-2.5 pb-3 ${barBorder}`}
     >
       <SplitAudioButton
         isDarkMode={isDarkMode}

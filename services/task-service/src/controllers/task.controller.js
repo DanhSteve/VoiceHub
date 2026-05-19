@@ -26,6 +26,7 @@ class TaskController {
     try {
       const {
         title,
+        summary,
         description,
         assigneeId,
         serverId,
@@ -36,6 +37,8 @@ class TaskController {
         departmentId,
         teamId,
         departmentName,
+        aiGenerated,
+        sourceMessageId,
       } = req.body;
       const createdBy = req.user?.id || req.userContext?.userId;
 
@@ -71,6 +74,7 @@ class TaskController {
 
       const task = await taskService.createTask({
         title,
+        summary,
         description,
         assigneeId,
         createdBy,
@@ -82,6 +86,8 @@ class TaskController {
         departmentId: departmentId || scope?.departmentId || null,
         teamId: teamId || scope?.teamId || null,
         departmentName,
+        aiGenerated: Boolean(aiGenerated),
+        sourceMessageId: sourceMessageId || null,
       });
 
       res.status(201).json({

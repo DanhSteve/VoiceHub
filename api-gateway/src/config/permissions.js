@@ -69,6 +69,14 @@ const routeActionMap = {
   'POST /api/organizations/:orgId/channels/:channelId/access/revoke': 'organization:write',
   'GET /api/organizations/:orgId/channels/:channelId/role-access': 'organization:read',
   'PUT /api/organizations/:orgId/channels/:channelId/role-access': 'organization:write',
+  'GET /api/organizations/:orgId/divisions/:divisionId/role-access': 'organization:read',
+  'PUT /api/organizations/:orgId/divisions/:divisionId/role-access': 'organization:write',
+  'GET /api/organizations/:orgId/departments/:departmentId/role-access': 'organization:read',
+  'PUT /api/organizations/:orgId/departments/:departmentId/role-access': 'organization:write',
+  'GET /api/organizations/:orgId/teams/:teamId/role-access': 'organization:read',
+  'PUT /api/organizations/:orgId/teams/:teamId/role-access': 'organization:write',
+  'GET /api/organizations/:orgId/hierarchy/teams/:teamId/role-access': 'organization:read',
+  'PUT /api/organizations/:orgId/hierarchy/teams/:teamId/role-access': 'organization:write',
 
   // User Service (thường không cần server context)
   'GET /api/users': 'user:read',

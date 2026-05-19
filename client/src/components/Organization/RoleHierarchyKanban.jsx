@@ -9,15 +9,15 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
-import { GripVertical, Pencil, Shield, Trash2 } from 'lucide-react';
+import { GripVertical, Pencil, Trash2 } from 'lucide-react';
 import {
   TIER_META,
   TIER_ORDER,
   groupRolesByTier,
   moveRoleInColumns,
   normalizeRoleDisplayName,
-  normalizePermissionEntries,
   prioritiesFromColumns,
+  resolveRoleTier,
 } from './roleRbacUtils';
 
 function DroppableTierColumn({ id, children, className = '', isOver }) {
@@ -60,7 +60,7 @@ function DraggableRoleCard({ id, role, children }) {
 }
 
 function RoleCardContent({ role, onNameClick, onEdit, onDelete, isOverlay = false }) {
-  const permCount = normalizePermissionEntries(role.permissions).length;
+  const tierMeta = TIER_META.find((t) => t.id === resolveRoleTier(role));
   return (
     <div
       className={`group rounded-xl border border-slate-700/90 bg-[#0c1220] p-3 shadow-sm transition hover:border-slate-600 ${
@@ -72,15 +72,17 @@ function RoleCardContent({ role, onNameClick, onEdit, onDelete, isOverlay = fals
           type="button"
           onClick={() => onNameClick?.(role)}
           className="min-w-0 flex-1 text-left"
-          title="Xem quyền"
+          title="Chi tiết vai trò"
           tabIndex={isOverlay ? -1 : undefined}
         >
           <div className="truncate text-sm font-bold text-white group-hover:text-violet-200">
             {normalizeRoleDisplayName(role.name)}
           </div>
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
-            <Shield className="h-3 w-3 shrink-0" />
-            <span>{permCount ? `${permCount} nhóm quyền` : 'Chưa có quyền'}</span>
+          <div className="mt-1 text-[11px] text-slate-500">
+            <span>Quyền kênh: cài đặt từng kênh</span>
+            {tierMeta?.hint ? (
+              <span className="mt-0.5 block truncate text-slate-600">{tierMeta.hint}</span>
+            ) : null}
           </div>
         </button>
         {!isOverlay && (

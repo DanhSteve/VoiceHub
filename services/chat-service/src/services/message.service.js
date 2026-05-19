@@ -605,7 +605,8 @@ class MessageService {
       await ensureMongoReady();
 
       const oldMessage = await Message.findById(messageId);
-      if (!oldMessage || oldMessage.senderId.toString() !== userId.toString()) {
+      const senderStr = String(oldMessage?.senderId?._id || oldMessage?.senderId || '');
+      if (!oldMessage || !userId || senderStr !== String(userId)) {
         return null;
       }
 

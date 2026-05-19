@@ -1,30 +1,26 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronsDown, MessageSquare, X } from 'lucide-react';
+import ChatUploadProgressBar from '../Chat/ChatUploadProgressBar';
 import { useTheme } from '../../context/ThemeContext';
 import { useLocale } from '../../context/LocaleContext';
 import { useAppStrings } from '../../locales/appStrings';
 import UnifiedChatComposer from '../Chat/UnifiedChatComposer';
+import { ChatMessageAttachmentBody } from '../Chat/ChatFileAttachment';
 import { channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
+import {
+  senderAvatarUrl,
+  senderDisplayName,
+  senderInitials,
+  userInitialsFromProfile,
+} from '../../utils/orgChatSender';
 
-function plainText(msg) {
-  if (!msg) return '';
-  const c = msg.content;
-  if (typeof c === 'string') return c;
-  if (c && typeof c === 'object' && typeof c.text === 'string') return c.text;
-  return String(c || '');
-}
-
-function senderInitials(message) {
-  const u = message?.senderId;
-  if (u && typeof u === 'object') {
-    const n = u.displayName || u.username || u.fullName || '';
-    if (typeof n === 'string' && n.trim()) {
-      const p = n.trim().split(/\s+/);
-      if (p.length === 1) return p[0].slice(0, 1).toUpperCase();
-      return `${p[0][0] || ''}${p[p.length - 1][0] || ''}`.toUpperCase();
-    }
-  }
-  return '?';
+function formatMessageTime(isoDate, locale) {
+  if (!isoDate) return '';
+  return new Date(isoDate).toLocaleTimeString(locale === 'en' ? 'en-US' : 'vi-VN', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 }
 
 /**
@@ -38,7 +34,13 @@ export default function OrganizationVoiceChannelSidebar({
   onSendMessage,
   sendingMessage = false,
   currentUserId,
+  currentUser = null,
   onClose,
+  canWriteInChannel = true,
+  plusItems = [],
+  actionItems = [],
+  uploadProgress = null,
+  uploadLabel = '',
 }) {
   const { isDarkMode } = useTheme();
   const { locale } = useLocale();
@@ -119,7 +121,7 @@ export default function OrganizationVoiceChannelSidebar({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="relative min-h-0 flex-1 overflow-y-auto px-3 py-3"
+        className="relative min-h-0 flex-1 overflow-y-auto px-2 py-3"
       >
         {sortedMessages.length === 0 ? (
           <div className="flex min-h-[min(280px,50vh)] flex-col items-center justify-center px-4 text-center">
@@ -143,63 +145,95 @@ export default function OrganizationVoiceChannelSidebar({
             </p>
           </div>
         ) : (
-          <div className="flex flex-col justify-end gap-2.5 pb-1">
+          <div className="flex flex-col justify-end gap-3 pb-1">
             {sortedMessages.map((message) => {
               const mid = message._id || message.id;
               const senderId = message?.senderId?._id || message?.senderId;
               const isMine = String(senderId || '') === String(currentUserId || '');
-              const displayName = isMine
-                ? t('orgPanel.you')
-                : message.senderId?.displayName ||
-                  message.senderId?.username ||
-                  message.senderId?.fullName ||
-                  t('orgPanel.member');
+              const type = message?.messageType || 'text';
+              const typeLabel =
+                type === 'image'
+                  ? t('orgPanel.msgTypeImage')
+                  : type === 'file'
+                    ? t('orgPanel.msgTypeFile')
+                    : type === 'system'
+                      ? t('orgPanel.msgTypeSystem')
+                      : t('orgPanel.msgTypeText');
+
+              const displayName = senderDisplayName(
+                message,
+                isMine,
+                currentUser,
+                t('orgPanel.member')
+              );
+              const avatarUrl = senderAvatarUrl(message, isMine, currentUser);
+              const avatarInitials = isMine
+                ? userInitialsFromProfile(currentUser)
+                : senderInitials(message);
+              const roleCapsule = isMine
+                ? t('orgPanel.roleYouCaps')
+                : type === 'system'
+                  ? t('orgPanel.roleSystemCaps')
+                  : t('orgPanel.roleMemberCaps');
+
+              const contentTextCls = isDarkMode ? 'text-[#dcddde]' : 'text-slate-800';
 
               return (
                 <Fragment key={mid}>
-                  <div
-                    className={`flex w-full ${isMine ? 'justify-end' : 'justify-start gap-2'}`}
-                  >
-                    {!isMine && (
-                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-600/80 to-fuchsia-700/80 text-[10px] font-bold text-white">
-                        {senderInitials(message)}
-                      </div>
-                    )}
+                  <div className="flex w-full items-start justify-start gap-2">
                     <div
-                      className={`min-w-0 max-w-[92%] ${isMine ? 'ml-auto text-right' : ''}`}
+                      className="mt-0.5 flex h-8 w-8 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-violet-600/80 to-fuchsia-700/80 text-[10px] font-bold text-white shadow-inner"
+                      title={displayName}
                     >
-                      <div
-                        className={`mb-0.5 flex flex-wrap items-baseline gap-1.5 ${
-                          isMine ? 'justify-end' : 'justify-start'
-                        }`}
-                      >
+                      {avatarUrl && String(avatarUrl).startsWith('http') ? (
+                        <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <span className="flex h-full w-full items-center justify-center">
+                          {avatarInitials}
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0 max-w-full flex-1">
+                      <div className="mb-1 flex flex-wrap items-center gap-1.5 justify-start">
                         <span
-                          className={`text-xs font-semibold ${
-                            isDarkMode ? 'text-white' : 'text-slate-900'
-                          }`}
+                          className={`text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
                         >
                           {displayName}
                         </span>
                         <span
-                          className={`text-[10px] ${
-                            isDarkMode ? 'text-[#72767d]' : 'text-slate-400'
+                          className={`rounded px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide ${
+                            isDarkMode
+                              ? 'bg-white/[0.08] text-[#9aa0ae]'
+                              : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {message.createdAt
-                            ? new Date(message.createdAt).toLocaleTimeString(
-                                locale === 'en' ? 'en-US' : 'vi-VN',
-                                { hour: '2-digit', minute: '2-digit' }
-                              )
-                            : ''}
+                          {roleCapsule}
                         </span>
+                        <span
+                          className={`rounded px-1 py-0.5 text-[8px] font-medium ${
+                            isDarkMode ? 'bg-white/[0.06] text-[#6d7380]' : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          {typeLabel}
+                        </span>
+                        <span
+                          className={`text-[10px] tabular-nums ${
+                            isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'
+                          }`}
+                        >
+                          {formatMessageTime(message.createdAt, locale)}
+                        </span>
+                        {message.editedAt ? (
+                          <span
+                            className={`text-[9px] ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
+                          >
+                            {t('orgPanel.edited')}
+                          </span>
+                        ) : null}
                       </div>
-                      <p
-                        className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${
-                          isDarkMode ? 'text-[#dcddde]' : 'text-slate-800'
-                        }`}
-                      >
-                        {plainText(message)}
-                      </p>
+                      <div className={`text-sm leading-relaxed text-left ${contentTextCls}`}>
+                        <ChatMessageAttachmentBody message={message} compact mentionVariant="org" />
+                      </div>
                     </div>
                   </div>
                 </Fragment>
@@ -230,17 +264,19 @@ export default function OrganizationVoiceChannelSidebar({
           isDarkMode ? 'border-white/[0.08] bg-[#1e1f22]' : 'border-slate-200 bg-slate-50'
         }`}
       >
+        <ChatUploadProgressBar percent={uploadProgress} label={uploadLabel} />
         <UnifiedChatComposer
           value={messageInput}
           onChange={onChangeMessageInput}
           onSend={onSendMessage}
           placeholder={t('orgPanel.voiceChatComposerPh', { name: displayChannelName })}
-          disabled={sendingMessage}
-          sendDisabled={!messageInput.trim() || sendingMessage}
+          disabled={sendingMessage || !canWriteInChannel}
+          sendDisabled={!messageInput.trim() || sendingMessage || !canWriteInChannel}
           showSendButton={false}
           showAiToggle={false}
           flatInner
-          singleLine
+          plusItems={canWriteInChannel ? plusItems : []}
+          actionItems={actionItems}
           wrapperClassName="!p-0 !bg-transparent !border-0 !shadow-none"
         />
       </footer>

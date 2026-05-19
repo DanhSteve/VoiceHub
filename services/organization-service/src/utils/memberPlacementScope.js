@@ -14,7 +14,7 @@ function roleInternalHeaders() {
 }
 
 async function fetchUserRoleNamesInOrg(userId, orgId) {
-  if (!userId || !orgId || !GATEWAY_INTERNAL_TOKEN) return [];
+  if (!userId || !orgId) return [];
   try {
     const res = await axios.get(
       `${ROLE_PERMISSION_BASE}/api/roles/user/${encodeURIComponent(String(userId))}/server/${encodeURIComponent(
@@ -45,14 +45,17 @@ function buildSuffixToIdMap(entities) {
 function extractScopedSuffixes(roleNames) {
   const divSuffixes = new Set();
   const depSuffixes = new Set();
+  const teamSuffixes = new Set();
   for (const name of roleNames || []) {
     const lower = String(name || '').toLowerCase();
     const divMatch = lower.match(/div_([a-f0-9]{6})/);
     const depMatch = lower.match(/dep_([a-f0-9]{6})/);
+    const teamMatch = lower.match(/team_([a-f0-9]{6})/);
     if (divMatch) divSuffixes.add(divMatch[1]);
     if (depMatch) depSuffixes.add(depMatch[1]);
+    if (teamMatch) teamSuffixes.add(teamMatch[1]);
   }
-  return { divSuffixes, depSuffixes };
+  return { divSuffixes, depSuffixes, teamSuffixes };
 }
 
 /** Chuẩn hóa nhãn khối/phòng từ tên role (Khối: X, Phòng ban: Y, Khối X, …). */
@@ -67,7 +70,11 @@ function normalizeEntityLabel(name) {
   label = label.replace(/^\s*(phòng ban|phong ban)\s+/i, '');
   label = label.replace(/^\s*(phòng|phong)\s+/i, '');
   label = label.replace(/^\s*team\s+/i, '');
-  return label.trim().toLowerCase();
+  return String(label || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
 }
 
 function resolvePlacementFromRoleLabels(roleNames, divisions, departments) {
@@ -188,8 +195,86 @@ function resolveMemberPlacementScope(
 }
 
 function placementsMatch(a, b) {
-  if (!a?.divisionId || !a?.departmentId || !b?.divisionId || !b?.departmentId) return false;
+  if (!a?.divisionId || !a?.departmentId || !b?.departmentId || !b?.departmentId) return false;
   return a.divisionId === b.divisionId && a.departmentId === b.departmentId;
+}
+
+/**
+ * Gom phạm vi khối / phòng / team từ mọi vai trò RBAC của user (tag div_/dep_/team_ + nhãn hiển thị).
+ */
+function resolveUserHierarchyScopes(roleNames, { divisions = [], departments = [], teams = [] } = {}) {
+  const divisionIds = new Set();
+  const departmentIds = new Set();
+  const teamIds = new Set();
+
+  const divisionBySuffix = buildSuffixToIdMap(divisions);
+  const departmentBySuffix = buildSuffixToIdMap(departments);
+  const teamBySuffix = buildSuffixToIdMap(teams);
+
+  const { divSuffixes, depSuffixes, teamSuffixes } = extractScopedSuffixes(roleNames);
+  for (const suffix of divSuffixes) {
+    const id = divisionBySuffix.get(suffix);
+    if (id) divisionIds.add(id);
+  }
+  for (const suffix of depSuffixes) {
+    const id = departmentBySuffix.get(suffix);
+    if (id) departmentIds.add(id);
+  }
+  for (const suffix of teamSuffixes) {
+    const id = teamBySuffix.get(suffix);
+    if (id) teamIds.add(id);
+  }
+
+  const divisionNormToId = new Map();
+  for (const division of divisions) {
+    const key = normalizeEntityLabel(division.name);
+    if (key) divisionNormToId.set(key, String(division._id));
+  }
+
+  for (const roleName of roleNames || []) {
+    const key = normalizeEntityLabel(roleName);
+    if (!key) continue;
+    if (divisionNormToId.has(key)) divisionIds.add(divisionNormToId.get(key));
+    for (const dept of departments) {
+      if (normalizeEntityLabel(dept.name) !== key) continue;
+      departmentIds.add(String(dept._id));
+      if (dept.division) divisionIds.add(String(dept.division));
+    }
+    for (const team of teams) {
+      if (normalizeEntityLabel(team.name) !== key) continue;
+      teamIds.add(String(team._id));
+      if (team.department) departmentIds.add(String(team.department));
+      if (team.division) divisionIds.add(String(team.division));
+    }
+  }
+
+  for (const deptId of departmentIds) {
+    const dept = departments.find((d) => String(d._id) === String(deptId));
+    if (dept?.division) divisionIds.add(String(dept.division));
+  }
+  for (const teamId of teamIds) {
+    const team = teams.find((t) => String(t._id) === String(teamId));
+    if (team?.department) departmentIds.add(String(team.department));
+    if (team?.division) divisionIds.add(String(team.division));
+  }
+
+  return {
+    divisionIds,
+    departmentIds,
+    teamIds,
+  };
+}
+
+function channelInHierarchyScope(channel, scopes) {
+  if (!channel || !scopes) return false;
+  const teamId = channel.team ? String(channel.team) : '';
+  const depId = channel.department ? String(channel.department) : '';
+  const divId = channel.division ? String(channel.division) : '';
+
+  if (teamId) return scopes.teamIds.has(teamId);
+  if (depId) return scopes.departmentIds.has(depId);
+  if (divId) return scopes.divisionIds.has(divId);
+  return false;
 }
 
 module.exports = {
@@ -199,4 +284,6 @@ module.exports = {
   placementsMatch,
   buildSuffixToIdMap,
   normalizeEntityLabel,
+  resolveUserHierarchyScopes,
+  channelInHierarchyScope,
 };

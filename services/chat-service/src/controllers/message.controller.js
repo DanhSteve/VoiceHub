@@ -16,18 +16,11 @@ const {
 } = require('../config/fileRetention');
 const { publishTaskAiSyncEvent } = require('../messaging/taskAiSyncPublisher');
 const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
-const { assertDmCanSend, dmErrorToJson } = require('../utils/verifyDmRelationship');
-
-async function emitDmToParticipants(event, message, extra = {}) {
-  if (!message?.receiverId) return;
-  const sender = String(message.senderId?._id || message.senderId || '');
-  const receiver = String(message.receiverId?._id || message.receiverId || '');
-  const payload = { ...message, ...extra };
-  await Promise.all([
-    emitRealtimeEvent({ event, userId: receiver, payload }),
-    emitRealtimeEvent({ event, userId: sender, payload }),
-  ]);
-}
+const {
+  fetchAccessibleChannelPermissionMatrix,
+  assertCanWriteInOrgChannel,
+} = require('../utils/orgChannelPermissions');
+ Tester
 
 /** Header gọi organization-service: tin cậy gateway (giống proxy) hoặc Bearer để /auth/me. */
 function headersForOrganizationForward(req) {
@@ -113,24 +106,6 @@ async function fetchAccessibleChannelIds(orgId, req) {
     }
   }
   throw lastErr;
-}
-
-async function fetchAccessibleChannelPermissionMatrix(orgId, req) {
-  const base = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-    /\/$/,
-    ''
-  );
-  const url = `${base}/api/organizations/${orgId}/accessible-channel-ids`;
-  const { data } = await axios.get(url, {
-    headers: headersForOrganizationForward(req),
-    timeout: Number(process.env.ORG_ACCESSIBLE_CHANNELS_TIMEOUT_MS || 12000),
-  });
-  const ids = Array.isArray(data?.data?.channelIds) ? data.data.channelIds.map(String) : [];
-  const matrix =
-    data?.data?.permissionsByChannelId && typeof data.data.permissionsByChannelId === 'object'
-      ? data.data.permissionsByChannelId
-      : {};
-  return { ids, matrix };
 }
 
 class MessageController {
@@ -345,12 +320,12 @@ class MessageController {
       if (roomId) {
         messageData.roomId = roomId;
         if (organizationId) {
-          const { matrix } = await fetchAccessibleChannelPermissionMatrix(organizationId, req);
-          const perms = matrix[String(roomId)] || {};
-          if (!Boolean(perms.canWrite)) {
-            return res.status(403).json({
+          try {
+            await assertCanWriteInOrgChannel(organizationId, roomId, req);
+          } catch (permErr) {
+            return res.status(permErr.statusCode || 403).json({
               success: false,
-              message: 'Bạn không có quyền chat trong kênh này',
+              message: permErr.message || 'Bạn không có quyền chat trong kênh này',
             });
           }
         }

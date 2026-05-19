@@ -16,6 +16,10 @@ function parseRightWidthToPx(rightWidth) {
   return 320;
 }
 
+/** Sidebar phải tổ chức: thu tối đa 100px, rộng tối đa = mặc định + 100px */
+const RIGHT_SIDEBAR_MIN_W = 100;
+const RIGHT_SIDEBAR_EXTRA_MAX_W = 100;
+
 /**
  * Bố cục chuẩn 3 khung (dùng làm layout chính):
  * - Khung 1 (trái): Sidebar nav chỉ icon, cùng chiều cao với viewport.
@@ -31,6 +35,8 @@ const ThreeFrameLayout = ({
   right = null,
   rightWidth = 'w-80',
   rightFrameClassName = null,
+  /** false = cột giữa cố định chiều cao, con tự cuộn (workspace chat). */
+  centerScrollable = true,
 }) => {
   const { isDarkMode } = useTheme();
   const shell = appShellBg(isDarkMode);
@@ -73,34 +79,50 @@ const ThreeFrameLayout = ({
       <ShellWaveBackdrop />
       <div className="relative z-[1] h-full shrink-0">{navLeft}</div>
 
-      <div className="relative z-[1] flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="scrollbar-overlay flex-1 min-h-0 overflow-x-visible overflow-y-auto">{center}</div>
+      <div className="relative z-[1] flex min-w-0 flex-1 flex-col overflow-hidden py-2 pl-2 pr-1">
+        <div
+          className={
+            centerScrollable
+              ? 'scrollbar-overlay flex-1 min-h-0 overflow-x-visible overflow-y-auto rounded-xl'
+              : 'flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl'
+          }
+        >
+          {center}
+        </div>
       </div>
 
       {right !== null &&
         (rightFrameClassName ? (
-          <div className="relative z-[1]">{right}</div>
+          <div className="relative z-[1] flex h-full shrink-0 py-2 pr-2">{right}</div>
         ) : (
-          <div
-            className={`relative z-[1] flex h-full shrink-0 flex-col overflow-hidden ${rightPanel}`}
-            style={{ width: rightW }}
-          >
+          <div className="relative z-[1] flex h-full shrink-0 items-stretch py-2 pr-2">
             <div
-              className="absolute inset-y-0 left-0 z-20 w-2 cursor-col-resize"
-              title="Kéo để nới panel (tối đa +20px)"
-              onMouseDown={(e) => {
-                if (e.button !== 0) return;
-                resizingRef.current = {
-                  active: true,
-                  startX: e.clientX,
-                  startW: rightW,
-                  minW: baseRightW,
-                  maxW: baseRightW + 20,
-                };
-                e.preventDefault();
+              className={`relative flex min-h-0 flex-col overflow-hidden ${rightPanel}`}
+              style={{
+                width: rightW,
+                minWidth: RIGHT_SIDEBAR_MIN_W,
+                maxWidth: baseRightW + RIGHT_SIDEBAR_EXTRA_MAX_W,
               }}
-            />
-            <div className="scrollbar-overlay flex-1 min-h-0 overflow-x-visible overflow-y-auto">{right}</div>
+            >
+              <div
+                className="absolute inset-y-0 left-0 z-20 w-2 cursor-col-resize"
+                title={`Kéo để đổi độ rộng (${RIGHT_SIDEBAR_MIN_W}px – ${baseRightW + RIGHT_SIDEBAR_EXTRA_MAX_W}px)`}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  resizingRef.current = {
+                    active: true,
+                    startX: e.clientX,
+                    startW: rightW,
+                    minW: RIGHT_SIDEBAR_MIN_W,
+                    maxW: baseRightW + RIGHT_SIDEBAR_EXTRA_MAX_W,
+                  };
+                  e.preventDefault();
+                }}
+              />
+              <div className="scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
+                {right}
+              </div>
+            </div>
           </div>
         ))}
     </div>

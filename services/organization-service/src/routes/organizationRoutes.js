@@ -76,6 +76,36 @@ router.put(
   authorize(['owner', 'admin']),
   organizationController.saveChannelRoleAccess
 );
+router.get(
+  '/:orgId/divisions/:divisionId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listDivisionRoleAccess
+);
+router.put(
+  '/:orgId/divisions/:divisionId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveDivisionRoleAccess
+);
+router.get(
+  '/:orgId/departments/:departmentId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listDepartmentRoleAccess
+);
+router.put(
+  '/:orgId/departments/:departmentId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveDepartmentRoleAccess
+);
+router.get(
+  '/:orgId/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listTeamRoleAccess
+);
+router.put(
+  '/:orgId/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveTeamRoleAccess
+);
 
 router.get('/:id', organizationController.getOrganization);
 router.put('/:id', authorize(['owner', 'admin']), organizationController.updateOrganization);

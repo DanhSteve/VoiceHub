@@ -1,5 +1,6 @@
 const messageService = require('../services/message.service');
 const messageEvent = require('../events/message.event');
+const { assertCanWriteInOrgChannel } = require('../utils/orgChannelPermissions');
 
 const serverSocket = (io) => {
   io.on('connection', (socket) => {
@@ -40,6 +41,16 @@ const serverSocket = (io) => {
 
         if (!roomId || !content) {
           return socket.emit('error', { message: 'roomId and content are required' });
+        }
+
+        if (organizationId) {
+          try {
+            await assertCanWriteInOrgChannel(organizationId, roomId, { user: socket.user, headers: {} });
+          } catch (permErr) {
+            return socket.emit('error', {
+              message: permErr.message || 'Bạn không có quyền chat trong kênh này',
+            });
+          }
         }
 
         const message = await messageService.createMessage({

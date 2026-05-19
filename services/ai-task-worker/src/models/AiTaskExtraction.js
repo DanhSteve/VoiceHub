@@ -1,6 +1,5 @@
 const mongoose = require('../db');
 
-// Dùng cùng collection với ai-task-service
 const aiTaskExtractionSchema = new mongoose.Schema(
   {
     generatedBy: { type: mongoose.Schema.Types.ObjectId, required: true },
@@ -11,6 +10,10 @@ const aiTaskExtractionSchema = new mongoose.Schema(
       messageId: { type: String, required: true },
       messageType: { type: String, default: 'chat_message' },
     },
+    contextHints: {
+      mentions: { type: mongoose.Schema.Types.Mixed, default: [] },
+      channelId: { type: String, default: '' },
+    },
     draft: { type: mongoose.Schema.Types.Mixed, default: {} },
     confidence: { type: Number, default: null },
     rawModelOutput: { type: mongoose.Schema.Types.Mixed, default: null },
@@ -20,4 +23,3 @@ const aiTaskExtractionSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model('AiTaskExtraction', aiTaskExtractionSchema);
-

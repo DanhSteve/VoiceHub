@@ -13,7 +13,7 @@ const router = express.Router();
  * - publish job vào queue task-ai.extract
  */
 router.post('/extract', async (req, res) => {
-  const { messageId, organizationId, titleHint } = req.body || {};
+  const { messageId, organizationId, titleHint, mentions, channelId } = req.body || {};
 
   // Phase 2: auth sẽ đi qua API Gateway; tạm lấy userId từ header để test nội bộ
   const generatedBy = req.user?.id || req.headers['x-user-id'] || req.headers['x-generated-by'];
@@ -23,12 +23,26 @@ router.post('/extract', async (req, res) => {
     return res.status(400).json({ success: false, message: 'messageId and organizationId are required' });
   }
 
+  const safeMentions = Array.isArray(mentions)
+    ? mentions
+        .filter((m) => m && (m.userId || m.id) && /^[a-f0-9]{24}$/i.test(String(m.userId || m.id)))
+        .map((m) => ({
+          userId: String(m.userId || m.id),
+          username: String(m.username || '').slice(0, 64),
+          displayName: String(m.displayName || m.name || '').slice(0, 120),
+        }))
+    : [];
+
   const extraction = await AiTaskExtraction.create({
     generatedBy,
     organizationId,
     status: 'queued',
     sourceRef: { messageId: String(messageId), messageType: 'chat_message' },
     draft: { title: titleHint || '' },
+    contextHints: {
+      mentions: safeMentions,
+      channelId: channelId ? String(channelId) : '',
+    },
   });
 
   const queue = process.env.RABBITMQ_TASK_AI_EXTRACT_QUEUE || 'task-ai.extract';
@@ -37,6 +51,8 @@ router.post('/extract', async (req, res) => {
     messageId: String(messageId),
     organizationId: String(organizationId),
     generatedBy: String(generatedBy),
+    mentions: safeMentions,
+    channelId: channelId ? String(channelId) : '',
   });
 
   return res.status(202).json({ success: true, data: { extractionId: String(extraction._id), status: 'queued' } });
@@ -57,8 +73,21 @@ router.get('/extractions/:id', async (req, res) => {
  * Confirm draft -> tạo Task thật ở task-service.
  * Lưu ý: Task.sourceRef sẽ bổ sung ở Phase 3 (schema Task mở rộng).
  */
+function resolveTrustedAssigneeId(extraction, bodyAssigneeId) {
+  const candidates = new Set();
+  const draftId = extraction?.draft?.assigneeId;
+  if (draftId && /^[a-f0-9]{24}$/i.test(String(draftId))) candidates.add(String(draftId));
+  for (const m of extraction?.contextHints?.mentions || []) {
+    const id = m?.userId || m?.id;
+    if (id && /^[a-f0-9]{24}$/i.test(String(id))) candidates.add(String(id));
+  }
+  if (!candidates.size) return undefined;
+  if (bodyAssigneeId && candidates.has(String(bodyAssigneeId))) return String(bodyAssigneeId);
+  return [...candidates][0];
+}
+
 router.post('/confirm', async (req, res) => {
-  const { extractionId } = req.body || {};
+  const { extractionId, assigneeId: bodyAssigneeId } = req.body || {};
   const userId = req.user?.id || req.headers['x-user-id'];
   const idemKey = String(req.headers['idempotency-key'] || req.body?.idempotencyKey || '').trim();
 
@@ -87,17 +116,24 @@ router.post('/confirm', async (req, res) => {
 
   const taskServiceUrl = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
   const draft = extraction.draft || {};
+  const assigneeId = resolveTrustedAssigneeId(extraction, bodyAssigneeId);
 
   const createRes = await axios.post(
     `${taskServiceUrl}/api/tasks`,
     {
       title: draft.title || 'Task từ AI',
+      summary: draft.summary || '',
       description: draft.description || '',
       organizationId: String(extraction.organizationId),
       priority: draft.priority || 'medium',
       dueDate: draft.dueDate || null,
       tags: Array.isArray(draft.tags) ? draft.tags : [],
-      assigneeId: draft.assigneeId || undefined,
+      assigneeId: assigneeId || undefined,
+      departmentId: draft.departmentId || undefined,
+      teamId: draft.teamId || undefined,
+      departmentName: draft.departmentName || undefined,
+      aiGenerated: true,
+      sourceMessageId: extraction.sourceRef?.messageId || undefined,
     },
     {
       headers: buildTrustedGatewayHeaders(userId),

@@ -8,16 +8,9 @@ import roleAPI from '../../services/api/roleAPI';
 import RoleHierarchyKanban from './RoleHierarchyKanban';
 import RolePermissionsViewModal from './RolePermissionsViewModal';
 import {
-  ACTION_LABEL,
-  PERMISSION_EDITOR_OPTIONS,
   TIER_META,
-  fullPermissionState,
-  isFullPermissionState,
   normalizeRoleDisplayName,
-  permissionEntriesFromState,
-  permissionStateFromEntries,
   priorityFromTier,
-  summarizePermissions,
   resolveRoleTier,
   TIER_DEPARTMENT,
 } from './roleRbacUtils';
@@ -28,7 +21,7 @@ const ADMIN_TABS = [
   { id: 'general', label: 'Tổng quan', icon: '⚙️' },
   { id: 'structure', label: 'Cấu trúc tổ chức', icon: '🏢' },
   { id: 'join', label: 'Đơn gia nhập', icon: '📋' },
-  { id: 'roles', label: 'Vai trò & quyền', icon: '🔐' },
+  { id: 'roles', label: 'Vai trò', icon: '🔐' },
   { id: 'security', label: 'Bảo mật', icon: '🛡️' },
   { id: 'integrations', label: 'Tích hợp', icon: '🔗' },
   { id: 'billing', label: 'Thanh toán', icon: '💳' },
@@ -155,14 +148,8 @@ function OrganizationSettingsPanel({
     color: 'from-purple-600 to-pink-600',
     icon: '🧩',
   });
-  const [rolePermissionState, setRolePermissionState] = useState({});
   const [roleTier, setRoleTier] = useState(TIER_DEPARTMENT);
   const [rolePermissionsView, setRolePermissionsView] = useState(null);
-
-  const roleAllPermissions = useMemo(
-    () => isFullPermissionState(rolePermissionState),
-    [rolePermissionState]
-  );
 
   /** Tên tổ chức từ API — dùng để so khớp khi xóa (không phụ thuộc chỉnh sửa form chưa lưu). */
   const [serverOrgName, setServerOrgName] = useState('');
@@ -792,7 +779,6 @@ function OrganizationSettingsPanel({
       color: 'from-purple-600 to-pink-600',
       icon: '🧩',
     });
-    setRolePermissionState({});
     setRoleTier(TIER_DEPARTMENT);
     setRoleEditorOpen(true);
   };
@@ -807,7 +793,6 @@ function OrganizationSettingsPanel({
       icon: role.icon || '🧩',
     });
     setRoleTier(resolveRoleTier(role));
-    setRolePermissionState(permissionStateFromEntries(role.permissions));
     setRoleEditorOpen(true);
   };
 
@@ -818,7 +803,6 @@ function OrganizationSettingsPanel({
     }
     try {
       setRoleLoading(true);
-      const permissionsPayload = permissionEntriesFromState(rolePermissionState);
       const fallbackHierarchyName =
         editingRoleId &&
         editingRoleOriginalName &&
@@ -828,7 +812,7 @@ function OrganizationSettingsPanel({
       const payload = {
         ...roleDraft,
         name: fallbackHierarchyName || roleDraft.name,
-        permissions: permissionsPayload,
+        permissions: [],
         priority: priorityFromTier(roleTier),
         organizationId: orgId,
         serverId: orgId,
@@ -1435,7 +1419,9 @@ function OrganizationSettingsPanel({
                   <div>
                     <h3 className="text-xl font-bold text-white">Quản lý vai trò (RBAC)</h3>
                     <p className="mt-1 max-w-xl text-sm text-slate-400">
-                      Bấm tên vai trò để xem quyền. Kéo thả giữa 4 cột: Điều hành → Khối → Phòng → Team.
+                      Vai trò chỉ là nhãn và cấp Kanban. Quyền chat/voice cấu hình tại từng kênh (bánh răng trên
+                      kênh): gán vai trò cho kênh chat chung của phòng là đủ để thành viên thấy kênh và mục phòng
+                      đó trên sidebar. Kéo thả giữa 4 cột: Điều hành → Khối → Phòng → Team.
                     </p>
                   </div>
                   <GradientButton variant="primary" onClick={openCreateRole} disabled={roleLoading}>
@@ -1477,62 +1463,11 @@ function OrganizationSettingsPanel({
                           </select>
                         </div>
                       </div>
-                      <div className="rounded-xl border border-slate-700/80 bg-slate-900/50 p-4">
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Quyền cho vai trò
-                          </span>
-                          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-sm font-semibold text-violet-200 transition hover:bg-violet-500/20">
-                            <input
-                              type="checkbox"
-                              checked={roleAllPermissions}
-                              onChange={(e) => {
-                                setRolePermissionState(
-                                  e.target.checked ? fullPermissionState() : {}
-                                );
-                              }}
-                              className="h-4 w-4 rounded border-slate-500 bg-slate-900 accent-violet-500"
-                            />
-                            Toàn quyền
-                          </label>
-                        </div>
-                        <div className="space-y-2">
-                          {PERMISSION_EDITOR_OPTIONS.map((group) => (
-                            <div
-                              key={group.resource}
-                              className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2"
-                            >
-                              <span className="min-w-24 text-sm font-semibold text-white">{group.label}</span>
-                              {group.actions.map((action) => {
-                                const key = `${group.resource}:${action}`;
-                                const checked = Boolean(rolePermissionState[key]);
-                                return (
-                                  <label
-                                    key={key}
-                                    className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-gray-300"
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={(e) =>
-                                        setRolePermissionState((prev) => ({
-                                          ...prev,
-                                          [key]: e.target.checked,
-                                        }))
-                                      }
-                                      className="h-3.5 w-3.5 rounded border-slate-500 bg-slate-900"
-                                    />
-                                    {ACTION_LABEL[action] || action}
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="text-xs text-cyan-300/90">
-                        Quyền hiện tại: {summarizePermissions(permissionEntriesFromState(rolePermissionState))}
-                      </div>
+                      <p className="rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-4 py-3 text-sm leading-relaxed text-cyan-100/90">
+                        Quyền đọc/ghi/voice không gán tại đây. Sau khi tạo vai trò, mở bánh răng trên kênh (ví dụ
+                        kênh chung Phòng Dev), thêm vai trò và bật quyền — không cần cấu hình riêng tên mục
+                        khối/phòng/team.
+                      </p>
                     </div>
                     <div className="mt-3 flex justify-end gap-2">
                       <button
@@ -1540,7 +1475,6 @@ function OrganizationSettingsPanel({
                         className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-gray-300"
                         onClick={() => {
                           setRoleEditorOpen(false);
-                          setRolePermissionState({});
                           setRoleTier(TIER_DEPARTMENT);
                           setEditingRoleId(null);
                           setEditingRoleOriginalName('');
