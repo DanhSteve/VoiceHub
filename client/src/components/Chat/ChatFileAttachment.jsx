@@ -1,5 +1,7 @@
 import friendService from '../../services/friendService';
 import toast from 'react-hot-toast';
+import { useTheme } from '../../context/ThemeContext';
+import ChatMessageText from './ChatMessageText';
 
 /**
  * Hiển thị tin nhắn file/hình: thẻ tệp thay vì chuỗi URL Firebase dài.
@@ -141,7 +143,7 @@ async function saveFileWithPicker(url, filename) {
 /**
  * Thẻ tệp: tên, dung lượng, mở / lưu / tải.
  */
-export function ChatFileCard({ url, fileMeta, className = '' }) {
+export function ChatFileCard({ url, fileMeta, className = '', compact = false }) {
   const name = resolveDisplayFileName(fileMeta, url);
   const sizeLabel = formatFileSize(fileMeta?.byteSize);
   const mime = fileMeta?.mimeType || '';
@@ -151,6 +153,59 @@ export function ChatFileCard({ url, fileMeta, className = '' }) {
     e?.preventDefault?.();
     window.open(url, '_blank', 'noopener,noreferrer');
   };
+
+  if (compact) {
+    return (
+      <div
+        className={`flex min-w-0 max-w-full flex-col gap-1.5 rounded-lg border border-white/[0.12] bg-[#141821] p-2 text-left ${className}`}
+      >
+        <button
+          type="button"
+          onClick={openFile}
+          className="flex min-w-0 w-full items-center gap-2 text-left transition hover:opacity-95"
+        >
+          <span
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-sky-600/80 to-indigo-700/90 text-base"
+            aria-hidden
+          >
+            {icon}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-semibold text-white">{name}</span>
+            <span className="mt-0.5 block text-[10px] leading-tight text-[#8e9297]">
+              {sizeLabel}
+              <span className="mx-1 text-[#4e5257]">·</span>
+              <span className="text-emerald-400/90">Nhấn để mở</span>
+            </span>
+          </span>
+        </button>
+        <div className="flex gap-1 border-t border-white/[0.08] pt-1.5">
+          <button
+            type="button"
+            title="Lưu tệp"
+            onClick={(e) => {
+              e.stopPropagation();
+              saveFileWithPicker(url, name);
+            }}
+            className="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-white/[0.1] bg-white/[0.04] text-[10px] text-white/90 transition hover:bg-white/[0.08]"
+          >
+            📁 Lưu
+          </button>
+          <button
+            type="button"
+            title="Tải xuống"
+            onClick={(e) => {
+              e.stopPropagation();
+              downloadToDisk(url, name);
+            }}
+            className="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-white/[0.1] bg-white/[0.04] text-[10px] text-white/90 transition hover:bg-white/[0.08]"
+          >
+            ⬇️ Tải
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -219,8 +274,15 @@ function isStorageUrl(s) {
 
 /**
  * Nội dung bubble: text / ảnh / file — không render URL thô cho file đính kèm.
+ * @param {'org'|'friend'|null} mentionVariant — tô màu @mention
  */
-export function ChatMessageAttachmentBody({ message }) {
+export function ChatMessageAttachmentBody({
+  message,
+  compact = false,
+  mentionVariant = null,
+  mentionLabels = [],
+}) {
+  const { isDarkMode } = useTheme();
   const content = message?.content;
   const fm = message?.fileMeta;
   const mt = message?.messageType || 'text';
@@ -249,7 +311,9 @@ export function ChatMessageAttachmentBody({ message }) {
       window.location.assign(url);
     };
     return (
-      <div className="min-w-[220px] rounded-xl border border-cyan-500/25 bg-cyan-500/10 p-3">
+      <div
+        className={`rounded-xl border border-cyan-500/25 bg-cyan-500/10 p-3 ${compact ? 'min-w-0 max-w-full' : 'min-w-[220px]'}`}
+      >
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 text-sm font-bold text-white">
             {String(fullName).slice(0, 1).toUpperCase()}
@@ -302,7 +366,7 @@ export function ChatMessageAttachmentBody({ message }) {
           <img
             src={content}
             alt={alt}
-            className="max-h-64 max-w-full rounded-xl object-contain"
+            className={`max-w-full rounded-xl object-contain ${compact ? 'max-h-36' : 'max-h-64'}`}
           />
         </button>
         <div className="flex justify-end gap-1">
@@ -338,18 +402,24 @@ export function ChatMessageAttachmentBody({ message }) {
   }
 
   if (mt === 'file' && isHttpUrl(content)) {
-    return <ChatFileCard url={content.trim()} fileMeta={fm} />;
+    return <ChatFileCard url={content.trim()} fileMeta={fm} compact={compact} />;
   }
 
   if (isStorageUrl(content) && fm && mt !== 'image') {
-    return <ChatFileCard url={content.trim()} fileMeta={fm} />;
+    return <ChatFileCard url={content.trim()} fileMeta={fm} compact={compact} />;
   }
 
   if (isStorageUrl(content) && !fm) {
-    return <ChatFileCard url={content.trim()} fileMeta={null} />;
+    return <ChatFileCard url={content.trim()} fileMeta={null} compact={compact} />;
   }
 
   return (
-    <div className="whitespace-pre-wrap break-words leading-relaxed text-inherit">{content}</div>
+    <ChatMessageText
+      text={content}
+      mentionVariant={mentionVariant}
+      mentionLabels={mentionLabels}
+      isDarkMode={isDarkMode}
+      className="whitespace-pre-wrap break-words leading-relaxed text-inherit"
+    />
   );
 }

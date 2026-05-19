@@ -48,6 +48,16 @@ export function buildOrgMessageSearchParams(tokens, keyword, ctx) {
 
   if (qParts.length) params.set('q', qParts.join(' '));
 
+  if (ctx.hasAttachment === true || ctx.hasAttachment === 'true') {
+    params.set('hasAttachment', 'true');
+  }
+  if (ctx.hasLink === true || ctx.hasLink === 'true') {
+    params.set('hasLink', 'true');
+  }
+  if (ctx.messageType) {
+    params.set('messageType', String(ctx.messageType));
+  }
+
   params.set('page', String(ctx.page || 1));
   params.set('limit', String(ctx.limit || 20));
 

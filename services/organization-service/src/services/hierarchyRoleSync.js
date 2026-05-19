@@ -7,19 +7,8 @@ const ROLE_PERMISSION_BASE = String(
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 const RETRYABLE_STATUS = new Set([500, 502, 503, 504, 429]);
 
-const PERMS_VIEW_ONLY = [
-  { resource: 'chat', actions: ['read'] },
-  { resource: 'task', actions: ['read'] },
-  { resource: 'document', actions: ['read'] },
-  { resource: 'voice', actions: ['read'] },
-];
-
-const PERMS_TEAM_FULL = [
-  { resource: 'chat', actions: ['read', 'write', 'delete'] },
-  { resource: 'task', actions: ['read', 'write', 'delete'] },
-  { resource: 'document', actions: ['read', 'write', 'delete'] },
-  { resource: 'voice', actions: ['read', 'write', 'delete'] },
-];
+/** Quyền kênh chỉ cấu hình qua ChannelRoleAccess — vai trò sync không gán permissions global. */
+const PERMS_NONE = [];
 
 function headers() {
   const h = { 'Content-Type': 'application/json' };
@@ -192,7 +181,7 @@ async function ensureDivisionRole(organizationId, divisionId, divisionName) {
     await ensureRoleByTag(organizationId, roles, {
       tag: `div_${shortId(divisionId)}`,
       expectedName: divisionRoleName(divisionName, divisionId),
-      expectedPermissions: PERMS_VIEW_ONLY,
+      expectedPermissions: PERMS_NONE,
       expectedPriority: PRIORITY_DIVISION,
     });
   } catch (error) {
@@ -207,7 +196,7 @@ async function ensureDepartmentRole(organizationId, departmentId, departmentName
     await ensureRoleByTag(organizationId, roles, {
       tag: `dep_${shortId(departmentId)}`,
       expectedName: departmentRoleName(departmentName, departmentId),
-      expectedPermissions: PERMS_VIEW_ONLY,
+      expectedPermissions: PERMS_NONE,
       expectedPriority: PRIORITY_DEPARTMENT,
     });
   } catch (error) {
@@ -222,7 +211,7 @@ async function ensureTeamRole(organizationId, teamId, teamName) {
     await ensureRoleByTag(organizationId, roles, {
       tag: `team_${shortId(teamId)}`,
       expectedName: teamRoleName(teamName, teamId),
-      expectedPermissions: PERMS_TEAM_FULL,
+      expectedPermissions: PERMS_NONE,
       expectedPriority: PRIORITY_TEAM,
     });
   } catch (error) {
@@ -240,7 +229,7 @@ async function syncHierarchyRoles(organizationId, { divisions = [], departments 
       await ensureRoleByTag(organizationId, roles, {
         tag: `div_${shortId(divisionId)}`,
         expectedName: divisionRoleName(division?.name, divisionId),
-        expectedPermissions: PERMS_VIEW_ONLY,
+        expectedPermissions: PERMS_NONE,
         expectedPriority: PRIORITY_DIVISION,
       });
     }
@@ -250,7 +239,7 @@ async function syncHierarchyRoles(organizationId, { divisions = [], departments 
       await ensureRoleByTag(organizationId, roles, {
         tag: `dep_${shortId(departmentId)}`,
         expectedName: departmentRoleName(department?.name, departmentId),
-        expectedPermissions: PERMS_VIEW_ONLY,
+        expectedPermissions: PERMS_NONE,
         expectedPriority: PRIORITY_DEPARTMENT,
       });
     }
@@ -260,7 +249,7 @@ async function syncHierarchyRoles(organizationId, { divisions = [], departments 
       await ensureRoleByTag(organizationId, roles, {
         tag: `team_${shortId(teamId)}`,
         expectedName: teamRoleName(team?.name, teamId),
-        expectedPermissions: PERMS_TEAM_FULL,
+        expectedPermissions: PERMS_NONE,
         expectedPriority: PRIORITY_TEAM,
       });
     }

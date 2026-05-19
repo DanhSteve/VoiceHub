@@ -61,6 +61,7 @@ class TaskService {
     try {
       const {
         title,
+        summary,
         description,
         assigneeId,
         createdBy,
@@ -72,6 +73,8 @@ class TaskService {
         departmentId,
         teamId,
         departmentName,
+        aiGenerated,
+        sourceMessageId,
       } = taskData;
 
       // Kiểm tra organization — organization-service yêu cầu x-user-id (protect) + membership
@@ -105,6 +108,7 @@ class TaskService {
 
       const task = new Task({
         title,
+        summary: summary ? String(summary).trim() : '',
         description,
         assigneeId,
         createdBy,
@@ -116,6 +120,8 @@ class TaskService {
         priority: priority || 'medium',
         dueDate,
         tags: tags || [],
+        aiGenerated: Boolean(aiGenerated),
+        sourceMessageId: sourceMessageId || null,
       });
 
       await task.save();

@@ -1,15 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  ChevronDown,
-  ChevronRight,
-  Hash,
-  Lock,
-  Plus,
-  Search,
-  Settings,
-  Users,
-  Volume2,
-} from 'lucide-react';
+import { Building2, ChevronDown, ChevronRight, Lock, Search, Users } from 'lucide-react';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
 import {
   channelUnreadCount,
@@ -23,6 +13,7 @@ import {
   channelsForTeam,
   splitChatVoiceChannels,
 } from '../../utils/orgChannelScope';
+import OrganizationChannelListPanel from './OrganizationChannelListPanel';
 
 function normalize(s) {
   return String(s || '')
@@ -64,14 +55,13 @@ export default function OrganizationWorkspaceStructureSidebar({
   onCreateChannel,
   onOpenChannelSettings,
   canManageWorkspaceStructure = false,
+  canManageChannelRoleAccess = false,
   canSeeAllStructure = false,
 }) {
   const [expandedDivisionId, setExpandedDivisionId] = useState(selectedDivisionId || '');
   const [expandedDeptIds, setExpandedDeptIds] = useState(() => new Set());
   const [expandedTeamIds, setExpandedTeamIds] = useState(() => new Set());
   const [structureQuery, setStructureQuery] = useState('');
-  const [hoveredTeamId, setHoveredTeamId] = useState('');
-
   const selectedBranch = branches.find((b) => String(b._id) === String(selectedBranchId)) || null;
   const divisionList = Array.isArray(selectedBranch?.divisions) ? selectedBranch.divisions : [];
 
@@ -106,34 +96,35 @@ export default function OrganizationWorkspaceStructureSidebar({
     [getChannelPerm]
   );
 
+  const canAccessTeam = useCallback(
+    (teamId) => {
+      if (canSeeAllStructure) return true;
+      if (canTeamReadAnyChannel(teamId)) return true;
+      return false;
+    },
+    [canSeeAllStructure, canTeamReadAnyChannel]
+  );
+
   const canAccessDepartment = useCallback(
     (departmentId, divisionDepartments) => {
       if (canSeeAllStructure) return true;
-      if (
-        membershipScope?.departmentId &&
-        String(departmentId) === String(membershipScope.departmentId)
-      ) {
-        return true;
-      }
-      const deptScope = channelsForDepartment(channels, departmentId);
-      if (canReadScopeChannels(deptScope)) return true;
       const deptTeams = teamsForDepartment(teams, departmentId, divisionDepartments);
-      if (!deptTeams.length) return true;
-      return deptTeams.some(
-        (team) =>
-          String(membershipScope?.teamId || '') === String(team._id) ||
-          canTeamReadAnyChannel(team._id)
-      );
+      if (deptTeams.some((team) => canAccessTeam(team._id))) return true;
+      const deptScope = channelsForDepartment(channels, departmentId).filter((ch) => !ch.team);
+      if (canReadScopeChannels(deptScope)) return true;
+      return false;
     },
-    [
-      canSeeAllStructure,
-      membershipScope?.departmentId,
-      membershipScope?.teamId,
-      teams,
-      channels,
-      canTeamReadAnyChannel,
-      canReadScopeChannels,
-    ]
+    [canSeeAllStructure, teams, channels, canAccessTeam, canReadScopeChannels]
+  );
+
+  const departmentVisibleInTree = useCallback(
+    (departmentId, _divisionId, deptTeams) => {
+      if (canSeeAllStructure) return true;
+      if ((deptTeams || []).some((team) => canAccessTeam(team._id))) return true;
+      const deptScope = channelsForDepartment(channels, departmentId).filter((ch) => !ch.team);
+      return canReadScopeChannels(deptScope);
+    },
+    [canSeeAllStructure, canAccessTeam, channels, canReadScopeChannels]
   );
 
   useEffect(() => {
@@ -210,11 +201,8 @@ export default function OrganizationWorkspaceStructureSidebar({
         const deptList = Array.isArray(division?.departments) ? division.departments : [];
         const departmentsMapped = deptList
           .map((department) => {
-            if (
-              !canSeeAllStructure &&
-              membershipScope?.departmentId &&
-              String(department._id) !== String(membershipScope.departmentId)
-            ) {
+            const deptTeams = teamsForDepartment(teams, department._id, deptList);
+            if (!departmentVisibleInTree(department._id, division._id, deptTeams)) {
               return null;
             }
             const deptScopeRaw = channelsForDepartment(channels, department._id);
@@ -224,18 +212,15 @@ export default function OrganizationWorkspaceStructureSidebar({
             const { chat: deptChat, voice: deptVoice } = splitChatVoiceChannels(deptReadable);
             const deptScopeUnread = sumUnreadForChannels(deptReadable);
 
-            const deptTeams = teamsForDepartment(teams, department._id, deptList);
             const teamsMapped = deptTeams
               .map((team) => {
-                const isPrimaryTeam =
-                  String(membershipScope?.teamId || '') === String(team._id);
-                const canReadTeam = isPrimaryTeam || canTeamReadAnyChannel(team._id);
-                if (!canSeeAllStructure && !canReadTeam) return null;
-
+                const canReadTeam = canAccessTeam(team._id);
                 const teamChannels = channelsForTeam(channels, team._id);
-                const readableChannels = teamChannels.filter(
-                  (ch) => getChannelPerm(ch._id).canSee || getChannelPerm(ch._id).canRead
-                );
+                const readableChannels = canReadTeam
+                  ? teamChannels.filter(
+                      (ch) => getChannelPerm(ch._id).canSee || getChannelPerm(ch._id).canRead
+                    )
+                  : [];
                 const { chat, voice } = splitChatVoiceChannels(readableChannels);
                 const teamUnread = sumUnreadForChannels(readableChannels);
                 const channelMatch = [...chat, ...voice].some((ch) =>
@@ -298,7 +283,8 @@ export default function OrganizationWorkspaceStructureSidebar({
     canSeeAllStructure,
     membershipScope?.departmentId,
     membershipScope?.teamId,
-    canTeamReadAnyChannel,
+    canAccessTeam,
+    departmentVisibleInTree,
   ]);
 
   useEffect(() => {
@@ -317,158 +303,14 @@ export default function OrganizationWorkspaceStructureSidebar({
     setExpandedTeamIds(teamIds);
   }, [q, filteredTree]);
 
-  const textMuted = isDarkMode ? 'text-[#7d8392]' : 'text-slate-500';
-  const textLabel = isDarkMode ? 'text-[#b4b8c4]' : 'text-slate-600';
-  const textBright = isDarkMode ? 'text-white' : 'text-slate-900';
-
-  const renderChannelSettingsBtn = (channel) => {
-    if (!canManageWorkspaceStructure || !onOpenChannelSettings) return null;
-    return (
-      <button
-        type="button"
-        title="Cài đặt kênh"
-        aria-label="Cài đặt kênh"
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenChannelSettings(channel);
-        }}
-        className={`absolute right-1 top-1/2 z-10 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md group-hover/channel:flex ${
-          isDarkMode
-            ? 'bg-[#2b2d31] text-[#b5bac1] hover:bg-[#3f4147] hover:text-white'
-            : 'bg-white text-slate-500 shadow-sm hover:bg-slate-100 hover:text-slate-800'
-        }`}
-      >
-        <Settings className="h-3.5 w-3.5" />
-      </button>
-    );
-  };
-
-  const renderChannelList = (chat, voice, { boxed = false } = {}) => {
-    if (!chat.length && !voice.length) return null;
-    const shell = boxed
-      ? `mb-2 space-y-0.5 rounded-md border px-1.5 py-1 ${
-          isDarkMode ? 'border-white/[0.08] bg-[#12151c]/80' : 'border-slate-200 bg-slate-50/90'
-        }`
-      : 'space-y-0.5';
-
-    return (
-      <div className={shell}>
-        {chat.map((channel) => {
-          const active = String(selectedChannelId) === String(channel._id);
-          const unread = channelUnreadCount(channel);
-          const perm = getChannelPerm(channel._id);
-          const canEnter = perm.canSee || perm.canRead;
-          if (!canEnter) {
-            return (
-              <div
-                key={channel._id}
-                className={`group/channel relative flex items-center gap-2 rounded-md px-2 py-1 pr-8 text-xs ${
-                  isDarkMode ? 'text-[#5f6572]' : 'text-slate-400'
-                }`}
-              >
-                <Hash className="h-3 w-3" />
-                <span className="truncate">{channelNameToDisplaySlug(channel.name, locale)}</span>
-                <Lock className={`ml-auto h-3 w-3 shrink-0 ${textMuted}`} aria-hidden />
-                {renderChannelSettingsBtn(channel)}
-              </div>
-            );
-          }
-          return (
-            <div key={channel._id} className="group/channel relative">
-            <button
-              type="button"
-              onClick={() => onSelectChannel?.(channel._id)}
-              className={`relative flex w-full items-center gap-2 rounded-md py-1 pl-2 pr-8 text-left text-xs transition ${
-                active
-                  ? isDarkMode
-                    ? 'border-l-2 border-indigo-400 bg-indigo-500/15 font-semibold text-white'
-                    : 'border-l-2 border-indigo-500 bg-indigo-50 font-semibold text-slate-900'
-                  : unread > 0
-                    ? isDarkMode
-                      ? 'font-semibold text-white hover:bg-white/[0.04]'
-                      : 'font-semibold text-slate-900 hover:bg-slate-100'
-                    : isDarkMode
-                      ? 'text-[#9aa0ae] hover:bg-white/[0.04]'
-                      : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <Hash className={`h-3 w-3 shrink-0 ${active ? 'text-indigo-400' : ''}`} />
-              <span className="truncate">{channelNameToDisplaySlug(channel.name, locale)}</span>
-              {unread > 0 ? (
-                <span className="ml-auto rounded bg-indigo-500 px-1.5 py-0.5 text-[10px] font-bold text-white tabular-nums">
-                  {unread > 99 ? '99+' : unread}
-                </span>
-              ) : null}
-            </button>
-            {renderChannelSettingsBtn(channel)}
-            </div>
-          );
-        })}
-        {voice.map((channel) => {
-          const active = String(selectedChannelId) === String(channel._id);
-          const perm = getChannelPerm(channel._id);
-          const canEnter = perm.canSee || perm.canRead;
-          const presence = voicePresenceLabel(channel);
-          const hasVoice = presence && presence !== '0';
-          if (!canEnter) {
-            return (
-              <div
-                key={channel._id}
-                className={`group/channel relative flex items-center gap-2 rounded-md px-2 py-1 pr-8 text-xs ${
-                  isDarkMode ? 'text-[#5f6572]' : 'text-slate-400'
-                }`}
-              >
-                <Volume2 className="h-3 w-3" />
-                <span className="truncate">{channelNameToDisplaySlug(channel.name, locale)}</span>
-                <Lock className={`ml-auto h-3 w-3 shrink-0 ${textMuted}`} aria-hidden />
-                {renderChannelSettingsBtn(channel)}
-              </div>
-            );
-          }
-          return (
-            <div key={channel._id} className="group/channel relative">
-            <button
-              type="button"
-              onClick={() => onSelectChannel?.(channel._id)}
-              className={`relative flex w-full items-center gap-2 rounded-md py-1 pl-2 pr-8 text-left text-xs transition ${
-                active
-                  ? isDarkMode
-                    ? 'border-l-2 border-indigo-400 bg-indigo-500/15 font-semibold text-white'
-                    : 'border-l-2 border-indigo-500 bg-indigo-50 font-semibold text-slate-900'
-                  : isDarkMode
-                    ? 'text-[#9aa0ae] hover:bg-white/[0.04]'
-                    : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <Volume2
-                className={`h-3.5 w-3.5 shrink-0 ${hasVoice ? 'text-emerald-400' : 'opacity-60'}`}
-              />
-              <span className="truncate">{channelNameToDisplaySlug(channel.name, locale)}</span>
-              {presence ? (
-                <span
-                  className={`ml-auto text-[10px] font-medium tabular-nums ${
-                    hasVoice ? 'text-emerald-400' : textMuted
-                  }`}
-                >
-                  {presence}
-                </span>
-              ) : null}
-            </button>
-            {renderChannelSettingsBtn(channel)}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
+  const textMuted = isDarkMode ? 'text-[#6B7280]' : 'text-slate-500';
+  const textLabel = isDarkMode ? 'text-[#A1A8B3]' : 'text-slate-600';
+  const textBright = isDarkMode ? 'text-[#F3F4F6]' : 'text-slate-900';
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className={`mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider ${textMuted}`}>
+      <div className={`mb-2 text-[10px] font-bold uppercase tracking-wider ${textMuted}`}>
         <span>{t('orgPanel.branchHeading')}</span>
-        {canManageWorkspaceStructure ? (
-          <span className={isDarkMode ? 'text-[#8b91a0]' : 'text-slate-400'}>{t('orgPanel.addShort')}</span>
-        ) : null}
       </div>
 
       <div className="mb-3 grid grid-cols-3 gap-1.5">
@@ -480,7 +322,7 @@ export default function OrganizationWorkspaceStructureSidebar({
               key={branch._id}
               type="button"
               onClick={() => onSelectBranch?.(branch._id)}
-              className={`rounded-lg border px-1.5 py-1.5 text-left transition ${
+              className={`rounded-xl border px-1.5 py-1.5 text-left transition ${
                 active
                   ? isDarkMode
                     ? 'border-violet-500/50 bg-violet-500/15 text-white shadow-[0_0_0_1px_rgba(139,92,246,0.25)]'
@@ -508,17 +350,20 @@ export default function OrganizationWorkspaceStructureSidebar({
           placeholder={t('orgPanel.structureSearchPh')}
           className={`w-full rounded-lg border py-2 pl-8 pr-2 text-xs outline-none transition ${
             isDarkMode
-              ? 'border-white/10 bg-white/[0.04] text-white placeholder:text-[#5f6572] focus:border-violet-500/40'
-              : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-violet-400'
+              ? 'border-white/10 bg-[#171B24] text-[#F3F4F6] placeholder:text-[#6B7280] focus:border-[#4F6BED]/40'
+              : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-indigo-400'
           }`}
         />
       </div>
 
-      <div className={`mb-2 text-[10px] font-bold uppercase tracking-wider ${textMuted}`}>
-        {t('orgPanel.structureHeading')}
+      <div
+        className={`mb-2 flex items-center gap-1.5 px-0.5 text-[10px] font-semibold uppercase tracking-wider ${textMuted}`}
+      >
+        <Building2 className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
+        <span>{t('orgPanel.organizationSection')}</span>
       </div>
 
-      <div className="scrollbar-overlay min-h-0 flex-1 overflow-y-auto pr-0.5">
+      <div className="scrollbar-overlay min-h-0 flex-1 overflow-y-auto border-l border-white/[0.04] pl-2 pr-0.5">
         {loadingDepartments ? (
           <div className={`mb-2 h-10 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
         ) : null}
@@ -535,10 +380,11 @@ export default function OrganizationWorkspaceStructureSidebar({
 
           return (
             <div key={division._id} className="mb-2">
+              <div className="group relative">
               <button
                 type="button"
                 onClick={() => toggleDivision(division._id)}
-                className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition ${
+                className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 pr-8 text-left transition ${
                   isOpen || divisionSelected
                     ? isDarkMode
                       ? `bg-white/[0.06] ${accent.glow} ${textBright}`
@@ -565,10 +411,10 @@ export default function OrganizationWorkspaceStructureSidebar({
                   <span className={`shrink-0 text-[10px] tabular-nums ${textMuted}`}>{deptRows.length}</span>
                 )}
               </button>
+              </div>
 
               {isOpen ? (
                 <div className="mt-1 space-y-1 pl-1">
-                  {renderChannelList(divisionChat, divisionVoice, { boxed: true })}
                   {deptRows.map(({ department, teams: teamRows, deptUnread, deptChat, deptVoice }) => {
                     const deptOpen = expandedDeptIds.has(String(department._id));
                     const deptActive = String(selectedDepartment?._id) === String(department._id);
@@ -580,19 +426,20 @@ export default function OrganizationWorkspaceStructureSidebar({
 
                     return (
                       <div key={department._id}>
+                        <div className="group relative">
                         <button
                           type="button"
                           onClick={() =>
                             toggleDepartment(department._id, { notifyParent: canAccessDept })
                           }
-                          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition ${
+                          className={`flex w-full items-center gap-2 rounded-lg border px-2 py-2 pr-2 text-left text-sm transition ${
                             deptActive
                               ? isDarkMode
-                                ? 'bg-white/[0.07] text-white'
-                                : 'bg-slate-100 text-slate-900'
+                                ? 'border-white/10 bg-[#171B24] text-[#F3F4F6]'
+                                : 'border-slate-200 bg-slate-100 text-slate-900'
                               : isDarkMode
-                                ? 'text-[#a9afbc] hover:bg-white/[0.04]'
-                                : 'text-slate-700 hover:bg-slate-50'
+                                ? 'border-transparent bg-[#171B24]/60 text-[#A1A8B3] hover:bg-[#1D2330]'
+                                : 'border-transparent bg-slate-50 text-slate-700 hover:bg-slate-100'
                           }`}
                         >
                           <span
@@ -616,34 +463,15 @@ export default function OrganizationWorkspaceStructureSidebar({
                             </span>
                           )}
                         </button>
+                        </div>
 
                         {deptOpen ? (
                           <div className="mt-1 space-y-2 pl-2">
-                            {renderChannelList(deptChat, deptVoice, { boxed: true })}
-                            {teamRows.map(({ team, chat, voice, teamUnread }, teamIdx) => {
-                              const teamOpen = expandedTeamIds.has(String(team._id));
+                            {teamRows.map(({ team, chat, voice, teamUnread, canReadTeam }, teamIdx) => {
                               const teamActive = String(selectedTeamId) === String(team._id);
-                              const isPrimaryTeam =
-                                String(membershipScope?.teamId || '') === String(team._id);
-                              const canReadTeam =
-                                canSeeAllStructure ||
-                                isPrimaryTeam ||
-                                canTeamReadAnyChannel(team._id);
-                              const showCreate =
-                                teamOpen &&
-                                canReadTeam &&
-                                canManageWorkspaceStructure &&
-                                String(hoveredTeamId) === String(team._id);
 
                               return (
-                                <div
-                                  key={team._id}
-                                  className={`rounded-lg border ${
-                                    isDarkMode ? 'border-white/[0.08] bg-[#12151c]' : 'border-slate-200 bg-slate-50/80'
-                                  } ${teamIdx > 0 ? 'mt-0' : ''}`}
-                                  onMouseEnter={() => setHoveredTeamId(String(team._id))}
-                                  onMouseLeave={() => setHoveredTeamId('')}
-                                >
+                                <div key={team._id} className="mt-0.5">
                                   <button
                                     type="button"
                                     disabled={!canReadTeam}
@@ -651,29 +479,22 @@ export default function OrganizationWorkspaceStructureSidebar({
                                       if (!canReadTeam) return;
                                       toggleTeam(team._id);
                                     }}
-                                    className={`flex w-full items-center gap-2 border-b px-2.5 py-2 text-left text-xs ${
-                                      isDarkMode ? 'border-white/[0.06]' : 'border-slate-200/80'
-                                    } ${
+                                    className={`flex w-full items-center gap-2 rounded-lg border-l-2 py-1.5 pl-2 pr-2 text-left text-sm transition ${
                                       !canReadTeam
                                         ? isDarkMode
-                                          ? 'cursor-not-allowed text-[#5f6572]'
-                                          : 'cursor-not-allowed text-slate-400'
+                                          ? 'cursor-not-allowed border-transparent text-[#6B7280]'
+                                          : 'cursor-not-allowed border-transparent text-slate-400'
                                         : teamActive
                                           ? isDarkMode
-                                            ? 'text-white'
-                                            : 'text-slate-900'
+                                            ? 'border-[#4F6BED] bg-[#1D2330] text-[#F3F4F6]'
+                                            : 'border-indigo-500 bg-indigo-50 text-slate-900'
                                           : isDarkMode
-                                            ? 'text-[#c4c8d4] hover:bg-white/[0.03]'
-                                            : 'text-slate-700 hover:bg-white'
+                                            ? 'border-transparent text-[#A1A8B3] hover:bg-[#1D2330]'
+                                            : 'border-transparent text-slate-700 hover:bg-slate-50'
                                     }`}
                                   >
-                                    <Users className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                                    {teamOpen ? (
-                                      <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                                    ) : (
-                                      <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
-                                    )}
-                                    <span className="min-w-0 flex-1 truncate font-semibold">{team.name}</span>
+                                    <Users className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{team.name}</span>
                                     {teamUnread > 0 ? (
                                       <span className="rounded-md bg-rose-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white tabular-nums">
                                         {teamUnread}
@@ -682,27 +503,6 @@ export default function OrganizationWorkspaceStructureSidebar({
                                       <Lock className={`h-3 w-3 shrink-0 ${textMuted}`} aria-hidden />
                                     ) : null}
                                   </button>
-
-                                  {teamOpen && canReadTeam ? (
-                                    <div className="space-y-0.5 px-1.5 py-1.5">
-                                      {renderChannelList(chat, voice)}
-
-                                      {showCreate ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => onCreateChannel?.()}
-                                          className={`mt-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition ${
-                                            isDarkMode
-                                              ? 'text-[#6d7380] hover:bg-white/[0.04] hover:text-[#9aa0ae]'
-                                              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
-                                          }`}
-                                        >
-                                          <Plus className="h-3 w-3" />
-                                          {t('orgPanel.createChannelGhost')}
-                                        </button>
-                                      ) : null}
-                                    </div>
-                                  ) : null}
                                 </div>
                               );
                             })}
@@ -717,6 +517,22 @@ export default function OrganizationWorkspaceStructureSidebar({
           );
         })}
       </div>
+
+      <OrganizationChannelListPanel
+        isDarkMode={isDarkMode}
+        locale={locale}
+        t={t}
+        channels={channels}
+        channelPermissionMatrix={channelPermissionMatrix}
+        selectedChannelId={selectedChannelId}
+        selectedTeamId={selectedTeamId}
+        selectedDepartmentId={selectedDepartment?._id}
+        selectedDivisionId={selectedDivisionId}
+        onSelectChannel={onSelectChannel}
+        onCreateChannel={onCreateChannel}
+        onOpenChannelSettings={onOpenChannelSettings}
+        canManageChannelRoleAccess={canManageChannelRoleAccess}
+      />
     </div>
   );
 }

@@ -24,6 +24,7 @@ import UnifiedChatComposer from '../Chat/UnifiedChatComposer';
 import ChatUploadProgressBar from '../Chat/ChatUploadProgressBar';
 import { ChatMessageAttachmentBody } from '../Chat/ChatFileAttachment';
 import ChannelMessageToolbar from './ChannelMessageToolbar';
+import OrgMessageInlineEditor from './OrgMessageInlineEditor';
 import ChannelMessageMoreMenu from './ChannelMessageMoreMenu';
 import TasksKanbanDnd, { COL_DONE, COL_PROGRESS, COL_TODO } from '../Tasks/TasksKanbanDnd';
 import { shouldPlaceToolbarBelowBubble } from '../../utils/messageToolbarPlacement';
@@ -35,6 +36,9 @@ import OrganizationSidebarAudioBar from './OrganizationSidebarAudioBar';
 import OrganizationVoiceConnectionPanel from './OrganizationVoiceConnectionPanel';
 import VoiceAudioSettingsPanel from '../../pages/Voice/VoiceAudioSettingsPanel';
 import { loadVoiceAudioPrefs } from '../../pages/Voice/voiceAudioPrefs';
+import { entShell, roleBadgeClass, roleBadgeLabel } from '../../theme/enterpriseWorkspace';
+import { parseMessageMentions } from '../../utils/parseMessageMentions';
+import { collectMentionLabelsFromContacts } from '../../utils/tokenizeMessageMentions';
 
 function messageDayKey(iso) {
   if (!iso) return '';
@@ -53,6 +57,34 @@ function senderInitials(message) {
     }
   }
   return 'TV';
+}
+
+function senderDisplayName(message, isMine, currentUser, fallback) {
+  if (isMine) {
+    return (
+      currentUser?.displayName ||
+      currentUser?.fullName ||
+      currentUser?.username ||
+      currentUser?.email?.split?.('@')?.[0] ||
+      fallback
+    );
+  }
+  const u = message?.senderId;
+  if (u && typeof u === 'object') {
+    return u.displayName || u.username || u.fullName || fallback;
+  }
+  return fallback;
+}
+
+function senderAvatarUrl(message, isMine, currentUser) {
+  if (isMine) {
+    return currentUser?.avatar || currentUser?.profile?.avatar || null;
+  }
+  const u = message?.senderId;
+  if (u && typeof u === 'object') {
+    return u.avatar || u.profile?.avatar || null;
+  }
+  return null;
 }
 
 function userInitialsFromProfile(user) {
@@ -121,10 +153,12 @@ const OrganizationMainPanel = ({
   taskWorkspaceScope = null,
   onMoveWorkspaceTask,
   onCreateWorkspaceTask,
+  onWorkspaceTasksRefresh,
   onOpenOrganizationSettings,
   onInviteOrganization,
   canInviteMembers = false,
   canManageWorkspaceStructure = false,
+  canManageChannelRoleAccess = false,
   canSeeAllStructure = false,
   onWorkspaceTabChange,
   onDisconnectVoice,
@@ -132,6 +166,10 @@ const OrganizationMainPanel = ({
   onVoiceRoomSessionEnd,
   onOpenVoiceChatSidebar,
   voiceChatSidebarOpen = true,
+  /** Đăng ký mở poll/danh thiếp cho composer chat voice (sidebar phải) */
+  onRegisterVoiceComposerHelpers,
+  /** Gắn emoji vào ô nhập đang active (text hoặc voice sidebar) */
+  onAppendComposerEmoji,
 }) => {
   const { locale } = useLocale();
   const { t } = useAppStrings();
@@ -184,9 +222,11 @@ const OrganizationMainPanel = ({
 
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editDraft, setEditDraft] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
   const [moreMenu, setMoreMenu] = useState({ open: false, anchorRect: null, message: null });
   const [createTaskModalOpen, setCreateTaskModalOpen] = useState(false);
   const [createTaskSourceMessage, setCreateTaskSourceMessage] = useState(null);
+  const [createTaskMentions, setCreateTaskMentions] = useState([]);
   /** Hover: thanh công cụ phía trên bubble hoặc phía dưới (tránh cắt khi tin ở đầu khung chat) */
   const [toolbarPlacementById, setToolbarPlacementById] = useState({});
   const [workspaceTab, setWorkspaceTab] = useState(workspaceTabView === 'tasks' ? 'tasks' : 'chat');
@@ -221,8 +261,10 @@ const OrganizationMainPanel = ({
   const [orgMicVolume, setOrgMicVolume] = useState(initialOrgVoiceAudio.micVolume);
   const [orgSpeakerVolume, setOrgSpeakerVolume] = useState(initialOrgVoiceAudio.speakerVolume);
 
-  // Sidebar trái (cấu trúc): cho phép nới rộng thêm tối đa +20px bằng kéo chuột.
+  // Sidebar trái (cấu trúc): kéo thu tối đa 100px, rộng tối đa mặc định + 100px.
   const LEFT_ASIDE_BASE_W = 252;
+  const LEFT_ASIDE_MIN_W = 100;
+  const LEFT_ASIDE_MAX_W = LEFT_ASIDE_BASE_W + 100;
   const [leftAsideW, setLeftAsideW] = useState(LEFT_ASIDE_BASE_W);
   const leftAsideResizeRef = useRef(null);
 
@@ -282,6 +324,12 @@ const OrganizationMainPanel = ({
   };
   const selectedChannel =
     channels.find((channel) => String(channel._id) === String(selectedChannelId)) || null;
+  const selectedChannelPerm = getChannelPerm(selectedChannelId);
+  const canWriteInChannel = Boolean(selectedChannelPerm.canWrite);
+  const channelReadOnly =
+    Boolean(selectedChannelId) &&
+    Boolean(selectedChannelPerm.canSee || selectedChannelPerm.canRead) &&
+    !canWriteInChannel;
   const isVoiceChannel = selectedChannel?.type === 'voice';
   const canVoiceChannel = Boolean(getChannelPerm(selectedChannelId).canVoice);
   const selectedTeam = teams.find((team) => String(team._id) === String(selectedTeamId)) || null;
@@ -328,27 +376,53 @@ const OrganizationMainPanel = ({
     });
   }, [messages]);
 
-  const CHAT_NEAR_BOTTOM_PX = 72;
+  const CHAT_NEAR_BOTTOM_PX = 64;
 
-  const checkChatNearBottom = useCallback(() => {
+  const updateNearBottomState = useCallback(() => {
     const el = chatScrollRef.current;
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_NEAR_BOTTOM_PX;
+    if (!el) {
+      isNearBottomRef.current = true;
+      setShowJumpToLatest(false);
+      return;
+    }
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    if (maxScroll <= 4) {
+      isNearBottomRef.current = true;
+      setShowJumpToLatest(false);
+      return;
+    }
+    const distFromBottom = maxScroll - el.scrollTop;
+    const near = distFromBottom <= CHAT_NEAR_BOTTOM_PX;
+    isNearBottomRef.current = near;
+    setShowJumpToLatest(!near);
   }, []);
 
   const handleChatScroll = useCallback(() => {
-    const near = checkChatNearBottom();
-    isNearBottomRef.current = near;
-    setShowJumpToLatest(!near);
-  }, [checkChatNearBottom]);
+    updateNearBottomState();
+  }, [updateNearBottomState]);
 
   const scrollChatToLatest = useCallback((behavior = 'auto') => {
-    requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const apply = () => {
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (maxScroll > 0) {
+        if (behavior === 'smooth') {
+          el.scrollTo({ top: maxScroll, behavior: 'smooth' });
+        } else {
+          el.scrollTop = maxScroll;
+        }
+      } else {
+        messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+      }
       isNearBottomRef.current = true;
       setShowJumpToLatest(false);
+    };
+    requestAnimationFrame(() => {
+      apply();
+      requestAnimationFrame(updateNearBottomState);
     });
-  }, []);
+  }, [updateNearBottomState]);
 
   useEffect(() => {
     if (workspaceTab === 'tasks' || isVoiceChannel) return;
@@ -359,8 +433,13 @@ const OrganizationMainPanel = ({
   useEffect(() => {
     if (workspaceTab === 'tasks' || isVoiceChannel || loadingMessages) return;
     scrollChatToLatest('auto');
-    requestAnimationFrame(handleChatScroll);
-  }, [selectedChannelId, loadingMessages, workspaceTab, isVoiceChannel, scrollChatToLatest, handleChatScroll]);
+  }, [
+    selectedChannelId,
+    loadingMessages,
+    workspaceTab,
+    isVoiceChannel,
+    scrollChatToLatest,
+  ]);
 
   useEffect(() => {
     if (workspaceTab === 'tasks' || isVoiceChannel || loadingMessages) return;
@@ -443,29 +522,16 @@ const OrganizationMainPanel = ({
   }, [moreMenu.message, orgIdForTask, canUseAiWorkspaceTask, t]);
 
   /** Workspace (kênh tổ chức): luôn gọi hook trước mọi return sớm. */
-  const workspace = useMemo(
-    () => ({
-      shell: isDarkMode
-        ? 'flex h-full min-h-0 flex-col bg-[#0b0e14]'
-        : 'flex h-full min-h-0 flex-col bg-sky-50/40',
-      aside: isDarkMode
-        ? 'flex shrink-0 flex-col border-r border-white/[0.06] bg-[#0c0f15]'
-        : 'flex shrink-0 flex-col border-r border-sky-200/70 bg-white/95',
-      main: isDarkMode
-        ? 'flex min-h-0 min-w-0 flex-1 flex-col bg-[#080a0f]'
-        : 'flex min-h-0 min-w-0 flex-1 flex-col bg-sky-50/25',
-      header: isDarkMode
-        ? 'shrink-0 border-b border-white/[0.06] bg-[#0b0e14] px-3 py-1.5'
-        : 'shrink-0 border-b border-sky-200/80 bg-white/90 px-3 py-1.5',
+  const workspace = useMemo(() => {
+    const ent = entShell(isDarkMode);
+    return {
+      ...ent,
       composerBar: isDarkMode
-        ? 'relative mt-auto shrink-0 border-t border-white/[0.06] bg-[#0b0e14] px-3 pb-2.5 pt-2'
-        : 'relative mt-auto shrink-0 border-t border-sky-200/80 bg-white/95 px-3 pb-2.5 pt-2',
-      composerWrap: isDarkMode
-        ? 'shrink-0 bg-transparent p-0'
-        : 'shrink-0 bg-transparent p-0',
-    }),
-    [isDarkMode]
-  );
+        ? 'relative mt-auto shrink-0 rounded-b-xl border-t border-white/[0.06] bg-[#11141C]/98 px-4 pb-3 pt-2.5'
+        : 'relative mt-auto shrink-0 rounded-b-xl border-t border-slate-200/80 bg-white px-4 pb-3 pt-2.5',
+      composerWrap: 'shrink-0 bg-transparent p-0',
+    };
+  }, [isDarkMode]);
 
   const formatTime = (isoDate) => {
     if (!isoDate) return '';
@@ -517,15 +583,34 @@ const OrganizationMainPanel = ({
   };
 
   const cancelEdit = () => {
+    if (savingEdit) return;
     setEditingMessageId(null);
     setEditDraft('');
   };
 
+  const beginEditMessage = (msg) => {
+    const id = msg?._id || msg?.id;
+    if (!id || !canEditOrgMessage(msg)) return;
+    setEditingMessageId(id);
+    setEditDraft(plainTextForMessage(msg));
+  };
+
   const submitEdit = async (messageId) => {
     const trimmed = editDraft.trim();
-    if (!trimmed || !messageId) return;
-    await onSaveMessageEdit?.(messageId, trimmed);
-    cancelEdit();
+    if (!trimmed || !messageId || savingEdit) return;
+    if (!onSaveMessageEdit) {
+      toast.error(t('organizations.editFail'));
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await onSaveMessageEdit(messageId, trimmed);
+      cancelEdit();
+    } catch {
+      /* toast ở OrganizationsPage */
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const replyToLabel = (msg) => {
@@ -553,10 +638,23 @@ const OrganizationMainPanel = ({
     setIsPollModalOpen(true);
   };
 
+  useEffect(() => {
+    if (!onRegisterVoiceComposerHelpers) return undefined;
+    onRegisterVoiceComposerHelpers({
+      openPoll: handleCreatePoll,
+      openContact: handleCreateContactCard,
+      openEmoji: () => {
+        setEmojiPickerTab('emoji');
+        setShowEmojiPicker((prev) => !prev);
+      },
+    });
+    return () => onRegisterVoiceComposerHelpers(null);
+  }, [onRegisterVoiceComposerHelpers]);
+
   const handleFileSelected = (event, kind) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file) return;
+    if (!file || !canWriteInChannel) return;
     onSendChatOption?.({ kind, file });
   };
 
@@ -573,6 +671,11 @@ const OrganizationMainPanel = ({
       category: item.category || 'friend',
     };
   });
+
+  const mentionLabelsForChat = useMemo(
+    () => collectMentionLabelsFromContacts(chatContacts),
+    [chatContacts]
+  );
 
   const assignableContactOptions = useMemo(() => {
     const list = Array.isArray(normalizedContacts) ? normalizedContacts : [];
@@ -706,7 +809,11 @@ const OrganizationMainPanel = ({
   };
 
   const appendEmoji = (emoji) => {
-    onChangeMessageInput?.(`${messageInput || ''}${emoji}`);
+    if (onAppendComposerEmoji) {
+      onAppendComposerEmoji(emoji);
+    } else {
+      onChangeMessageInput?.(`${messageInput || ''}${emoji}`);
+    }
     setShowEmojiPicker(false);
     setEmojiSearch('');
   };
@@ -732,27 +839,31 @@ const OrganizationMainPanel = ({
 
   return (
     <>
-    <div className={workspace.shell}>
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <aside className={`${workspace.aside} relative`} style={{ width: leftAsideW }}>
+    <div className={`${workspace.shell} h-full min-h-0`}>
+      <div className={workspace.shellInner || 'flex h-full min-h-0 flex-1 gap-2 overflow-hidden'}>
+        <aside
+          className={`${workspace.aside} relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden`}
+          style={{ width: leftAsideW, minWidth: LEFT_ASIDE_MIN_W, maxWidth: LEFT_ASIDE_MAX_W }}
+        >
           <div
             className="absolute inset-y-0 right-0 z-20 w-2 cursor-col-resize"
-            title="Kéo để nới sidebar (tối đa +20px)"
+            title={`Kéo để đổi độ rộng (${LEFT_ASIDE_MIN_W}px – ${LEFT_ASIDE_MAX_W}px)`}
             onMouseDown={(e) => {
               if (e.button !== 0) return;
               leftAsideResizeRef.current = {
                 active: true,
                 startX: e.clientX,
                 startW: leftAsideW,
-                minW: LEFT_ASIDE_BASE_W,
-                maxW: LEFT_ASIDE_BASE_W + 20,
+                minW: LEFT_ASIDE_MIN_W,
+                maxW: LEFT_ASIDE_MAX_W,
               };
               e.preventDefault();
             }}
           />
-          <div className={`flex min-h-0 flex-1 flex-col border-b px-3 py-2.5 ${isDarkMode ? 'border-white/[0.06]' : 'border-sky-200/70'}`}>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-3 py-2.5">
             <div
-              className={`mb-2.5 rounded-xl border p-2.5 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white'}`}
+              className={`mb-2.5 rounded-xl border p-2.5 ${isDarkMode ? 'border-white/10 bg-[#171B24]' : 'border-slate-200 bg-slate-50'}`}
             >
               <div className="flex items-center justify-between gap-2">
                 <button
@@ -764,10 +875,10 @@ const OrganizationMainPanel = ({
                   className="min-w-0 text-left"
                   title={canInviteMembers ? 'Mời vào tổ chức' : 'Bạn không có quyền mời thành viên'}
                 >
-                  <div className={`truncate text-sm font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                  <div className={`truncate text-lg font-semibold ${workspace.textPrimary}`}>
                     {orgName}
                   </div>
-                  <div className={`mt-0.5 text-[10px] ${isDarkMode ? 'text-emerald-300' : 'text-emerald-700'}`}>
+                  <div className={`mt-0.5 text-xs ${isDarkMode ? 'text-emerald-400/90' : 'text-emerald-700'}`}>
                     ● {t('orgPanel.onlineCount', { n: workspaceOnlineUserIds?.length || 0 })}
                   </div>
                 </button>
@@ -777,7 +888,7 @@ const OrganizationMainPanel = ({
                     onClick={() => {
                       if (selectedOrganization?._id) onInviteOrganization?.(selectedOrganization._id);
                     }}
-                    className={`rounded-md px-2 py-1 text-[10px] font-semibold ${
+                    className={`rounded-lg px-2 py-1 text-[10px] font-semibold ${
                       isDarkMode ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-700'
                     }`}
                   >
@@ -810,6 +921,7 @@ const OrganizationMainPanel = ({
               onCreateChannel={onCreateChannel}
               onOpenChannelSettings={onOpenChannelSettings}
               canManageWorkspaceStructure={canManageWorkspaceStructure}
+              canManageChannelRoleAccess={canManageChannelRoleAccess}
               canSeeAllStructure={canSeeAllStructure}
             />
           </div>
@@ -828,28 +940,116 @@ const OrganizationMainPanel = ({
               onDisconnect={() => voiceControlActionsRef.current.disconnect?.()}
             />
           ) : null}
+          </div>
 
-          <OrganizationSidebarAudioBar
-            isDarkMode={isDarkMode}
-            t={t}
-            voiceInChannel={voiceConnVisible}
-            voiceAudioState={voiceAudioState}
-            onToggleMute={() => voiceControlActionsRef.current.toggleMute?.()}
-            onToggleSpeaker={() => voiceControlActionsRef.current.toggleSpeaker?.()}
-            onAudioPrefChange={handleOrgAudioPrefChange}
-            onOpenOrganizationSettings={() => onOpenOrganizationSettings?.(selectedOrganization)}
-            onOpenVoiceSettings={() => setOrgVoiceSettingsOpen(true)}
-          />
+          <div
+            className={`shrink-0 rounded-b-xl ${isDarkMode ? 'bg-[#11141C]' : 'bg-white'}`}
+          >
+            <OrganizationSidebarAudioBar
+              isDarkMode={isDarkMode}
+              t={t}
+              voiceInChannel={voiceConnVisible}
+              voiceAudioState={voiceAudioState}
+              onToggleMute={() => voiceControlActionsRef.current.toggleMute?.()}
+              onToggleSpeaker={() => voiceControlActionsRef.current.toggleSpeaker?.()}
+              onAudioPrefChange={handleOrgAudioPrefChange}
+              onOpenOrganizationSettings={() => onOpenOrganizationSettings?.(selectedOrganization)}
+              onOpenVoiceSettings={() => setOrgVoiceSettingsOpen(true)}
+            />
+          </div>
         </aside>
 
-        <div className={workspace.main}>
+        <div className={`${workspace.main} h-full min-h-0 overflow-hidden`}>
+          <header className={workspace.header}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <nav
+                  aria-label={t('orgPanel.workspaceBreadcrumbAria')}
+                  className={`mb-0.5 flex flex-wrap items-center gap-1 text-[11px] ${
+                    isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'
+                  }`}
+                >
+                  <span className="truncate">{branchName}</span>
+                  <span className="opacity-50">/</span>
+                  <span className="truncate">{divisionName}</span>
+                  {selectedTeamId && teamName !== '—' ? (
+                    <>
+                      <span className="opacity-50">/</span>
+                      <span className="truncate">{teamName}</span>
+                    </>
+                  ) : deptName !== '—' && !selectedTeamId ? (
+                    <>
+                      <span className="opacity-50">/</span>
+                      <span className="truncate">{deptName}</span>
+                    </>
+                  ) : null}
+                  {selectedChannelId ? (
+                    <>
+                      <span className="opacity-50">/</span>
+                      <span
+                        className={`truncate font-medium ${isDarkMode ? 'text-[#A1A8B3]' : 'text-slate-700'}`}
+                      >
+                        #{chSlug || t('organizations.channelNameFallback')}
+                      </span>
+                    </>
+                  ) : null}
+                </nav>
+                <h2
+                  className={`truncate text-base font-semibold ${workspace.textPrimary}`}
+                >
+                  {selectedChannelId
+                    ? `#${chSlug || t('organizations.channelNameFallback')}`
+                    : deptName}
+                </h2>
+                {workspaceTab !== 'tasks' && !isVoiceChannel && sortedWorkspaceMessages.length > 0 ? (
+                  <p className={`mt-0.5 text-[10px] ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}>
+                    {t('orgPanel.msgCountLine', { n: sortedWorkspaceMessages.length })}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  title={t('orgPanel.workspaceSearchAria')}
+                  aria-label={t('orgPanel.workspaceSearchAria')}
+                  onClick={() => onWorkspaceSearchOpenChange?.(true)}
+                  className={`rounded-lg p-2 transition ${
+                    workspaceSearchOpen
+                      ? isDarkMode
+                        ? 'bg-[#5865F2]/25 text-white'
+                        : 'bg-indigo-100 text-indigo-700'
+                      : isDarkMode
+                        ? 'text-[#b4b8c4] hover:bg-white/[0.06] hover:text-white'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  <Search className="h-5 w-5" strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  title={t('orgPanel.notifTitle')}
+                  aria-label={t('orgPanel.notifTitle')}
+                  onClick={() => onOpenNotificationsPage?.()}
+                  className={`rounded-lg p-2 transition ${
+                    isDarkMode
+                      ? 'text-[#b4b8c4] hover:bg-white/[0.06] hover:text-white'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  <Bell className="h-5 w-5" strokeWidth={2} />
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           <div
             ref={chatScrollRef}
-            className="scrollbar-overlay relative flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-3"
+            className="scrollbar-chat min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain"
             onScroll={handleChatScroll}
           >
             {workspaceTab === 'tasks' ? (
-              <div className="min-h-0">
+              <div className="min-h-0 px-4 py-3">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <button
@@ -1008,7 +1208,8 @@ const OrganizationMainPanel = ({
                   />
                 )
               ) : (
-              <div className="flex min-h-full flex-col justify-end gap-3">
+              <div className="flex min-h-full flex-col px-4 py-3">
+              <div className="mt-auto flex flex-col gap-3">
               <>
               {loadingMessages && (
                 <div
@@ -1052,7 +1253,8 @@ const OrganizationMainPanel = ({
                     ? plainTextForMessage(parentMsg).slice(0, 160)
                     : t('orgPanel.threadRoot');
                   const isEditing = editingMessageId && String(editingMessageId) === String(mid);
-                  const showToolbar = !isEditing && !sendingMessage;
+                  const showToolbar =
+                    !isEditing && !sendingMessage && type !== 'system';
 
                   const toolbarPlace = toolbarPlacementById[String(mid)] ?? 'above';
 
@@ -1060,25 +1262,23 @@ const OrganizationMainPanel = ({
                   const showDayDivider =
                     !prev || messageDayKey(message.createdAt) !== messageDayKey(prev.createdAt);
 
-                  const displayName = isMine
-                    ? t('orgPanel.you')
-                    : message.senderId?.displayName ||
-                      message.senderId?.username ||
-                      message.senderId?.fullName ||
-                      t('orgPanel.member');
-                  const roleCapsule = isMine
-                    ? t('orgPanel.roleYouCaps')
-                    : type === 'system'
-                      ? t('orgPanel.roleSystemCaps')
-                      : t('orgPanel.roleMemberCaps');
+                  const displayName = senderDisplayName(
+                    message,
+                    isMine,
+                    currentUser,
+                    t('orgPanel.member')
+                  );
+                  const avatarUrl = senderAvatarUrl(message, isMine, currentUser);
+                  const avatarInitials = isMine
+                    ? userInitialsFromProfile(currentUser)
+                    : senderInitials(message);
+                  const messageRoleKey =
+                    type === 'system'
+                      ? 'system'
+                      : String(message?.senderOrgRole || message?.membershipRole || 'member').toLowerCase();
+                  const roleCapsule = roleBadgeLabel(messageRoleKey, t);
 
-                  const contentTextCls = isDarkMode
-                    ? isMine
-                      ? 'text-[#dcddde]'
-                      : 'text-slate-100'
-                    : isMine
-                      ? 'text-slate-900'
-                      : 'text-slate-800';
+                  const contentTextCls = isDarkMode ? 'text-[#dcddde]' : 'text-slate-800';
 
                   return (
                     <Fragment key={mid}>
@@ -1091,59 +1291,68 @@ const OrganizationMainPanel = ({
                                 : 'border-slate-200 bg-white text-slate-500 shadow-sm'
                             }`}
                           >
-                            <Zap className="h-3 w-3 text-amber-400" />
                             {formatDateDividerLabel(message.createdAt)}
                           </span>
                         </div>
                       )}
                       <div
-                        className={`flex w-full items-start ${isMine ? 'justify-end' : 'justify-start gap-3'}`}
+                        className={`group/msg relative -mx-4 px-4 py-0.5 transition-colors ${
+                          isDarkMode ? 'hover:bg-white/[0.035]' : 'hover:bg-slate-100/90'
+                        }`}
+                        onMouseEnter={(e) => handleMessageRowMouseEnter(mid, e)}
                       >
-                        {!isMine && (
-                          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600/80 to-fuchsia-700/80 text-xs font-bold text-white shadow-inner">
-                            {senderInitials(message)}
+                        {showToolbar && (
+                          <div
+                            className={`pointer-events-none absolute right-4 z-30 opacity-0 transition-opacity duration-150 group-hover/msg:pointer-events-auto group-hover/msg:opacity-100 ${
+                              toolbarPlace === 'below'
+                                ? 'top-full mt-1'
+                                : '-top-1 -translate-y-full'
+                            }`}
+                          >
+                            <ChannelMessageToolbar
+                              compact
+                              isMine={isMine}
+                              showEdit={isMine && canEditOrgMessage(message)}
+                              disabled={sendingMessage}
+                              onQuickReact={(emoji) => onQuickReactMessage?.(message, emoji)}
+                              onOpenEmojiPicker={() => {}}
+                              onMiddleAction={() => {
+                                if (isMine && canEditOrgMessage(message)) {
+                                  beginEditMessage(message);
+                                } else {
+                                  onReplyToMessage?.(message);
+                                }
+                              }}
+                              onForward={() => onForwardMessage?.(message)}
+                              onMore={(e) => {
+                                const r = e?.currentTarget?.getBoundingClientRect?.();
+                                if (r) {
+                                  setMoreMenu({
+                                    open: true,
+                                    anchorRect: r,
+                                    message,
+                                  });
+                                }
+                              }}
+                            />
                           </div>
                         )}
+                        <div className="flex w-full items-start justify-start gap-3">
                         <div
-                          className={`group relative min-w-0 max-w-[min(100%,42rem)] ${isMine ? 'ml-auto text-right' : 'flex-1'}`}
-                          onMouseEnter={(e) => handleMessageRowMouseEnter(mid, e)}
+                          className="mt-0.5 flex h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-bold text-white shadow-inner"
+                          title={displayName}
                         >
-                          {showToolbar && (
-                            <div
-                              className={`absolute z-20 opacity-0 transition-opacity group-hover:opacity-100 ${
-                                toolbarPlace === 'below' ? 'top-full mt-1' : 'bottom-full mb-1'
-                              } ${isMine ? 'right-0' : 'left-0'}`}
-                            >
-                              <ChannelMessageToolbar
-                                isMine={isMine}
-                                showEdit={isMine && canEditOrgMessage(message)}
-                                disabled={sendingMessage}
-                                onQuickReact={(emoji) => onQuickReactMessage?.(message, emoji)}
-                                onOpenEmojiPicker={() => {}}
-                                onMiddleAction={() => {
-                                  if (isMine && canEditOrgMessage(message)) {
-                                    setEditingMessageId(mid);
-                                    setEditDraft(String(message.content || ''));
-                                  } else {
-                                    onReplyToMessage?.(message);
-                                  }
-                                }}
-                                onForward={() => onForwardMessage?.(message)}
-                                onMore={(e) => {
-                                  const r = e?.currentTarget?.getBoundingClientRect?.();
-                                  if (r) {
-                                    setMoreMenu({
-                                      open: true,
-                                      anchorRect: r,
-                                      message,
-                                    });
-                                  }
-                                }}
-                              />
-                            </div>
+                          {avatarUrl && String(avatarUrl).startsWith('http') ? (
+                            <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <span className="flex h-full w-full items-center justify-center">
+                              {avatarInitials}
+                            </span>
                           )}
+                        </div>
+                        <div className="min-w-0 max-w-[min(100%,42rem)] flex-1">
                           <div
-                            className={`mb-1 flex flex-wrap items-center gap-2 ${isMine ? 'justify-end' : 'justify-start'}`}
+                            className="mb-1 flex flex-wrap items-center gap-2 justify-start"
                           >
                             <span
                               className={`text-sm font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
@@ -1151,21 +1360,19 @@ const OrganizationMainPanel = ({
                               {displayName}
                             </span>
                             <span
-                              className={`rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                                isDarkMode
-                                  ? 'bg-white/[0.08] text-[#9aa0ae]'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${roleBadgeClass(messageRoleKey, isDarkMode)}`}
                             >
                               {roleCapsule}
                             </span>
+                            {type !== 'text' && type !== 'system' ? (
                             <span
                               className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${
-                                isDarkMode ? 'bg-white/[0.06] text-[#6d7380]' : 'bg-slate-100 text-slate-500'
+                                isDarkMode ? 'bg-white/[0.06] text-[#6B7280]' : 'bg-slate-100 text-slate-500'
                               }`}
                             >
                               {typeLabel}
                             </span>
+                            ) : null}
                             <span
                               className={`text-[11px] tabular-nums ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
                             >
@@ -1180,7 +1387,7 @@ const OrganizationMainPanel = ({
                             )}
                           </div>
                           <div
-                            className={`text-sm leading-relaxed ${contentTextCls} ${isMine ? 'text-right' : 'text-left'}`}
+                            className={`text-sm leading-relaxed text-left ${contentTextCls}`}
                           >
                             {replyId && (
                               <div
@@ -1193,46 +1400,27 @@ const OrganizationMainPanel = ({
                               </div>
                             )}
                             {isEditing ? (
-                              <div className="space-y-2">
-                                <textarea
-                                  value={editDraft}
-                                  onChange={(e) => setEditDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && !e.shiftKey) {
-                                      e.preventDefault();
-                                      submitEdit(mid);
-                                    }
-                                    if (e.key === 'Escape') cancelEdit();
-                                  }}
-                                  rows={3}
-                                  className={`w-full resize-y rounded-lg border px-2 py-1.5 text-sm outline-none ${
-                                    isDarkMode
-                                      ? 'border-white/20 bg-black/35 text-white focus:border-[#5865F2]/50'
-                                      : 'border-slate-300 bg-white text-slate-900 focus:border-cyan-500/60'
-                                  }`}
-                                />
-                                <p
-                                  className={`text-[11px] ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}
-                                >
-                                  {t('orgPanel.escapeKey')}{' '}
-                                  <button type="button" className="text-[#a29bfe] hover:underline" onClick={cancelEdit}>
-                                    {t('orgPanel.editCancelShort')}
-                                  </button>
-                                  {' · '}
-                                  {t('orgPanel.enterKey')}{' '}
-                                  <button
-                                    type="button"
-                                    className="text-[#a29bfe] hover:underline"
-                                    onClick={() => submitEdit(mid)}
-                                  >
-                                    {t('orgPanel.editSaveShort')}
-                                  </button>
-                                </p>
-                              </div>
+                              <OrgMessageInlineEditor
+                                value={editDraft}
+                                onChange={setEditDraft}
+                                onSave={() => submitEdit(mid)}
+                                onCancel={cancelEdit}
+                                isDarkMode={isDarkMode}
+                                saving={savingEdit}
+                                escapeHint={t('orgPanel.editEscape')}
+                                enterHint={t('orgPanel.editEnter')}
+                                cancelLabel={t('orgPanel.editCancelShort')}
+                                saveLabel={t('orgPanel.editSaveShort')}
+                              />
                             ) : (
-                              <ChatMessageAttachmentBody message={message} />
+                              <ChatMessageAttachmentBody
+                                message={message}
+                                mentionVariant="org"
+                                mentionLabels={mentionLabelsForChat}
+                              />
                             )}
                           </div>
+                        </div>
                         </div>
                       </div>
                     </Fragment>
@@ -1241,48 +1429,67 @@ const OrganizationMainPanel = ({
               </>
               <div ref={messagesEndRef} className="h-px w-full shrink-0" aria-hidden />
               </div>
+              </div>
               )}
 
-            {showJumpToLatest && workspaceTab !== 'tasks' && !isVoiceChannel && !loadingMessages && (
-              <button
-                type="button"
-                title={t('orgPanel.scrollToLatest')}
-                aria-label={t('orgPanel.scrollToLatest')}
-                onClick={() => scrollChatToLatest('smooth')}
-                className={`absolute bottom-3 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full shadow-lg transition hover:scale-105 active:scale-95 ${
-                  isDarkMode
-                    ? 'border border-white/10 bg-white text-[#4e5058] hover:bg-slate-50'
-                    : 'border border-slate-200/90 bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <ChevronsDown className="h-5 w-5" strokeWidth={2.25} />
-              </button>
-            )}
-
-            {isVoiceChannel && (
-              <button
-                type="button"
-                title="Mở chat kênh voice"
-                aria-label="Mở chat kênh voice"
-                onClick={() => onOpenVoiceChatSidebar?.()}
-                className={`absolute bottom-3 right-3 z-10 inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-semibold shadow-lg transition hover:scale-[1.02] active:scale-[0.98] ${
-                  voiceChatSidebarOpen
-                    ? isDarkMode
-                      ? 'border-[#5865F2]/40 bg-[#5865F2]/20 text-[#cdd2ff]'
-                      : 'border-indigo-200 bg-indigo-50 text-indigo-700'
-                    : isDarkMode
-                      ? 'border-white/10 bg-[#141821] text-white hover:bg-[#1a2230]'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <MessageSquare className="h-4 w-4" />
-                <span className="hidden sm:inline">Chat</span>
-              </button>
-            )}
           </div>
 
-            {workspaceTab !== 'tasks' && !isVoiceChannel && (
+          {showJumpToLatest &&
+            sortedWorkspaceMessages.length > 0 &&
+            workspaceTab !== 'tasks' &&
+            !isVoiceChannel &&
+            !loadingMessages && (
+            <button
+              type="button"
+              title={t('orgPanel.scrollToLatest')}
+              aria-label={t('orgPanel.scrollToLatest')}
+              onClick={() => scrollChatToLatest('smooth')}
+              className={`pointer-events-auto absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 ${
+                isDarkMode
+                  ? 'border border-white/10 bg-[#171B24] text-[#A1A8B3] hover:bg-[#1D2330] hover:text-[#F3F4F6]'
+                  : 'border border-slate-200/90 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <ChevronsDown className="h-5 w-5" strokeWidth={2.25} />
+            </button>
+          )}
+
+          {isVoiceChannel && (
+            <button
+              type="button"
+              title="Mở chat kênh voice"
+              aria-label="Mở chat kênh voice"
+              onClick={() => onOpenVoiceChatSidebar?.()}
+              className={`pointer-events-auto absolute bottom-4 right-4 z-20 inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-semibold shadow-lg transition hover:scale-[1.02] active:scale-[0.98] ${
+                voiceChatSidebarOpen
+                  ? isDarkMode
+                    ? 'border-[#5865F2]/40 bg-[#5865F2]/20 text-[#cdd2ff]'
+                    : 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                  : isDarkMode
+                    ? 'border-white/10 bg-[#141821] text-white hover:bg-[#1a2230]'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span className="hidden sm:inline">Chat</span>
+            </button>
+          )}
+
+          </div>
+
+          {workspaceTab !== 'tasks' && !isVoiceChannel && (
             <div className={workspace.composerBar}>
+              {channelReadOnly ? (
+                <p
+                  className={`mb-2 rounded-lg border px-3 py-2 text-xs ${
+                    isDarkMode
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-100/90'
+                      : 'border-amber-200 bg-amber-50 text-amber-900'
+                  }`}
+                >
+                  {t('orgPanel.composerReadOnly')}
+                </p>
+              ) : null}
               <ChatUploadProgressBar
                 percent={channelUploadProgress}
                 label={t('orgPanel.uploadChannel')}
@@ -1303,7 +1510,6 @@ const OrganizationMainPanel = ({
               <UnifiedChatComposer
                 richToolbar
                 flatInner
-                singleLine
                 showSendButton={false}
                 mentionItems={normalizedContacts.slice(0, 30).map((contact) => ({
                   value: contact.id,
@@ -1349,46 +1555,52 @@ const OrganizationMainPanel = ({
                 onChange={onChangeMessageInput}
                 onSend={onSendMessage}
                 placeholder={
-                  selectedChannelId
-                    ? t('orgPanel.composerHint', {
-                        ch: chSlug || t('organizations.channelNameFallback'),
-                      })
-                    : t('orgPanel.composerPlaceholder')
+                  channelReadOnly
+                    ? t('orgPanel.composerReadOnlyHint')
+                    : selectedChannelId
+                      ? t('orgPanel.composerHint', {
+                          ch: chSlug || t('organizations.channelNameFallback'),
+                        })
+                      : t('orgPanel.composerPlaceholder')
                 }
-                disabled={!selectedChannelId || sendingMessage}
-                sendDisabled={!messageInput.trim()}
-                plusItems={[
-                  {
-                    key: 'upload-file',
-                    icon: '📁',
-                    label: t('orgPanel.menuUploadFile'),
-                    onClick: () => fileInputRef.current?.click(),
-                  },
-                  {
-                    key: 'upload-image',
-                    icon: '🖼️',
-                    label: t('orgPanel.menuUploadImage'),
-                    onClick: () => imageInputRef.current?.click(),
-                  },
-                  {
-                    key: 'topic',
-                    icon: '🧵',
-                    label: t('orgPanel.menuTopic'),
-                    onClick: () => onSendChatOption?.({ kind: 'topic' }),
-                  },
-                  {
-                    key: 'poll',
-                    icon: '🗳️',
-                    label: t('orgPanel.menuPoll'),
-                    onClick: handleCreatePoll,
-                  },
-                  {
-                    key: 'contact',
-                    icon: '👤',
-                    label: t('orgPanel.menuContact'),
-                    onClick: handleCreateContactCard,
-                  },
-                ]}
+                disabled={!selectedChannelId || sendingMessage || channelReadOnly}
+                sendDisabled={!messageInput.trim() || channelReadOnly}
+                plusItems={
+                  canWriteInChannel
+                    ? [
+                        {
+                          key: 'upload-file',
+                          icon: '📁',
+                          label: t('orgPanel.menuUploadFile'),
+                          onClick: () => fileInputRef.current?.click(),
+                        },
+                        {
+                          key: 'upload-image',
+                          icon: '🖼️',
+                          label: t('orgPanel.menuUploadImage'),
+                          onClick: () => imageInputRef.current?.click(),
+                        },
+                        {
+                          key: 'topic',
+                          icon: '🧵',
+                          label: t('orgPanel.menuTopic'),
+                          onClick: () => onSendChatOption?.({ kind: 'topic' }),
+                        },
+                        {
+                          key: 'poll',
+                          icon: '🗳️',
+                          label: t('orgPanel.menuPoll'),
+                          onClick: handleCreatePoll,
+                        },
+                        {
+                          key: 'contact',
+                          icon: '👤',
+                          label: t('orgPanel.menuContact'),
+                          onClick: handleCreateContactCard,
+                        },
+                      ]
+                    : []
+                }
                 actionItems={[
                   {
                     key: 'emoji',
@@ -1403,86 +1615,86 @@ const OrganizationMainPanel = ({
                 ]}
               />
 
-              {showEmojiPicker && (
-                <>
-                  <button
-                    type="button"
-                    aria-label={t('orgPanel.closeEmoji')}
-                    onClick={() => setShowEmojiPicker(false)}
-                    className="fixed inset-0 z-40 cursor-default bg-black/30"
-                  />
-                  <div className="fixed bottom-24 right-8 z-50 h-[420px] w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-[#0b1220] shadow-2xl">
-                    <div className="flex items-center gap-2 border-b border-slate-700 px-4 py-3">
-                      {[
-                        { id: 'gif', label: t('orgPanel.gifTab') },
-                        { id: 'sticker', label: t('orgPanel.stickerTab') },
-                        { id: 'emoji', label: t('orgPanel.emojiTab') },
-                      ].map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          onClick={() => setEmojiPickerTab(tab.id)}
-                          className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
-                            emojiPickerTab === tab.id
-                              ? 'bg-slate-700 text-white'
-                              : 'text-gray-300 hover:bg-slate-800/70'
-                          }`}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="border-b border-slate-700 px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <input
-                          value={emojiSearch}
-                          onChange={(event) => setEmojiSearch(event.target.value)}
-                          placeholder={t('orgPanel.emojiSearchPh')}
-                          className="h-11 flex-1 rounded-xl border border-blue-500/70 bg-[#0d1525] px-3 text-sm text-white outline-none placeholder:text-gray-400"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => onSendChatOption?.({ kind: 'add-emoji-beta' })}
-                          className="h-11 rounded-xl bg-slate-700 px-4 text-sm font-semibold text-white transition hover:bg-slate-600"
-                        >
-                          {t('orgPanel.addEmojiBtn')}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="h-[calc(100%-126px)] overflow-y-auto p-3 scrollbar-overlay">
-                      {emojiPickerTab !== 'emoji' ? (
-                        <div className="flex h-full items-center justify-center text-sm text-gray-400">
-                          {t('orgPanel.emojiBetaMsg')}
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-9 gap-2">
-                          {filteredComposerEmojis.map((emoji, idx) => (
-                            <button
-                              key={`${emoji}-${idx}`}
-                              type="button"
-                              onClick={() => appendEmoji(emoji)}
-                              className="h-11 rounded-lg bg-[#111a2c] text-2xl transition hover:bg-slate-700/80"
-                            >
-                              {emoji}
-                            </button>
-                          ))}
-                          {filteredComposerEmojis.length === 0 && (
-                            <div className="col-span-9 rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-sm text-gray-400">
-                              {t('orgPanel.emojiNoMatch')}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
             </div>
             )}
           </div>
         </div>
       </div>
+
+      {workspaceTab !== 'tasks' && showEmojiPicker && (
+        <>
+          <button
+            type="button"
+            aria-label={t('orgPanel.closeEmoji')}
+            onClick={() => setShowEmojiPicker(false)}
+            className="fixed inset-0 z-40 cursor-default bg-black/30"
+          />
+          <div className="fixed bottom-24 right-8 z-50 h-[420px] w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-[#0b1220] shadow-2xl">
+            <div className="flex items-center gap-2 border-b border-slate-700 px-4 py-3">
+              {[
+                { id: 'gif', label: t('orgPanel.gifTab') },
+                { id: 'sticker', label: t('orgPanel.stickerTab') },
+                { id: 'emoji', label: t('orgPanel.emojiTab') },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setEmojiPickerTab(tab.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+                    emojiPickerTab === tab.id
+                      ? 'bg-slate-700 text-white'
+                      : 'text-gray-300 hover:bg-slate-800/70'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <div className="border-b border-slate-700 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <input
+                  value={emojiSearch}
+                  onChange={(event) => setEmojiSearch(event.target.value)}
+                  placeholder={t('orgPanel.emojiSearchPh')}
+                  className="h-11 flex-1 rounded-xl border border-blue-500/70 bg-[#0d1525] px-3 text-sm text-white outline-none placeholder:text-gray-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => onSendChatOption?.({ kind: 'add-emoji-beta' })}
+                  className="h-11 rounded-xl bg-slate-700 px-4 text-sm font-semibold text-white transition hover:bg-slate-600"
+                >
+                  {t('orgPanel.addEmojiBtn')}
+                </button>
+              </div>
+            </div>
+            <div className="h-[calc(100%-126px)] overflow-y-auto p-3 scrollbar-overlay">
+              {emojiPickerTab !== 'emoji' ? (
+                <div className="flex h-full items-center justify-center text-sm text-gray-400">
+                  {t('orgPanel.emojiBetaMsg')}
+                </div>
+              ) : (
+                <div className="grid grid-cols-9 gap-2">
+                  {filteredComposerEmojis.map((emoji, idx) => (
+                    <button
+                      key={`${emoji}-${idx}`}
+                      type="button"
+                      onClick={() => appendEmoji(emoji)}
+                      className="h-11 rounded-lg bg-[#111a2c] text-2xl transition hover:bg-slate-700/80"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                  {filteredComposerEmojis.length === 0 && (
+                    <div className="col-span-9 rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-sm text-gray-400">
+                      {t('orgPanel.emojiNoMatch')}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       <ChannelMessageMoreMenu
         open={moreMenu.open}
@@ -1501,12 +1713,11 @@ const OrganizationMainPanel = ({
         }}
         onReply={() => moreMenu.message && onReplyToMessage?.(moreMenu.message)}
         onForward={() => moreMenu.message && onForwardMessage?.(moreMenu.message)}
-        onEdit={() => {
-          const m = moreMenu.message;
-          if (!m || !canEditOrgMessage(m)) return;
-          setEditingMessageId(m._id || m.id);
-          setEditDraft(String(m.content || ''));
-        }}
+        onEdit={
+          moreMenu.message && canEditOrgMessage(moreMenu.message)
+            ? () => beginEditMessage(moreMenu.message)
+            : undefined
+        }
         onDelete={() => {
           const m = moreMenu.message;
           if (m) onDeleteMessage?.(m._id || m.id);
@@ -1514,6 +1725,8 @@ const OrganizationMainPanel = ({
         onCreateTask={() => {
           const m = moreMenu.message;
           if (!m) return;
+          const content = plainTextForMessage(m);
+          setCreateTaskMentions(parseMessageMentions(content, normalizedContacts));
           setCreateTaskSourceMessage(m);
           setCreateTaskModalOpen(true);
         }}
@@ -1528,14 +1741,20 @@ const OrganizationMainPanel = ({
         onClose={() => {
           setCreateTaskModalOpen(false);
           setCreateTaskSourceMessage(null);
+          setCreateTaskMentions([]);
         }}
         messageId={createTaskSourceMessage?._id || createTaskSourceMessage?.id}
         organizationId={orgIdForTask ? String(orgIdForTask) : null}
         currentUserId={currentUserId}
+        mentions={createTaskMentions}
+        channelId={selectedChannelId ? String(selectedChannelId) : null}
         messagePreview={
           createTaskSourceMessage ? plainTextForMessage(createTaskSourceMessage).slice(0, 500) : ''
         }
-        onConfirmed={() => toast.success(t('orgPanel.taskFromAiOk'))}
+        onConfirmed={() => {
+          toast.success(t('orgPanel.taskFromAiOk'));
+          onWorkspaceTasksRefresh?.();
+        }}
       />
 
       <Modal

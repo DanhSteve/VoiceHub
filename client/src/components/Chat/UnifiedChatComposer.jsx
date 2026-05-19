@@ -185,8 +185,8 @@ function UnifiedChatComposer({
   const composerInner = flatInner
     ? 'relative flex flex-col gap-1.5'
     : isDarkMode
-      ? 'relative flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-[#12141c] px-2 py-2 shadow-inner'
-      : 'relative flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 shadow-inner';
+      ? 'relative flex flex-col gap-2 rounded-2xl border border-white/[0.08] bg-[#171B24] px-2.5 py-2 shadow-inner'
+      : 'relative flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-2.5 py-2 shadow-inner';
   const plusBtnClass = isDarkMode
     ? 'h-9 w-9 shrink-0 rounded-lg text-2xl leading-none text-gray-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50'
     : 'h-9 w-9 shrink-0 rounded-lg text-2xl leading-none text-slate-600 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50';
@@ -197,8 +197,16 @@ function UnifiedChatComposer({
     ? 'flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-white transition hover:bg-slate-800/80 disabled:cursor-not-allowed disabled:opacity-40'
     : 'flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-800 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40';
   const textareaClass = isDarkMode
-    ? 'max-h-40 min-h-[44px] flex-1 resize-y bg-transparent px-2 py-2 text-sm leading-relaxed text-white outline-none placeholder:text-gray-500 disabled:opacity-60'
-    : 'max-h-40 min-h-[44px] flex-1 resize-y bg-transparent px-2 py-2 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60';
+    ? `scrollbar-composer max-h-40 flex-1 resize-none overflow-y-auto overflow-x-hidden bg-transparent px-2 pr-1 text-sm text-white outline-none placeholder:text-gray-500 disabled:opacity-60 ${
+        richToolbar
+          ? 'min-h-[36px] py-1.5 leading-normal'
+          : 'min-h-[44px] py-2 leading-relaxed'
+      }`
+    : `scrollbar-composer max-h-40 flex-1 resize-none overflow-y-auto overflow-x-hidden bg-transparent px-2 pr-1 text-sm text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60 ${
+        richToolbar
+          ? 'min-h-[36px] py-1.5 leading-normal'
+          : 'min-h-[44px] py-2 leading-relaxed'
+      }`;
   const inputClass = isDarkMode
     ? 'h-9 min-w-0 flex-1 bg-transparent px-2 text-sm text-white outline-none placeholder:text-gray-500 disabled:opacity-60'
     : 'h-9 min-w-0 flex-1 bg-transparent px-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60';
@@ -293,7 +301,7 @@ function UnifiedChatComposer({
             </div>
           </div>
         )}
-        <div className={`flex gap-2 ${singleLine ? 'items-center' : 'items-end'}`}>
+        <div className={`flex gap-2 ${singleLine || richToolbar ? 'items-center' : 'items-end'}`}>
         {safePlusItems.length > 0 && (
           <>
             <button
@@ -350,7 +358,7 @@ function UnifiedChatComposer({
           <textarea
             ref={inputRef}
             value={value}
-            rows={richToolbar ? 3 : 1}
+            rows={1}
             onChange={(event) => handleInputChange(event.target.value)}
             onKeyDown={handleInputKeyDown}
             disabled={disabled}
@@ -359,7 +367,11 @@ function UnifiedChatComposer({
           />
         )}
 
-        <div className="flex shrink-0 flex-col items-end gap-2">
+        <div
+          className={`flex shrink-0 ${
+            showSendButton ? 'flex-col items-end gap-2' : 'items-center'
+          }`}
+        >
           <div className="flex items-center gap-1">
             {resolvedActionItems.map((item) => (
               <button

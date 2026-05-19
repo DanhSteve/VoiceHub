@@ -25,8 +25,11 @@ const memberRoutes = require('./routes/memberRoutes');
 const teamRoutes = require('./routes/teamRoutes');
 const channelRoutes = require('./routes/channelRoutes');
 const hierarchyRoutes = require('./routes/hierarchyRoutes');
+const internalGatewayAuth = require('/shared/middleware/internalGatewayAuth');
+const internalOrganizationRoutes = require('./routes/internalOrganization.routes');
 
 app.use('/api/organizations', organizationRoutes);
+app.use('/api/organizations/internal', internalGatewayAuth, internalOrganizationRoutes);
 app.use('/api/organizations/:orgId/departments', departmentRoutes);
 app.use('/api/organizations/:orgId/members', memberRoutes);
 app.use('/api/organizations/:orgId/departments/:deptId/channels', channelRoutes);

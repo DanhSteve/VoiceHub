@@ -11,6 +11,7 @@ import { ConfirmDialog } from '../Shared';
 import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
 import OrgWorkspaceSearchSidebar from '../../features/search/components/OrgWorkspaceSearchSidebar';
+import OrgMemberSidebarAttachments from '../../features/orgAttachments/OrgMemberSidebarAttachments';
 
 const unwrapBody = (payload) => payload?.data ?? payload;
 
@@ -187,7 +188,7 @@ function OrganizationMemberSidebar({
   const [error, setError] = useState('');
   const [rows, setRows] = useState([]);
   const [organizationRoles, setOrganizationRoles] = useState([]);
-  const [groupMode, setGroupMode] = useState('presence'); // 'presence' | 'role'
+  const [groupMode, setGroupMode] = useState('role'); // 'presence' | 'role'
   const [menu, setMenu] = useState({
     open: false,
     x: 0,
@@ -261,18 +262,36 @@ function OrganizationMemberSidebar({
     };
   }, [organizationId, currentUserId]);
 
+  const hasReadableChannel = useMemo(() => {
+    const matrix = channelPermissionMatrix || {};
+    return Object.values(matrix).some((p) => p?.canRead || p?.canSee);
+  }, [channelPermissionMatrix]);
+
   const { canShowTasksTab, canShowFilesTab } = useMemo(() => {
     const fallback = fallbackOrgTabFlags(myRole);
     if (!orgPermissionsLoaded || !orgPermissions.length) {
-      return { canShowTasksTab: fallback.tasks, canShowFilesTab: fallback.files };
+      return {
+        canShowTasksTab: fallback.tasks,
+        canShowFilesTab: fallback.files || hasReadableChannel,
+      };
     }
     return {
       canShowTasksTab: canOrgResourceAction(orgPermissions, 'task', 'read'),
-      canShowFilesTab: canOrgResourceAction(orgPermissions, 'document', 'read'),
+      canShowFilesTab:
+        canOrgResourceAction(orgPermissions, 'document', 'read') || hasReadableChannel,
     };
-  }, [orgPermissions, orgPermissionsLoaded, myRole]);
+  }, [orgPermissions, orgPermissionsLoaded, myRole, hasReadableChannel]);
 
-  const showSidebarTabs = canShowTasksTab || canShowFilesTab;
+  const showSidebarTabs = true;
+  const activityFeedItems = useMemo(
+    () => [
+      { id: 'a1', kind: 'join', label: t('organizations.memberActivityJoined', { name: rows[0]?.displayName || '—' }) },
+      { id: 'a2', kind: 'task', label: t('organizations.memberActivityTask') },
+      { id: 'a3', kind: 'file', label: t('organizations.memberActivityFile') },
+      { id: 'a4', kind: 'meet', label: t('organizations.memberActivityMeeting') },
+    ],
+    [rows, t]
+  );
 
   useEffect(() => {
     if (sidebarTab === 'tasks' && !canShowTasksTab) setSidebarTab('people');
@@ -360,9 +379,9 @@ function OrganizationMemberSidebar({
 
   const groupedByMembershipRole = useMemo(() => {
     const roleLabel = {
-      owner: t('organizations.roleOwner'),
-      admin: t('organizations.roleAdmin'),
-      member: t('organizations.roleMember'),
+      owner: t('organizations.memberGroupManagement'),
+      admin: t('organizations.memberGroupLeads'),
+      member: t('organizations.memberGroupMembers'),
     };
     const buckets = { owner: [], admin: [], member: [] };
     for (const r of rows) {
@@ -1231,8 +1250,8 @@ function OrganizationMemberSidebar({
       className={`min-w-0 flex-1 rounded-lg px-1.5 py-2 text-[10px] font-semibold leading-tight transition sm:text-[11px] ${
         sidebarTab === id
           ? isDarkMode
-            ? 'bg-[#5865F2]/25 text-white ring-1 ring-[#5865F2]/40'
-            : 'bg-cyan-100 text-cyan-950 ring-1 ring-cyan-300/70'
+            ? 'bg-[#4F6BED]/15 text-[#F3F4F6] ring-1 ring-[#4F6BED]/30'
+            : 'bg-indigo-50 text-indigo-900 ring-1 ring-indigo-200'
           : isDarkMode
             ? 'text-[#8e9297] hover:bg-white/[0.04] hover:text-white'
             : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
@@ -1256,7 +1275,7 @@ function OrganizationMemberSidebar({
   if (workspaceSearchOpen && organizationId) {
     return (
       <div
-        className={`flex h-full min-h-0 flex-col ${isDarkMode ? 'bg-[#0a0c12]' : 'bg-sky-50/95'}`}
+        className={`flex h-full min-h-0 flex-col ${isDarkMode ? 'bg-[#11141C]' : 'bg-slate-50'}`}
       >
         <OrgWorkspaceSearchSidebar
           organizationId={organizationId}
@@ -1275,10 +1294,10 @@ function OrganizationMemberSidebar({
 
   return (
     <div
-      className={`flex h-full min-h-0 flex-col ${isDarkMode ? 'bg-[#0a0c12]' : 'bg-sky-50/95'}`}
+      className={`flex h-full min-h-0 flex-col overflow-hidden rounded-xl ${isDarkMode ? 'bg-[#11141C]' : 'bg-white'}`}
     >
       <div
-        className={`shrink-0 border-b px-3 py-2.5 ${isDarkMode ? 'border-white/[0.06]' : 'border-sky-200/80'}`}
+        className={`shrink-0 rounded-t-xl border-b px-3 py-2.5 ${isDarkMode ? 'border-white/[0.06]' : 'border-slate-200/80'}`}
       >
         <div
           className={`truncate text-sm font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
@@ -1295,17 +1314,34 @@ function OrganizationMemberSidebar({
 
       {showSidebarTabs ? (
         <div
-          className={`grid shrink-0 gap-1 border-b px-2 py-2 ${
-            canShowTasksTab && canShowFilesTab ? 'grid-cols-3' : 'grid-cols-2'
-          } ${isDarkMode ? 'border-white/[0.06] bg-[#0d1118]' : 'border-sky-200/80 bg-sky-50/70'}`}
+          className={`grid shrink-0 grid-cols-2 gap-1 border-b px-2 py-2 sm:grid-cols-4 ${
+            isDarkMode ? 'border-white/[0.06] bg-[#0F1117]' : 'border-slate-200 bg-slate-50'
+          }`}
         >
+          {tabBtn('people', t('organizations.memberSidebarTabPeople'), pendingReviewCount)}
+          {tabBtn('activity', t('organizations.memberSidebarTabActivity'))}
           {canShowTasksTab && tabBtn('tasks', t('organizations.memberSidebarTabTasks'))}
           {canShowFilesTab && tabBtn('files', t('organizations.memberSidebarTabFiles'))}
-          {tabBtn('people', t('organizations.memberSidebarTabPeople'), pendingReviewCount)}
         </div>
       ) : null}
 
-      <div className="scrollbar-overlay min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div className="scrollbar-overlay min-h-0 flex-1 overflow-y-auto rounded-b-xl px-2 py-2 pb-4">
+        {sidebarTab === 'activity' && (
+          <ul className="space-y-2 px-1">
+            {activityFeedItems.map((item) => (
+              <li
+                key={item.id}
+                className={`rounded-lg border px-2.5 py-2 text-xs ${
+                  isDarkMode
+                    ? 'border-white/[0.06] bg-[#171B24] text-[#A1A8B3]'
+                    : 'border-slate-200 bg-white text-slate-600'
+                }`}
+              >
+                {item.label}
+              </li>
+            ))}
+          </ul>
+        )}
         {sidebarTab === 'tasks' && canShowTasksTab && (
           <p
             className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
@@ -1313,12 +1349,19 @@ function OrganizationMemberSidebar({
             {t('organizations.memberSidebarTasksEmpty')}
           </p>
         )}
-        {sidebarTab === 'files' && canShowFilesTab && (
-          <p
-            className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
-          >
-            {t('organizations.memberSidebarFilesEmpty')}
-          </p>
+        {sidebarTab === 'files' && canShowFilesTab && organizationId && (
+          <OrgMemberSidebarAttachments
+            organizationId={organizationId}
+            channels={searchChannels}
+            selectedChannelId={selectedChannelId}
+            channelPermissionMatrix={channelPermissionMatrix}
+            isDarkMode={isDarkMode}
+            onJumpToChannel={({ organizationId: orgId, roomId }) => {
+              if (orgId && roomId) {
+                onWorkspaceSearchJump?.({ organizationId: orgId, roomId });
+              }
+            }}
+          />
         )}
         {sidebarTab === 'people' && loading && (
           <div className="space-y-2">
@@ -1347,8 +1390,8 @@ function OrganizationMemberSidebar({
               <div
                 className={`sticky top-0 z-[1] px-1 pb-1 pt-1 text-[11px] font-bold uppercase tracking-wide backdrop-blur-sm ${
                   isDarkMode
-                    ? 'bg-[#0a0c12]/95 text-[#6d7380]'
-                    : 'bg-sky-50/95 text-slate-500'
+                    ? 'bg-[#11141C]/95 text-[#6B7280]'
+                    : 'bg-slate-50/95 text-slate-500'
                 }`}
               >
                 {section.key === 'on'
@@ -1382,13 +1425,13 @@ function OrganizationMemberSidebar({
                             className="h-9 w-9 rounded-lg object-cover"
                           />
                         ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-fuchsia-700 text-xs font-bold text-white">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-semibold text-white">
                             {(m.displayName || '?').charAt(0).toUpperCase()}
                           </div>
                         )}
                         <span
                           className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 ${
-                            isDarkMode ? 'border-[#0a0c12]' : 'border-white'
+                            isDarkMode ? 'border-[#11141C]' : 'border-white'
                           } ${online ? 'bg-emerald-400' : 'bg-gray-600'}`}
                           aria-hidden
                         />

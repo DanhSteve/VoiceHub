@@ -1,24 +1,40 @@
-/** Màu accent cho khối (Division) — xoay vòng theo thứ tự */
+/** Accent khối Division — enterprise, không neon */
 export const DIVISION_ACCENTS = [
-  { bar: 'bg-violet-500', glow: 'shadow-[inset_3px_0_0_0_rgb(139,92,246)]', badge: 'bg-violet-500/20 text-violet-300' },
-  { bar: 'bg-emerald-500', glow: 'shadow-[inset_3px_0_0_0_rgb(16,185,129)]', badge: 'bg-emerald-500/20 text-emerald-300' },
-  { bar: 'bg-amber-500', glow: 'shadow-[inset_3px_0_0_0_rgb(245,158,11)]', badge: 'bg-amber-500/20 text-amber-300' },
-  { bar: 'bg-sky-500', glow: 'shadow-[inset_3px_0_0_0_rgb(14,165,233)]', badge: 'bg-sky-500/20 text-sky-300' },
+  {
+    bar: 'bg-[#4F6BED]',
+    glow: 'shadow-[inset_3px_0_0_0_rgb(79,107,237)]',
+    badge: 'bg-[#4F6BED]/15 text-[#A8B8F8]',
+  },
+  {
+    bar: 'bg-emerald-500/80',
+    glow: 'shadow-[inset_3px_0_0_0_rgb(52,211,153)]',
+    badge: 'bg-emerald-500/15 text-emerald-300/90',
+  },
+  {
+    bar: 'bg-slate-500/80',
+    glow: 'shadow-[inset_3px_0_0_0_rgb(100,116,139)]',
+    badge: 'bg-white/10 text-[#A1A8B3]',
+  },
+  {
+    bar: 'bg-sky-500/80',
+    glow: 'shadow-[inset_3px_0_0_0_rgb(56,189,248)]',
+    badge: 'bg-sky-500/15 text-sky-300/90',
+  },
 ];
 
 export function divisionAccent(index) {
   return DIVISION_ACCENTS[index % DIVISION_ACCENTS.length];
 }
 
-/** Màu ô vuông phòng ban — ổn định theo tên/id */
+/** Màu chỉ báo phòng ban — muted */
 export function departmentSquareClass(seed = '') {
   const palette = [
-    'bg-violet-500',
-    'bg-emerald-500',
-    'bg-rose-500',
-    'bg-cyan-500',
-    'bg-amber-500',
-    'bg-indigo-500',
+    'bg-[#4F6BED]/90',
+    'bg-emerald-500/80',
+    'bg-slate-500/80',
+    'bg-sky-500/80',
+    'bg-amber-500/80',
+    'bg-indigo-400/80',
   ];
   let h = 0;
   const s = String(seed);

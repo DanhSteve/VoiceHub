@@ -153,7 +153,9 @@ apiClient.interceptors.response.use(
         toast.error('Bạn không có quyền thực hiện hành động này');
       }
     } else if (error.response?.status === 404) {
-      toast.error('Không tìm thấy dữ liệu');
+      if (!error.config?.skipNotFoundToast) {
+        toast.error('Không tìm thấy dữ liệu');
+      }
     } else if (error.response?.status >= 500) {
       toast.error('Lỗi server. Vui lòng thử lại sau.');
     } else {

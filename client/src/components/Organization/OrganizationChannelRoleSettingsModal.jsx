@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Modal } from '../Shared';
+import { ChevronDown, Plus, X } from 'lucide-react';
 import roleAPI from '../../services/api/roleAPI';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import { channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
 import { normalizeRoleDisplayName } from './roleRbacUtils';
-
-const EMPTY_PERMS = {
-  canSee: false,
-  canRead: false,
-  canWrite: false,
-  canDelete: false,
-  canVoice: false,
-};
+import ChannelPermissionTriToggle from './ChannelPermissionTriToggle';
+import {
+  applyChannelPermissionToggle,
+  channelPermissionGroups,
+  defaultChannelRolePermissions,
+  emptyChannelRolePermissions,
+} from './channelRolePermissionDefs';
+import { roleAccentColor } from './channelRolePermissionDefs';
 
 const unwrap = (payload) => payload?.data ?? payload;
 
@@ -23,18 +23,23 @@ export default function OrganizationChannelRoleSettingsModal({
   channel,
   locale,
   isDarkMode,
+  canManageChannelRoles = false,
   onSaved,
 }) {
-  const [roles, setRoles] = useState([]);
-  const [permByRoleId, setPermByRoleId] = useState({});
+  const [orgRoles, setOrgRoles] = useState([]);
+  const [assigned, setAssigned] = useState([]);
+  const [selectedRoleId, setSelectedRoleId] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   const channelId = channel?._id ? String(channel._id) : '';
   const isVoice = String(channel?.type || 'chat').toLowerCase() === 'voice';
   const channelLabel = channel?.name
     ? channelNameToDisplaySlug(channel.name, locale)
     : 'Kênh';
+
+  const permGroups = useMemo(() => channelPermissionGroups({ isVoiceChannel: isVoice }), [isVoice]);
 
   const loadData = useCallback(async () => {
     if (!organizationId || !channelId) return;
@@ -53,29 +58,44 @@ export default function OrganizationChannelRoleSettingsModal({
       const aclBody = unwrap(aclRes);
       const aclData = aclBody?.data ?? aclBody;
       const entries = Array.isArray(aclData?.entries) ? aclData.entries : [];
-      const nextMap = {};
-      for (const entry of entries) {
-        const rid = String(entry.roleId || '');
-        if (!rid) continue;
-        nextMap[rid] = {
-          canSee: Boolean(entry.permissions?.canSee),
-          canRead: Boolean(entry.permissions?.canRead),
-          canWrite: Boolean(entry.permissions?.canWrite),
-          canDelete: Boolean(entry.permissions?.canDelete),
-          canVoice: Boolean(entry.permissions?.canVoice),
-        };
-      }
-      setRoles(
-        roleList.map((r) => ({
-          id: String(r._id || r.id),
-          name: normalizeRoleDisplayName(r.name),
-        }))
+
+      const roleById = new Map(
+        roleList.map((r) => [
+          String(r._id || r.id),
+          {
+            id: String(r._id || r.id),
+            name: normalizeRoleDisplayName(r.name),
+          },
+        ])
       );
-      setPermByRoleId(nextMap);
+
+      const assignedRows = entries
+        .map((entry) => {
+          const rid = String(entry.roleId || '');
+          const meta = roleById.get(rid);
+          if (!meta) return null;
+          return {
+            ...meta,
+            permissions: {
+              ...emptyChannelRolePermissions(),
+              canSee: Boolean(entry.permissions?.canSee),
+              canRead: Boolean(entry.permissions?.canRead),
+              canWrite: Boolean(entry.permissions?.canWrite),
+              canDelete: Boolean(entry.permissions?.canDelete),
+              canVoice: Boolean(entry.permissions?.canVoice),
+            },
+          };
+        })
+        .filter(Boolean);
+
+      setOrgRoles([...roleById.values()]);
+      setAssigned(assignedRows);
+      setSelectedRoleId(assignedRows[0]?.id || '');
     } catch {
       toast.error('Không tải được quyền kênh theo vai trò');
-      setRoles([]);
-      setPermByRoleId({});
+      setOrgRoles([]);
+      setAssigned([]);
+      setSelectedRoleId('');
     } finally {
       setLoading(false);
     }
@@ -83,43 +103,57 @@ export default function OrganizationChannelRoleSettingsModal({
 
   useEffect(() => {
     if (!isOpen) return;
+    setAddOpen(false);
     loadData();
   }, [isOpen, loadData]);
 
-  const rows = useMemo(
-    () =>
-      roles.map((role) => ({
-        role,
-        permissions: permByRoleId[role.id] || { ...EMPTY_PERMS },
-      })),
-    [roles, permByRoleId]
+  const assignedIds = useMemo(() => new Set(assigned.map((r) => r.id)), [assigned]);
+
+  const availableToAdd = useMemo(
+    () => orgRoles.filter((r) => !assignedIds.has(r.id)),
+    [orgRoles, assignedIds]
   );
 
-  const setPerm = (roleId, key, value) => {
-    setPermByRoleId((prev) => {
-      const current = { ...(prev[roleId] || EMPTY_PERMS), [key]: value };
-      if (key === 'canSee' && value) {
-        current.canRead = true;
-      }
-      if (key === 'canRead' && !value) {
-        current.canWrite = false;
-        current.canDelete = false;
-      }
-      if ((key === 'canWrite' || key === 'canDelete') && value) {
-        current.canSee = true;
-        current.canRead = true;
-      }
-      return { ...prev, [roleId]: current };
-    });
+  const selectedRole = assigned.find((r) => r.id === selectedRoleId) || assigned[0] || null;
+
+  const setSelectedPerm = (key, allowed) => {
+    if (!selectedRole?.id || !canManageChannelRoles) return;
+    setAssigned((prev) =>
+      prev.map((row) =>
+        row.id === selectedRole.id
+          ? { ...row, permissions: applyChannelPermissionToggle(row.permissions, key, allowed) }
+          : row
+      )
+    );
+  };
+
+  const handleAddRole = (role) => {
+    if (!role?.id || !canManageChannelRoles) return;
+    if (assignedIds.has(role.id)) return;
+    const row = {
+      id: role.id,
+      name: role.name,
+      permissions: defaultChannelRolePermissions(isVoice),
+    };
+    setAssigned((prev) => [...prev, row]);
+    setSelectedRoleId(role.id);
+    setAddOpen(false);
+  };
+
+  const handleRemoveSelectedRole = () => {
+    if (!selectedRole?.id || !canManageChannelRoles) return;
+    const next = assigned.filter((r) => r.id !== selectedRole.id);
+    setAssigned(next);
+    setSelectedRoleId(next[0]?.id || '');
   };
 
   const handleSave = async () => {
-    if (!organizationId || !channelId) return;
+    if (!organizationId || !channelId || !canManageChannelRoles) return;
     setSaving(true);
     try {
-      const entries = roles.map((role) => ({
-        roleId: role.id,
-        permissions: permByRoleId[role.id] || { ...EMPTY_PERMS },
+      const entries = assigned.map((row) => ({
+        roleId: row.id,
+        permissions: row.permissions,
       }));
       await organizationAPI.saveChannelRoleAccess(organizationId, channelId, { entries });
       toast.success('Đã lưu quyền kênh');
@@ -132,109 +166,231 @@ export default function OrganizationChannelRoleSettingsModal({
     }
   };
 
-  const cellCls = isDarkMode
-    ? 'border-slate-700/80 text-slate-200'
-    : 'border-slate-200 text-slate-700';
-  const headCls = isDarkMode ? 'bg-slate-900/70 text-slate-300' : 'bg-slate-50 text-slate-600';
+  if (!isOpen) return null;
+
+  const panelBg = isDarkMode ? 'bg-[#313338]' : 'bg-white';
+  const sidebarBg = isDarkMode ? 'bg-[#2b2d31]' : 'bg-slate-50';
+  const borderCls = isDarkMode ? 'border-[#1e1f22]' : 'border-slate-200';
+  const textMuted = isDarkMode ? 'text-[#949ba4]' : 'text-slate-500';
+  const textMain = isDarkMode ? 'text-[#f2f3f5]' : 'text-slate-900';
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={`Cài đặt kênh · ${channelLabel}`}
-      size="lg"
-    >
-      <p className={`mb-4 text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-        Chọn vai trò được phép thấy kênh, đọc/viết/xóa tin nhắn
-        {isVoice ? ' và tham gia voice' : ''}. Chỉ áp dụng khi không có quyền team mặc định.
-      </p>
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/55"
+        aria-label="Đóng"
+        onClick={onClose}
+      />
+      <div
+        className={`relative flex h-[min(640px,90vh)] w-full max-w-4xl flex-col overflow-hidden rounded-xl shadow-2xl ${panelBg} ${textMain}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="channel-advanced-perms-title"
+      >
+        <header
+          className={`flex shrink-0 items-center justify-between border-b px-4 py-3 ${borderCls}`}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 id="channel-advanced-perms-title" className="truncate text-base font-bold">
+              Quyền nâng cao · #{channelLabel}
+            </h2>
+            <ChevronDown className={`h-4 w-4 shrink-0 opacity-50 ${textMuted}`} />
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className={`rounded-md p-1.5 ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}
+            aria-label="Đóng (ESC)"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </header>
 
-      {loading ? (
-        <p className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Đang tải…</p>
-      ) : rows.length === 0 ? (
-        <p className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-          Chưa có vai trò trong tổ chức. Tạo vai trò ở tab Vai trò & quyền trước.
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-700/60">
-          <table className="min-w-full border-collapse text-left text-xs">
-            <thead className={headCls}>
-              <tr>
-                <th className={`border-b px-3 py-2.5 font-semibold ${cellCls}`}>Vai trò</th>
-                <th className={`border-b px-2 py-2.5 text-center font-semibold ${cellCls}`}>
-                  Thấy kênh
-                </th>
-                <th className={`border-b px-2 py-2.5 text-center font-semibold ${cellCls}`}>
-                  Xem chat
-                </th>
-                <th className={`border-b px-2 py-2.5 text-center font-semibold ${cellCls}`}>
-                  Viết chat
-                </th>
-                <th className={`border-b px-2 py-2.5 text-center font-semibold ${cellCls}`}>
-                  Xóa chat
-                </th>
-                {isVoice ? (
-                  <th className={`border-b px-2 py-2.5 text-center font-semibold ${cellCls}`}>
-                    Voice
-                  </th>
+        {!canManageChannelRoles ? (
+          <div className={`flex flex-1 items-center justify-center p-6 text-sm ${textMuted}`}>
+            Chỉ quản trị viên (owner/admin) mới được thêm vai trò và chỉnh quyền cho kênh này.
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1">
+            <aside
+              className={`flex w-[220px] shrink-0 flex-col border-r ${borderCls} ${sidebarBg}`}
+            >
+              <div className={`flex items-center justify-between px-3 py-2.5 text-[11px] font-bold uppercase tracking-wide ${textMuted}`}>
+                <span>Vai trò / thành viên</span>
+                {canManageChannelRoles ? (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      title="Thêm vai trò vào kênh"
+                      disabled={!availableToAdd.length}
+                      onClick={() => setAddOpen((v) => !v)}
+                      className={`rounded p-0.5 ${
+                        isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
+                      } disabled:opacity-30`}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                    {addOpen && availableToAdd.length > 0 ? (
+                      <div
+                        className={`absolute right-0 top-full z-20 mt-1 max-h-48 w-52 overflow-y-auto rounded-lg border py-1 shadow-xl ${
+                          isDarkMode
+                            ? 'border-[#1e1f22] bg-[#111214]'
+                            : 'border-slate-200 bg-white'
+                        }`}
+                      >
+                        {availableToAdd.map((role) => (
+                          <button
+                            key={role.id}
+                            type="button"
+                            onClick={() => handleAddRole(role)}
+                            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+                              isDarkMode ? 'hover:bg-white/[0.06]' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: roleAccentColor(role.id) }}
+                            />
+                            <span className="truncate">{role.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ role, permissions }) => (
-                <tr
-                  key={role.id}
-                  className={isDarkMode ? 'border-t border-slate-800' : 'border-t border-slate-100'}
-                >
-                  <td className={`px-3 py-2 font-medium ${cellCls}`}>{role.name}</td>
-                  {['canSee', 'canRead', 'canWrite', 'canDelete'].map((key) => (
-                    <td key={key} className={`px-2 py-2 text-center ${cellCls}`}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(permissions[key])}
-                        onChange={(e) => setPerm(role.id, key, e.target.checked)}
-                        className="h-4 w-4 accent-indigo-500"
-                      />
-                    </td>
-                  ))}
-                  {isVoice ? (
-                    <td className={`px-2 py-2 text-center ${cellCls}`}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(permissions.canVoice)}
-                        onChange={(e) => setPerm(role.id, 'canVoice', e.target.checked)}
-                        className="h-4 w-4 accent-indigo-500"
-                      />
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </div>
 
-      <div className="mt-5 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className={`rounded-lg px-4 py-2 text-sm font-semibold ${
-            isDarkMode
-              ? 'bg-white/10 text-white hover:bg-white/15'
-              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          Hủy
-        </button>
-        <button
-          type="button"
-          disabled={saving || loading}
-          onClick={handleSave}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
-        >
-          {saving ? 'Đang lưu…' : 'Lưu quyền'}
-        </button>
+              <div className="scrollbar-chat min-h-0 flex-1 overflow-y-auto px-2 py-1">
+                {loading ? (
+                  <p className={`px-2 py-3 text-xs ${textMuted}`}>Đang tải…</p>
+                ) : assigned.length === 0 ? (
+                  <p className={`px-2 py-3 text-xs leading-relaxed ${textMuted}`}>
+                    Chưa có vai trò nào. Bấm + để gán vai trò được xem và trò chuyện trong kênh này.
+                  </p>
+                ) : (
+                  assigned.map((role, idx) => {
+                    const active = String(selectedRole?.id) === role.id;
+                    return (
+                      <button
+                        key={role.id}
+                        type="button"
+                        onClick={() => setSelectedRoleId(role.id)}
+                        className={`mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition ${
+                          active
+                            ? isDarkMode
+                              ? 'bg-[#404249] text-white'
+                              : 'bg-white text-slate-900 shadow-sm'
+                            : isDarkMode
+                              ? 'text-[#b5bac1] hover:bg-white/[0.04]'
+                              : 'text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: roleAccentColor(role.id, idx) }}
+                        />
+                        <span className="truncate font-medium">{role.name}</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              {selectedRole && canManageChannelRoles ? (
+                <div className={`border-t px-3 py-2 ${borderCls}`}>
+                  <button
+                    type="button"
+                    onClick={handleRemoveSelectedRole}
+                    className="w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-rose-400 hover:bg-rose-500/10"
+                  >
+                    Gỡ bỏ {selectedRole.name}
+                  </button>
+                </div>
+              ) : null}
+            </aside>
+
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {loading ? (
+                <div className={`flex flex-1 items-center justify-center text-sm ${textMuted}`}>
+                  Đang tải…
+                </div>
+              ) : !selectedRole ? (
+                <div className={`flex flex-1 items-center justify-center p-6 text-sm ${textMuted}`}>
+                  Thêm vai trò từ danh sách bên trái để cấu hình quyền cho kênh này.
+                </div>
+              ) : (
+                <div className="scrollbar-chat min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                  <p className={`mb-4 text-xs ${textMuted}`}>
+                    Quyền chỉ áp dụng cho kênh <strong className={textMain}>#{channelLabel}</strong>
+                    {' — '}
+                    không đồng bộ sang kênh khác. Thành viên có vai trò được gán sẽ thấy kênh này và mục
+                    phòng/team tương ứng trên sidebar (không cần cấu hình riêng tên mục). Mặc định bật{' '}
+                    <strong className={textMain}>Xem kênh</strong>
+                    {isVoice ? ' và ' : ' và '}
+                    <strong className={textMain}>{isVoice ? 'Kết nối' : 'Xem lịch sử tin nhắn'}</strong>.
+                  </p>
+
+                  {permGroups.map((group) => (
+                    <section key={group.id} className="mb-6">
+                      <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-[#949ba4]">
+                        {group.title}
+                      </h3>
+                      <div className="space-y-4">
+                        {group.items.map((item) => (
+                          <div
+                            key={item.id}
+                            className={`flex items-start justify-between gap-4 border-b pb-4 ${
+                              isDarkMode ? 'border-[#3f4147]/60' : 'border-slate-100'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-semibold">{item.title}</div>
+                              <p className={`mt-1 text-xs leading-relaxed ${textMuted}`}>
+                                {item.description}
+                              </p>
+                            </div>
+                            <ChannelPermissionTriToggle
+                              allowed={Boolean(selectedRole.permissions[item.key])}
+                              onChange={(v) => setSelectedPerm(item.key, v)}
+                              isDarkMode={isDarkMode}
+                              disabled={!canManageChannelRoles}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              )}
+
+              <footer
+                className={`flex shrink-0 justify-end gap-2 border-t px-4 py-3 ${borderCls}`}
+              >
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className={`rounded-lg px-4 py-2 text-sm font-semibold ${
+                    isDarkMode
+                      ? 'bg-white/10 text-white hover:bg-white/15'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  disabled={saving || loading}
+                  onClick={handleSave}
+                  className="rounded-lg bg-[#5865f2] px-4 py-2 text-sm font-semibold text-white hover:bg-[#4752c4] disabled:opacity-50"
+                >
+                  {saving ? 'Đang lưu…' : 'Lưu thay đổi'}
+                </button>
+              </footer>
+            </div>
+          </div>
+        )}
       </div>
-    </Modal>
+    </div>
   );
 }

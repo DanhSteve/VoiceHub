@@ -7,9 +7,14 @@ const taskSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    summary: {
+      type: String,
+      maxlength: 500,
+      default: '',
+    },
     description: {
       type: String,
-      maxlength: 2000,
+      maxlength: 12000,
       default: '',
     },
     assigneeId: {
@@ -95,6 +100,14 @@ const taskSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    aiGenerated: {
+      type: Boolean,
+      default: false,
+    },
+    sourceMessageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
     },
   },
   {

@@ -121,7 +121,7 @@ export default function ChannelMessageMoreMenu({
             <span className="text-slate-400">🤖</span>
           </button>
         )}
-        {isMine && (
+        {isMine && typeof onEdit === 'function' && (
           <button
             type="button"
             role="menuitem"
