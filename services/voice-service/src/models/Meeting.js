@@ -25,6 +25,11 @@ const meetingSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Organization',
     },
+    /** Kênh voice workspace (roomId SFU = channelId) */
+    voiceChannelId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
     participants: [
       {
         userId: {
@@ -86,6 +91,7 @@ meetingSchema.index({ serverId: 1 });
 meetingSchema.index({ organizationId: 1 });
 meetingSchema.index({ status: 1 });
 meetingSchema.index({ startTime: 1 });
+meetingSchema.index({ voiceChannelId: 1, status: 1 });
 
 const Meeting = mongoose.model('Meeting', meetingSchema);
 

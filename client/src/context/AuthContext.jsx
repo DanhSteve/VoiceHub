@@ -70,9 +70,8 @@ function AuthProvider({ children }) {
   // Khi login thành công → setUser(userData từ API)
   const [user, setUser] = useState(null);
   
-  // State loading: true khi đang check auth hoặc đang login
-  // Dùng để hiển thị loading spinner
-  const [loading, setLoading] = useState(false);
+  // State loading: true khi đang check auth lần đầu (reload) — tránh ProtectedRoute redirect oan
+  const [loading, setLoading] = useState(true);
 
   /* ========================================
      useEffect: CHECK AUTH KHI APP KHỞI ĐỘNG
@@ -84,6 +83,7 @@ function AuthProvider({ children }) {
   useEffect(() => {
     // Async function để check authentication
     const checkAuth = async () => {
+      setLoading(true);
       try {
         // Lấy token từ localStorage (được lưu khi login)
         const token = getToken();

@@ -1,110 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ConfirmDialog, Modal, GlassCard, GradientButton } from '../Shared';
 import { useAuth } from '../../context/AuthContext';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import roleAPI from '../../services/api/roleAPI';
+import RoleHierarchyKanban from './RoleHierarchyKanban';
+import RolePermissionsViewModal from './RolePermissionsViewModal';
+import {
+  ACTION_LABEL,
+  PERMISSION_EDITOR_OPTIONS,
+  TIER_META,
+  fullPermissionState,
+  isFullPermissionState,
+  normalizeRoleDisplayName,
+  permissionEntriesFromState,
+  permissionStateFromEntries,
+  priorityFromTier,
+  summarizePermissions,
+  resolveRoleTier,
+  TIER_DEPARTMENT,
+} from './roleRbacUtils';
 
 const unwrap = (payload) => payload?.data ?? payload;
-
-const PERMISSION_EDITOR_OPTIONS = [
-  { resource: 'chat', label: 'Chat', actions: ['read', 'write', 'delete'] },
-  { resource: 'task', label: 'Công việc', actions: ['read', 'write', 'delete'] },
-  { resource: 'document', label: 'Tài liệu', actions: ['read', 'write', 'delete'] },
-  { resource: 'voice', label: 'Voice', actions: ['read', 'write', 'delete'] },
-];
-
-const ACTION_LABEL = {
-  read: 'Xem',
-  write: 'Viết',
-  delete: 'Xóa',
-};
-
-function normalizeRoleDisplayName(name) {
-  const raw = String(name || '').trim();
-  if (!raw) return 'Vai trò';
-  return raw
-    .replace(/\s*[•·]\s*(div|dep|team|branch)_[a-z0-9_-]+$/i, '')
-    .replace(
-      /^\s*(khối|khoi|phòng ban|phong ban|team|chi nhánh|chi nhanh|division|department|branch)\s*:\s*/i,
-      ''
-    )
-    .trim();
-}
-
-function normalizePermissionEntries(permissions) {
-  if (!Array.isArray(permissions)) return [];
-  return permissions
-    .map((p) => ({
-      resource: String(p?.resource || '').trim(),
-      actions: Array.isArray(p?.actions)
-        ? [...new Set(p.actions.map((a) => String(a || '').trim()).filter(Boolean))]
-        : [],
-    }))
-    .filter((p) => p.resource && p.actions.length > 0);
-}
-
-function permissionStateFromEntries(permissions) {
-  const out = {};
-  for (const p of normalizePermissionEntries(permissions)) {
-    for (const action of p.actions) {
-      out[`${p.resource}:${action}`] = true;
-    }
-  }
-  return out;
-}
-
-function permissionEntriesFromState(state) {
-  const grouped = new Map();
-  for (const key of Object.keys(state || {})) {
-    if (!state[key]) continue;
-    const [resource, action] = String(key).split(':');
-    if (!resource || !action) continue;
-    if (!grouped.has(resource)) grouped.set(resource, new Set());
-    grouped.get(resource).add(action);
-  }
-  return Array.from(grouped.entries())
-    .map(([resource, actionsSet]) => ({
-      resource,
-      actions: Array.from(actionsSet),
-    }))
-    .filter((p) => p.resource && p.actions.length > 0);
-}
-
-function summarizePermissions(permissions) {
-  const normalized = normalizePermissionEntries(permissions);
-  if (!normalized.length) return 'Không có quyền';
-  return normalized
-    .map((p) => {
-      const label = PERMISSION_EDITOR_OPTIONS.find((x) => x.resource === p.resource)?.label || p.resource;
-      const acts = p.actions.map((a) => ACTION_LABEL[a] || a).join(', ');
-      return `${label}: ${acts}`;
-    })
-    .join(' · ');
-}
-
-function RolePermissionsSummary({ permissions }) {
-  const normalized = normalizePermissionEntries(permissions);
-  if (!normalized.length) {
-    return <span className="text-gray-500">Không có quyền gán</span>;
-  }
-  return (
-    <ul className="mt-2 flex flex-wrap gap-1.5 text-xs text-gray-300">
-      {normalized.map((p, i) => (
-        <li
-          key={`${p.resource}-${i}`}
-          className="rounded-full border border-slate-700/80 bg-slate-800/70 px-2.5 py-1"
-        >
-          <span className="font-medium text-gray-100">
-            {PERMISSION_EDITOR_OPTIONS.find((x) => x.resource === p.resource)?.label || p.resource}
-          </span>
-          {`: ${p.actions.map((a) => ACTION_LABEL[a] || a).join(', ')}`}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 const ADMIN_TABS = [
   { id: 'general', label: 'Tổng quan', icon: '⚙️' },
@@ -174,7 +92,24 @@ function OrganizationSettingsPanel({
     [myRole]
   );
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState('general');
+
+  const selectTab = useCallback(
+    (tabId) => {
+      setActiveTab(tabId);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (tabId && tabId !== 'general') next.set('tab', tabId);
+          else next.delete('tab');
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
   const [roleDeleteConfirmId, setRoleDeleteConfirmId] = useState(null);
   const [loadingOrg, setLoadingOrg] = useState(false);
 
@@ -221,6 +156,13 @@ function OrganizationSettingsPanel({
     icon: '🧩',
   });
   const [rolePermissionState, setRolePermissionState] = useState({});
+  const [roleTier, setRoleTier] = useState(TIER_DEPARTMENT);
+  const [rolePermissionsView, setRolePermissionsView] = useState(null);
+
+  const roleAllPermissions = useMemo(
+    () => isFullPermissionState(rolePermissionState),
+    [rolePermissionState]
+  );
 
   /** Tên tổ chức từ API — dùng để so khớp khi xóa (không phụ thuộc chỉnh sửa form chưa lưu). */
   const [serverOrgName, setServerOrgName] = useState('');
@@ -387,7 +329,8 @@ function OrganizationSettingsPanel({
     if (!orgId) return;
     const first = isFullAccess ? 'general' : 'profile';
     const allowed = (isFullAccess ? ADMIN_TABS : MEMBER_TABS).map((t) => t.id);
-    const nextTab = initialTab && allowed.includes(initialTab) ? initialTab : first;
+    const urlTab = searchParams.get('tab') || initialTab;
+    const nextTab = urlTab && allowed.includes(urlTab) ? urlTab : first;
     setActiveTab(nextTab);
     loadOrgFromApi();
     loadRoles();
@@ -403,7 +346,7 @@ function OrganizationSettingsPanel({
     } catch {
       /* ignore */
     }
-  }, [orgId, isFullAccess, initialTab, loadOrgFromApi, loadRoles]);
+  }, [orgId, isFullAccess, initialTab, searchParams, loadOrgFromApi, loadRoles]);
 
   useEffect(() => {
     if (!user) return;
@@ -719,6 +662,11 @@ function OrganizationSettingsPanel({
       setCreateChannelName('');
       setCreateChannelModalOpen(false);
       await loadStructure();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('vh:org-structure-changed', { detail: { orgId } })
+        );
+      }
       toast.success('Đã tạo kênh');
     } catch {
       toast.error('Không tạo được kênh');
@@ -845,6 +793,7 @@ function OrganizationSettingsPanel({
       icon: '🧩',
     });
     setRolePermissionState({});
+    setRoleTier(TIER_DEPARTMENT);
     setRoleEditorOpen(true);
   };
 
@@ -857,6 +806,7 @@ function OrganizationSettingsPanel({
       color: role.color || 'from-purple-600 to-pink-600',
       icon: role.icon || '🧩',
     });
+    setRoleTier(resolveRoleTier(role));
     setRolePermissionState(permissionStateFromEntries(role.permissions));
     setRoleEditorOpen(true);
   };
@@ -879,6 +829,7 @@ function OrganizationSettingsPanel({
         ...roleDraft,
         name: fallbackHierarchyName || roleDraft.name,
         permissions: permissionsPayload,
+        priority: priorityFromTier(roleTier),
         organizationId: orgId,
         serverId: orgId,
       };
@@ -890,7 +841,9 @@ function OrganizationSettingsPanel({
         toast.success('Đã tạo vai trò');
       }
       setRoleEditorOpen(false);
+      setEditingRoleId(null);
       setEditingRoleOriginalName('');
+      setRoleTier(TIER_DEPARTMENT);
       await loadRoles();
     } catch (e) {
       toast.error(e?.message || 'Không lưu được vai trò');
@@ -913,6 +866,23 @@ function OrganizationSettingsPanel({
       await loadRoles();
     } catch (e) {
       toast.error(e?.message || 'Lỗi xóa vai trò');
+    } finally {
+      setRoleLoading(false);
+    }
+  };
+
+  const persistRoleHierarchy = async (updates) => {
+    if (!updates?.length) return;
+    try {
+      setRoleLoading(true);
+      await Promise.all(
+        updates.map(({ id, priority }) => roleAPI.updateRole(id, { priority }))
+      );
+      await loadRoles();
+      toast.success('Đã cập nhật thứ bậc vai trò');
+    } catch (e) {
+      toast.error(e?.message || 'Không lưu được thứ bậc');
+      await loadRoles();
     } finally {
       setRoleLoading(false);
     }
@@ -1006,7 +976,7 @@ function OrganizationSettingsPanel({
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => selectTab(tab.id)}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all ${
                     activeTab === tab.id
                       ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
@@ -1027,7 +997,7 @@ function OrganizationSettingsPanel({
                   <button
                     key={tab.id}
                     type="button"
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => selectTab(tab.id)}
                     className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold ${
                       activeTab === tab.id
                         ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
@@ -1459,26 +1429,72 @@ function OrganizationSettingsPanel({
           )}
 
           {isFullAccess && activeTab === 'roles' && (
-            <div className="mx-auto max-w-5xl">
+            <div className="mx-auto max-w-6xl space-y-4">
               <GlassCard className="border border-slate-800 bg-slate-900/60">
-                <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-xl font-bold text-white">Quản lý vai trò (RBAC)</h3>
+                <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold text-white">Quản lý vai trò (RBAC)</h3>
+                    <p className="mt-1 max-w-xl text-sm text-slate-400">
+                      Bấm tên vai trò để xem quyền. Kéo thả giữa 4 cột: Điều hành → Khối → Phòng → Team.
+                    </p>
+                  </div>
                   <GradientButton variant="primary" onClick={openCreateRole} disabled={roleLoading}>
                     + Tạo vai trò
                   </GradientButton>
                 </div>
                 {roleEditorOpen && (
-                  <div className="mb-4 rounded-xl border border-slate-700 bg-[#040f2a] p-4">
-                    <div className="space-y-3">
-                      <input
-                        value={roleDraft.name}
-                        onChange={(e) => setRoleDraft((p) => ({ ...p, name: e.target.value }))}
-                        placeholder="Tên vai trò"
-                        className="w-full rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-white"
-                      />
-                      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
-                          Quyền cho vai trò
+                  <div className="mb-5 rounded-2xl border border-violet-500/30 bg-gradient-to-br from-[#040f2a] to-slate-950/80 p-5 shadow-lg shadow-violet-950/20">
+                    <h4 className="mb-3 text-sm font-semibold text-violet-200">
+                      {editingRoleId ? 'Chỉnh sửa vai trò' : 'Vai trò mới'}
+                    </h4>
+                    <div className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-slate-400">
+                            Tên vai trò
+                          </label>
+                          <input
+                            value={roleDraft.name}
+                            onChange={(e) => setRoleDraft((p) => ({ ...p, name: e.target.value }))}
+                            placeholder="VD: Trưởng phòng Dev"
+                            className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-4 py-2.5 text-white placeholder:text-slate-500 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/40"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-slate-400">
+                            Cấp vai trò
+                          </label>
+                          <select
+                            value={roleTier}
+                            onChange={(e) => setRoleTier(e.target.value)}
+                            className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-4 py-2.5 text-white focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/40"
+                          >
+                            {TIER_META.map((tier) => (
+                              <option key={tier.id} value={tier.id}>
+                                {tier.title} — {tier.hint}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-slate-700/80 bg-slate-900/50 p-4">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            Quyền cho vai trò
+                          </span>
+                          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-sm font-semibold text-violet-200 transition hover:bg-violet-500/20">
+                            <input
+                              type="checkbox"
+                              checked={roleAllPermissions}
+                              onChange={(e) => {
+                                setRolePermissionState(
+                                  e.target.checked ? fullPermissionState() : {}
+                                );
+                              }}
+                              className="h-4 w-4 rounded border-slate-500 bg-slate-900 accent-violet-500"
+                            />
+                            Toàn quyền
+                          </label>
                         </div>
                         <div className="space-y-2">
                           {PERMISSION_EDITOR_OPTIONS.map((group) => (
@@ -1525,6 +1541,8 @@ function OrganizationSettingsPanel({
                         onClick={() => {
                           setRoleEditorOpen(false);
                           setRolePermissionState({});
+                          setRoleTier(TIER_DEPARTMENT);
+                          setEditingRoleId(null);
                           setEditingRoleOriginalName('');
                         }}
                       >
@@ -1541,41 +1559,33 @@ function OrganizationSettingsPanel({
                     </div>
                   </div>
                 )}
-                <div className="space-y-2">
-                  {roles.map((role) => (
-                    <div
-                      key={role.id || role._id}
-                      className="flex items-start justify-between gap-3 rounded-xl border border-slate-800 bg-[#040f2a] p-4"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-bold text-white">
-                          {normalizeRoleDisplayName(role.name)}
-                        </div>
-                        <RolePermissionsSummary permissions={role.permissions} />
-                      </div>
-                      <div className="flex shrink-0 gap-2">
-                        <button
-                          type="button"
-                          className="rounded-lg border border-slate-800 px-3 py-2 text-sm hover:bg-slate-800/70"
-                          onClick={() => openEditRole(role)}
-                        >
-                          Sửa
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-lg border border-slate-800 px-3 py-2 text-sm text-red-400 hover:bg-slate-800/70"
-                          onClick={() => requestDeleteRole(role.id || role._id)}
-                        >
-                          Xóa
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                  {roles.length === 0 && (
-                    <p className="text-sm text-gray-500">Chưa có vai trò tùy chỉnh hoặc API chưa trả dữ liệu.</p>
-                  )}
-                </div>
+                {roleLoading && roles.length === 0 ? (
+                  <p className="py-8 text-center text-sm text-slate-500">Đang tải vai trò…</p>
+                ) : roles.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-700 py-10 text-center text-sm text-slate-500">
+                    Chưa có vai trò. Bấm &quot;+ Tạo vai trò&quot; để bắt đầu.
+                  </p>
+                ) : (
+                  <RoleHierarchyKanban
+                    roles={roles}
+                    disabled={roleLoading}
+                    onRoleNameClick={(role) => setRolePermissionsView(role)}
+                    onEdit={openEditRole}
+                    onDelete={(role) => requestDeleteRole(role.id || role._id)}
+                    onHierarchyPersist={persistRoleHierarchy}
+                  />
+                )}
               </GlassCard>
+
+              <RolePermissionsViewModal
+                role={rolePermissionsView}
+                isOpen={Boolean(rolePermissionsView)}
+                onClose={() => setRolePermissionsView(null)}
+                onEdit={(role) => {
+                  setRolePermissionsView(null);
+                  openEditRole(role);
+                }}
+              />
             </div>
           )}
 

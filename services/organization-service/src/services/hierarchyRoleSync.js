@@ -84,7 +84,11 @@ async function listRoles(serverId) {
   return res.data.data;
 }
 
-async function createRole({ organizationId, name, permissions }) {
+const PRIORITY_DIVISION = 140;
+const PRIORITY_DEPARTMENT = 80;
+const PRIORITY_TEAM = 20;
+
+async function createRole({ organizationId, name, permissions, priority = PRIORITY_TEAM }) {
   const res = await callRolePermissionApi(
     () =>
       axios.post(
@@ -95,7 +99,7 @@ async function createRole({ organizationId, name, permissions }) {
           organizationId: String(organizationId),
           permissions: Array.isArray(permissions) ? permissions : [],
           isDefault: false,
-          priority: 20,
+          priority,
         },
         { headers: headers(), timeout: 8000, validateStatus: () => true }
       ),
@@ -110,10 +114,11 @@ async function createRole({ organizationId, name, permissions }) {
   return null;
 }
 
-async function updateRole(roleId, { name, permissions }) {
+async function updateRole(roleId, { name, permissions, priority }) {
   const payload = {};
   if (name != null) payload.name = name;
   if (Array.isArray(permissions)) payload.permissions = permissions;
+  if (priority != null) payload.priority = priority;
   const res = await callRolePermissionApi(
     () =>
       axios.put(
@@ -150,7 +155,11 @@ function samePermissions(a, b) {
   return JSON.stringify(normalizePermissions(a)) === JSON.stringify(normalizePermissions(b));
 }
 
-async function ensureRoleByTag(organizationId, roles, { tag, expectedName, expectedPermissions }) {
+async function ensureRoleByTag(
+  organizationId,
+  roles,
+  { tag, expectedName, expectedPermissions, expectedPriority }
+) {
   if (!Array.isArray(roles)) return;
   const existing = roles.find((r) => String(r?.name || '').includes(tag));
   if (!existing) {
@@ -158,16 +167,20 @@ async function ensureRoleByTag(organizationId, roles, { tag, expectedName, expec
       organizationId,
       name: expectedName,
       permissions: expectedPermissions,
+      priority: expectedPriority,
     });
     if (created?._id) roles.push(created);
     return;
   }
   const shouldUpdateName = String(existing.name) !== expectedName;
   const shouldUpdatePermissions = !samePermissions(existing.permissions, expectedPermissions);
-  if (shouldUpdateName || shouldUpdatePermissions) {
+  const shouldUpdatePriority =
+    expectedPriority != null && Number(existing.priority) !== Number(expectedPriority);
+  if (shouldUpdateName || shouldUpdatePermissions || shouldUpdatePriority) {
     await updateRole(existing._id, {
       ...(shouldUpdateName ? { name: expectedName } : {}),
       ...(shouldUpdatePermissions ? { permissions: expectedPermissions } : {}),
+      ...(shouldUpdatePriority ? { priority: expectedPriority } : {}),
     });
   }
 }
@@ -180,6 +193,7 @@ async function ensureDivisionRole(organizationId, divisionId, divisionName) {
       tag: `div_${shortId(divisionId)}`,
       expectedName: divisionRoleName(divisionName, divisionId),
       expectedPermissions: PERMS_VIEW_ONLY,
+      expectedPriority: PRIORITY_DIVISION,
     });
   } catch (error) {
     logger.warn('[hierarchyRoleSync] ensureDivisionRole failed', error.message);
@@ -194,6 +208,7 @@ async function ensureDepartmentRole(organizationId, departmentId, departmentName
       tag: `dep_${shortId(departmentId)}`,
       expectedName: departmentRoleName(departmentName, departmentId),
       expectedPermissions: PERMS_VIEW_ONLY,
+      expectedPriority: PRIORITY_DEPARTMENT,
     });
   } catch (error) {
     logger.warn('[hierarchyRoleSync] ensureDepartmentRole failed', error.message);
@@ -208,6 +223,7 @@ async function ensureTeamRole(organizationId, teamId, teamName) {
       tag: `team_${shortId(teamId)}`,
       expectedName: teamRoleName(teamName, teamId),
       expectedPermissions: PERMS_TEAM_FULL,
+      expectedPriority: PRIORITY_TEAM,
     });
   } catch (error) {
     logger.warn('[hierarchyRoleSync] ensureTeamRole failed', error.message);
@@ -225,6 +241,7 @@ async function syncHierarchyRoles(organizationId, { divisions = [], departments 
         tag: `div_${shortId(divisionId)}`,
         expectedName: divisionRoleName(division?.name, divisionId),
         expectedPermissions: PERMS_VIEW_ONLY,
+        expectedPriority: PRIORITY_DIVISION,
       });
     }
     for (const department of departments) {
@@ -234,6 +251,7 @@ async function syncHierarchyRoles(organizationId, { divisions = [], departments 
         tag: `dep_${shortId(departmentId)}`,
         expectedName: departmentRoleName(department?.name, departmentId),
         expectedPermissions: PERMS_VIEW_ONLY,
+        expectedPriority: PRIORITY_DEPARTMENT,
       });
     }
     for (const team of teams) {
@@ -243,6 +261,7 @@ async function syncHierarchyRoles(organizationId, { divisions = [], departments 
         tag: `team_${shortId(teamId)}`,
         expectedName: teamRoleName(team?.name, teamId),
         expectedPermissions: PERMS_TEAM_FULL,
+        expectedPriority: PRIORITY_TEAM,
       });
     }
   } catch (error) {

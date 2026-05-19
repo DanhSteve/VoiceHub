@@ -6,11 +6,13 @@ const Department = require('../models/Department');
 const Team = require('../models/Team');
 const Channel = require('../models/Channel');
 const ChannelAccess = require('../models/ChannelAccess');
+const ChannelRoleAccess = require('../models/ChannelRoleAccess');
 const axios = require('axios');
 const { emitRealtimeEvent } = require('/shared');
 const { syncUserOrgRole } = require('../services/rolePermissionOrgSync');
 const { syncHierarchyRoles } = require('../services/hierarchyRoleSync');
 const { purgeOrganizationEverywhere } = require('../services/organizationCascadePurge');
+const { resolveTaskWorkspaceScope } = require('../services/taskWorkspaceScope.service');
 
 const getUserId = (req) => req.user?.id || req.user?.userId || req.user?._id;
 const MAX_OWNED_ORGS_PER_USER = 3;
@@ -114,7 +116,7 @@ function roleInternalHeaders() {
   return h;
 }
 
-async function fetchUserRoleNamesInOrg(userId, orgId) {
+async function fetchUserRolesInOrg(userId, orgId) {
   if (!userId || !orgId || !GATEWAY_INTERNAL_TOKEN) return [];
   try {
     const res = await axios.get(
@@ -128,10 +130,45 @@ async function fetchUserRoleNamesInOrg(userId, orgId) {
       }
     );
     if (res.status !== 200 || !Array.isArray(res.data?.data)) return [];
-    return res.data.data.map((r) => String(r?.name || '')).filter(Boolean);
+    return res.data.data
+      .map((r) => ({
+        id: String(r?._id || r?.id || '').trim(),
+        name: String(r?.name || '').trim(),
+      }))
+      .filter((r) => r.id);
   } catch {
     return [];
   }
+}
+
+async function fetchUserRoleNamesInOrg(userId, orgId) {
+  const roles = await fetchUserRolesInOrg(userId, orgId);
+  return roles.map((r) => r.name).filter(Boolean);
+}
+
+function normalizeRoleChannelPermissions(raw = {}) {
+  return {
+    canSee: Boolean(raw.canSee),
+    canRead: Boolean(raw.canRead),
+    canWrite: Boolean(raw.canWrite),
+    canDelete: Boolean(raw.canDelete),
+    canVoice: Boolean(raw.canVoice),
+  };
+}
+
+function mergeRoleChannelPermissions(acc, next) {
+  return {
+    canSee: acc.canSee || next.canSee,
+    canRead: acc.canRead || next.canRead,
+    canWrite: acc.canWrite || next.canWrite,
+    canDelete: acc.canDelete || next.canDelete,
+    canVoice: acc.canVoice || next.canVoice,
+  };
+}
+
+function hasAnyRoleChannelPermission(permissions) {
+  const p = normalizeRoleChannelPermissions(permissions);
+  return p.canSee || p.canRead || p.canWrite || p.canDelete || p.canVoice;
 }
 
 function hasScopedRoleTag(roleNames, tagPrefix, entityId) {
@@ -139,6 +176,19 @@ function hasScopedRoleTag(roleNames, tagPrefix, entityId) {
   if (!id) return false;
   const token = `${String(tagPrefix)}_${id}`.toLowerCase();
   return (roleNames || []).some((name) => String(name || '').toLowerCase().includes(token));
+}
+
+function hasExecutiveRbacRole(roleNames) {
+  return (roleNames || []).some((name) => {
+    const n = String(name || '').trim().toLowerCase();
+    if (!n) return false;
+    if (n.includes('quản trị') || n.includes('quan tri') || n.includes('administrator')) {
+      return true;
+    }
+    if (n === 'admin' || n.includes('owner') || n.includes('chủ sở')) return true;
+    if (n === 'hr' || n.includes('nhân sự') || n.includes('nhan su')) return true;
+    return false;
+  });
 }
 
 const seedHierarchyStructure = async ({ organizationId, ownerId, blueprint }) => {
@@ -715,11 +765,35 @@ exports.getAccessibleChannelIds = async (req, res, next) => {
         },
       ])
     );
+    const userRoles = await fetchUserRolesInOrg(userId, orgId);
+    const userRoleIds = new Set(userRoles.map((r) => r.id));
+    const roleNames = userRoles.map((r) => r.name);
+    const roleAclRows = await ChannelRoleAccess.find({ organization: orgId })
+      .select('channel roleId permissions')
+      .lean();
+    const roleAclByChannelId = new Map();
+    for (const row of roleAclRows) {
+      if (!userRoleIds.has(String(row.roleId))) continue;
+      const channelKey = String(row.channel);
+      const prev = roleAclByChannelId.get(channelKey) || {
+        canSee: false,
+        canRead: false,
+        canWrite: false,
+        canDelete: false,
+        canVoice: false,
+      };
+      roleAclByChannelId.set(
+        channelKey,
+        mergeRoleChannelPermissions(prev, normalizeRoleChannelPermissions(row.permissions))
+      );
+    }
     const membershipTeamId = String(membership.team || '');
     const membershipDivisionId = String(membership.division || '');
+    const membershipDepartmentId = String(membership.department || '');
     const membershipRole = Membership.normalizeRole(membership.role);
-    const isOrgAdminScope = membershipRole === 'owner' || membershipRole === 'admin';
-    const roleNames = await fetchUserRoleNamesInOrg(userId, orgId);
+    const isOrgAdminScope =
+      membershipRole === 'owner' || membershipRole === 'admin' || membershipRole === 'hr';
+    const isStructureAdmin = isOrgAdminScope || hasExecutiveRbacRole(roleNames);
     const uid = String(userId);
     const permissionsByChannelId = {};
     const channelIds = [];
@@ -727,52 +801,68 @@ exports.getAccessibleChannelIds = async (req, res, next) => {
     for (const ch of channels) {
       const channelId = String(ch._id);
       const acl = aclByChannelId.get(channelId) || null;
+      const roleAcl = roleAclByChannelId.get(channelId) || null;
       const isPrimaryTeam = membershipTeamId && String(ch.team || '') === membershipTeamId;
       const inMembershipDivision =
         membershipDivisionId && String(ch.division || '') === membershipDivisionId;
+      const inMembershipDepartment =
+        membershipDepartmentId && String(ch.department || '') === membershipDepartmentId;
       const hasTeamScopedRole = hasScopedRoleTag(roleNames, 'team', ch.team);
-      const hasDepartmentScopedRole = hasScopedRoleTag(roleNames, 'dep', ch.department);
-      const hasDivisionScopedRole = hasScopedRoleTag(roleNames, 'div', ch.division);
 
+      let canSee = false;
       let canRead = false;
       let canWrite = false;
+      let canDelete = false;
       let canVoice = false;
 
-      if (isOrgAdminScope) {
-        // Owner/Admin được toàn quyền trên mọi kênh trong tổ chức (xuyên khối/phòng/team).
+      if (isStructureAdmin) {
+        canSee = true;
         canRead = true;
         canWrite = true;
+        canDelete = true;
         canVoice = true;
       } else if (isPrimaryTeam || hasTeamScopedRole) {
+        canSee = true;
         canRead = true;
         canWrite = true;
+        canDelete = true;
         canVoice = true;
-      } else if (hasDepartmentScopedRole || hasDivisionScopedRole) {
-        // Role khối/phòng ban: cho phép hoạt động chat/voice trên kênh thuộc phạm vi đã cấp.
-        // Tránh tình trạng UI hiển thị khóa dù user đã được cấp role theo cấu trúc.
-        canRead = true;
-        canWrite = true;
-        canVoice = true;
+      } else if (roleAcl) {
+        canSee = roleAcl.canSee;
+        canRead = roleAcl.canRead;
+        canWrite = roleAcl.canWrite;
+        canDelete = roleAcl.canDelete;
+        canVoice = roleAcl.canVoice;
       } else if (acl) {
+        canSee = Boolean(acl.canRead);
         canRead = Boolean(acl.canRead);
         canWrite = Boolean(acl.canWrite);
         canVoice = Boolean(acl.canVoice);
-      } else if (inMembershipDivision) {
-        // Trong cùng khối: chỉ hiển thị cấu trúc, chưa có ACL thì không đọc/ghi/voice.
+      } else if (inMembershipDivision || inMembershipDepartment) {
+        canSee = false;
         canRead = false;
       }
 
       if (ch.members && ch.members.length > 0) {
         const inLegacyMemberList = ch.members.some((m) => String(m) === uid || String(m?._id || m) === uid);
         if (inLegacyMemberList) {
+          canSee = true;
           canRead = true;
           canWrite = true;
+          canDelete = true;
           canVoice = true;
         }
       }
 
-      permissionsByChannelId[channelId] = { canRead, canWrite, canVoice };
-      if (canRead) channelIds.push(channelId);
+      const visible = canSee || canRead;
+      permissionsByChannelId[channelId] = {
+        canSee: visible,
+        canRead,
+        canWrite,
+        canDelete,
+        canVoice,
+      };
+      if (visible) channelIds.push(channelId);
     }
 
     res.json({
@@ -785,9 +875,28 @@ exports.getAccessibleChannelIds = async (req, res, next) => {
           divisionId: membership.division ? String(membership.division) : null,
           departmentId: membership.department ? String(membership.department) : null,
           teamId: membership.team ? String(membership.team) : null,
+          canSeeAllStructure: isStructureAdmin,
         },
       },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Phạm vi xem/tạo task trong workspace tổ chức (owner/admin/hr, trưởng phòng, team leader, nhân viên). */
+exports.getTaskWorkspaceScope = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { orgId } = req.params;
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+    const scope = await resolveTaskWorkspaceScope(userId, orgId);
+    if (!scope) {
+      return res.status(403).json({ status: 'fail', message: 'Access denied' });
+    }
+    return res.json({ status: 'success', data: scope });
   } catch (error) {
     next(error);
   }
@@ -879,6 +988,103 @@ exports.revokeChannelAccess = async (req, res, next) => {
       user: userId,
     });
     return res.json({ status: 'success', message: 'Access revoked' });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.listChannelRoleAccess = async (req, res, next) => {
+  try {
+    const { orgId, channelId } = req.params;
+    const channel = await Channel.findOne({
+      _id: channelId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id name type team department division')
+      .lean();
+    if (!channel) {
+      return res.status(404).json({ status: 'fail', message: 'Channel not found' });
+    }
+    const rows = await ChannelRoleAccess.find({ organization: orgId, channel: channelId })
+      .select('roleId permissions updatedAt')
+      .lean();
+    return res.json({
+      status: 'success',
+      data: {
+        channel,
+        entries: rows.map((row) => ({
+          roleId: String(row.roleId),
+          permissions: normalizeRoleChannelPermissions(row.permissions),
+        })),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.saveChannelRoleAccess = async (req, res, next) => {
+  try {
+    const actorId = getUserId(req);
+    const { orgId, channelId } = req.params;
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const channel = await Channel.findOne({
+      _id: channelId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id')
+      .lean();
+    if (!channel) {
+      return res.status(404).json({ status: 'fail', message: 'Channel not found' });
+    }
+
+    const keepRoleIds = [];
+    for (const entry of entries) {
+      const roleId = String(entry?.roleId || '').trim();
+      if (!roleId) continue;
+      const permissions = normalizeRoleChannelPermissions(entry?.permissions || {});
+      if (!hasAnyRoleChannelPermission(permissions)) {
+        await ChannelRoleAccess.deleteOne({ organization: orgId, channel: channelId, roleId });
+        continue;
+      }
+      keepRoleIds.push(roleId);
+      await ChannelRoleAccess.findOneAndUpdate(
+        { organization: orgId, channel: channelId, roleId },
+        {
+          organization: orgId,
+          channel: channelId,
+          roleId,
+          permissions,
+          updatedBy: actorId || null,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+
+    if (entries.length === 0) {
+      await ChannelRoleAccess.deleteMany({ organization: orgId, channel: channelId });
+    } else {
+      await ChannelRoleAccess.deleteMany({
+        organization: orgId,
+        channel: channelId,
+        roleId: { $nin: keepRoleIds },
+      });
+    }
+
+    const rows = await ChannelRoleAccess.find({ organization: orgId, channel: channelId })
+      .select('roleId permissions')
+      .lean();
+    return res.json({
+      status: 'success',
+      data: {
+        entries: rows.map((row) => ({
+          roleId: String(row.roleId),
+          permissions: normalizeRoleChannelPermissions(row.permissions),
+        })),
+      },
+    });
   } catch (error) {
     return next(error);
   }
