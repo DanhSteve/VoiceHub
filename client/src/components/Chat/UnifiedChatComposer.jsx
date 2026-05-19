@@ -42,6 +42,7 @@ function UnifiedChatComposer({
   /** Một dòng (input text) thay vì textarea */
   singleLine = false,
   mentionItems = [],
+  onPaste,
 }) {
   const { isDarkMode } = useTheme();
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -392,6 +393,7 @@ function UnifiedChatComposer({
             className={textareaClass}
           />
         )}
+
 
         <div
           className={`flex shrink-0 ${

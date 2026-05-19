@@ -35,13 +35,17 @@ export default function ConversationSearchPanel({
   messages = [],
   matchesMessage,
   onSelectMessage,
+  /** Kết quả từ server (ưu tiên khi có query) */
+  serverResults = null,
+  serverSearching = false,
 }) {
   const { t } = useAppStrings();
 
   const results = useMemo(() => {
     if (!open || !query?.trim()) return [];
+    if (Array.isArray(serverResults)) return serverResults.slice(0, 50);
     return (messages || []).filter((m) => matchesMessage?.(m)).slice(0, 50);
-  }, [open, query, messages, matchesMessage]);
+  }, [open, query, messages, matchesMessage, serverResults]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -114,6 +118,8 @@ export default function ConversationSearchPanel({
             <p className={`px-3 py-8 text-center text-sm leading-relaxed ${muted}`}>
               {t('friendChat.conversationSearchEmpty')}
             </p>
+          ) : serverSearching ? (
+            <p className={`px-3 py-8 text-center text-sm ${muted}`}>{t('friendChat.searching')}</p>
           ) : results.length === 0 ? (
             <p className={`px-3 py-8 text-center text-sm ${muted}`}>{t('friendChat.searchNoMatch')}</p>
           ) : (

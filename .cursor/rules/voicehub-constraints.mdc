@@ -10,3 +10,10 @@ alwaysApply: true
 - **Tương thích**: Ưu tiên sửa lỗi cục bộ (null check, populate thiếu model, query hợp lệ) thay vì refactor lớn hoặc đổi contract API công khai.
 - **Regression**: Tránh phá luồng đã chạy (chat, voice, friend, org). Nếu phải đổi hành vi API, ghi rõ trong spec và giữ backward-compatible khi có thể.
 - **Microservice**: Mỗi service chỉ có các model đăng ký trong repo đó — `populate()` ref tới model chưa đăng ký (ví dụ `User`) sẽ gây 500; dùng bỏ populate, lean, hoặc đăng ký model tối thiểu có chủ đích.
+
+## Làm nhóm — ưu tiên phần đang chạy ổn
+
+- **Không thêm REST route mới** khi có thể dùng endpoint hiện có: query param trên route sẵn (`GET /messages?…`), alias/legacy (`POST /friends/block`), gộp dữ liệu ở client (ví dụ `GET /friends` + `GET /friends?status=blocked`), socket event đã có. Chỉ thêm route khi task ghi rõ bắt buộc và không gộp được — nêu lý do trong PR.
+- **Không sửa service/module ngoài scope task**: Ví dụ task chat/DM thì không refactor org-service, auth, gateway permissions trừ khi yêu cầu nói rõ. Sửa tối thiểu trong service sở hữu feature (thường `client/`, `chat-service`, `friend-service`, `socket-service` cho DM).
+- **Trước khi code**: Đọc route + `client/src/services/*` + `api-gateway` permissions liên quan; ưu tiên mở rộng handler hiện có thay vì file/route song song.
+- **Diff nhỏ**: Tránh drive-by refactor, đổi contract API công khai, hoặc đụng luồng ổn định (chat, voice, friend, org) khi không cần.
