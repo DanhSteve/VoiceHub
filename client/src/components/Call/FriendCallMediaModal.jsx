@@ -217,7 +217,9 @@ export default function FriendCallMediaModal() {
       setError('');
       setRemoteTile(null);
       try {
-        await api.get(`/voice/rooms/${encodeURIComponent(roomTarget)}/bootstrap`);
+        await api.get(`/voice/rooms/${encodeURIComponent(roomTarget)}/bootstrap`, {
+          skipGlobalErrorHandling: true,
+        }).catch(() => null);
         if (cancelled) return;
 
         const localStream = await navigator.mediaDevices.getUserMedia({

@@ -396,7 +396,9 @@ export default function OrganizationVoiceChannelView({
         setRemoteSpeakingMap({});
         currentRoomRef.current = String(channelId);
 
-        await api.get(`/voice/rooms/${encodeURIComponent(String(channelId))}/bootstrap`);
+        await api.get(`/voice/rooms/${encodeURIComponent(String(channelId))}/bootstrap`, {
+          skipGlobalErrorHandling: true,
+        }).catch(() => null);
 
         const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : null;
         if (!mediaDevices?.getUserMedia) {

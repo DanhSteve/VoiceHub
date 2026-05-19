@@ -8,6 +8,9 @@ import { taskAPI } from '../../services/api/taskAPI';
 import { meetingAPI } from '../../services/api/meetingAPI';
 import friendService from '../../services/friendService';
 import { fetchOrgMessageSearch, formatOrgMessageSearchError } from '../search/orgChatSearchConfig';
+import { formatMessagePreview } from '../search/formatMessagePreview';
+import { enrichMessagesBusinessCards } from '../search/businessCardDisplay';
+import { loadOrgMessageSearchContext, mapOrgMessageToSearchItem } from '../search/orgMessageSearchDisplay';
 import { DM_SCOPE, messageMatchesDmScope } from '../search/dmConversationSearch';
 import {
   endOfMonth,
@@ -24,13 +27,9 @@ function unwrap(payload) {
   return payload?.data ?? payload;
 }
 
-function plainDm(msg) {
+function plainDm(msg, t) {
   if (!msg) return '';
-  const mt = msg.messageType || 'text';
-  if (mt === 'text') return String(msg.content || '');
-  if (mt === 'file' || mt === 'image')
-    return msg.fileMeta?.originalName || String(msg.content || '').slice(0, 200) || '[file]';
-  return String(msg.content || '');
+  return formatMessagePreview(msg, t);
 }
 
 function filterByDetailQuery(items, q) {
@@ -107,6 +106,7 @@ function loadLocalCalendarRows() {
  * @param {string} [args.detailQuery]
  * @param {{ friendId?: string, orgId?: string }} [args.context]
  * @param {(k: string, vars?: object) => string} args.t
+ * @param {string} [args.locale]
  * @returns {Promise<{ items: Array<{ id: string, title: string, subtitle?: string, meta?: string }>, truncated: boolean, error?: string }>}
  */
 export async function fetchDashboardSearchResults({
@@ -115,6 +115,7 @@ export async function fetchDashboardSearchResults({
   detailQuery = '',
   context = {},
   t,
+  locale = 'vi',
 }) {
   const friendId = context.friendId != null ? String(context.friendId) : '';
   const orgIdFromContext = context.orgId != null ? String(context.orgId) : '';
@@ -184,7 +185,7 @@ export async function fetchDashboardSearchResults({
         const sliced = scoped.slice(0, MAX_ITEMS);
         items = sliced.map((m, idx) => {
           const id = String(m._id || m.id || `m${idx}`);
-          const preview = plainDm(m).slice(0, 160);
+          const preview = plainDm(m, t).slice(0, 160);
           const created = m.createdAt ? new Date(m.createdAt).toLocaleString() : '';
           return {
             id: `dm:${id}`,
@@ -208,6 +209,12 @@ export async function fetchDashboardSearchResults({
           truncated: false,
         };
       }
+      const orgDisplayCtx = await loadOrgMessageSearchContext(orgId).catch(() => ({
+        channelMap: new Map(),
+        senderMap: new Map(),
+      }));
+      orgDisplayCtx.locale = locale;
+
       if (subfilterId === 'recent') {
         const data = await fetchOrgMessageSearch([], detailQuery, {
           organizationId: orgId,
@@ -215,16 +222,9 @@ export async function fetchDashboardSearchResults({
           limit: MAX_ITEMS,
         });
         const msgs = data?.messages ?? data?.data?.messages ?? [];
-        const list = Array.isArray(msgs) ? msgs : [];
-        items = list.map((m, idx) => {
-          const id = String(m._id || m.id || idx);
-          const preview = plainDm(m).slice(0, 160);
-          return {
-            id: `orgmsg:${id}`,
-            title: preview || '—',
-            subtitle: m.channelId || m.roomId ? String(m.roomId || '') : '',
-          };
-        });
+        let list = Array.isArray(msgs) ? msgs : [];
+        list = await enrichMessagesBusinessCards(list);
+        items = list.map((m) => mapOrgMessageToSearchItem(m, orgDisplayCtx, t));
         if (list.length >= MAX_ITEMS) truncated = true;
       } else if (subfilterId === 'with_links') {
         const data = await fetchOrgMessageSearch([{ key: 'has', value: 'link', label: '' }], detailQuery, {
@@ -233,14 +233,13 @@ export async function fetchDashboardSearchResults({
           limit: MAX_ITEMS,
         });
         const msgs = data?.messages ?? data?.data?.messages ?? [];
-        const list = Array.isArray(msgs) ? msgs : [];
-        items = list.map((m, idx) => {
-          const id = String(m._id || m.id || idx);
-          return {
-            id: `orgmsg:${id}`,
-            title: plainDm(m).slice(0, 160) || '—',
-            subtitle: t('dashboard.globalSearch.hasLink'),
-          };
+        let list = Array.isArray(msgs) ? msgs : [];
+        list = await enrichMessagesBusinessCards(list);
+        items = list.map((m) => {
+          const row = mapOrgMessageToSearchItem(m, orgDisplayCtx, t);
+          const linkHint = t('dashboard.globalSearch.hasLink');
+          row.subtitle = row.subtitle ? `${row.subtitle} · ${linkHint}` : linkHint;
+          return row;
         });
         if (list.length >= MAX_ITEMS) truncated = true;
       }

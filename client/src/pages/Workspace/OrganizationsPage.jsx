@@ -23,6 +23,7 @@ import { taskAPI } from '../../services/api/taskAPI';
 import { useLandingSafeNavigate } from '../../hooks/useLandingSafeNavigate';
 import { appShellBg } from '../../theme/shellTheme';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
+
 import {
   divisionChannelsFromStructure,
   mergeChannelsById,
@@ -1952,13 +1953,31 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       return;
     } else if (kind === 'contact') {
       messageType = 'business_card';
-      content = JSON.stringify({
+      let fields = normalizeBusinessCardFields({
         userId: payload?.userId || '',
         fullName: payload?.fullName || '',
         phone: payload?.phone || '',
         email: payload?.email || '',
-        avatar: payload?.avatar || '',
         username: payload?.username || '',
+      });
+      const uid = fields.userId;
+      if (uid && !uid.startsWith('manual-') && (!fields.phone || !fields.email || !looksLikeEmail(fields.email))) {
+        try {
+          const res = await userService.getProfile(uid);
+          const body = unwrapData(res);
+          const profile = body?.data ?? body;
+          fields = applyProfileToBusinessCard(fields, profile);
+        } catch {
+          /* giữ snapshot từ form chọn liên hệ */
+        }
+      }
+      content = JSON.stringify({
+        userId: fields.userId,
+        fullName: fields.fullName,
+        phone: fields.phone,
+        email: fields.email && looksLikeEmail(fields.email) ? fields.email : '',
+        avatar: payload?.avatar || '',
+        username: fields.username || payload?.username || '',
         role: payload?.role || '',
       });
     } else if (kind === 'poll') {
@@ -2860,11 +2879,13 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
           size="md"
         >
           <div className="space-y-4">
-            <input
+            <PageSearchBar
               value={inviteSearch}
-              onChange={(event) => setInviteSearch(event.target.value)}
+              onChange={setInviteSearch}
               placeholder={t('organizations.searchFriendsPh')}
-              className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-gray-500"
+              isDarkMode={isDarkMode}
+              size="sm"
+              id="org-invite-friend-search"
             />
 
             <div className="max-h-72 space-y-2 overflow-y-auto pr-1 scrollbar-overlay">

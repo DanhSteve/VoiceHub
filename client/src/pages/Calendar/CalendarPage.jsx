@@ -16,7 +16,7 @@ import {
 } from '../../utils/calendarUtils';
 import { useAppStrings } from '../../locales/appStrings';
 import { useLocale } from '../../context/LocaleContext';
-import { PageSearchBar, SearchFilterChips } from '../../features/search';
+import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 
 const LOCAL_CUSTOM_KEY = 'voicehub:calendar:localCustom';
 
@@ -517,26 +517,7 @@ function CalendarPage() {
                 ))}
               </div>
             </div>
-            <div className="flex min-w-0 flex-shrink-0 flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-              <div className="flex min-w-0 w-full flex-col gap-2 sm:max-w-md">
-                <PageSearchBar
-                  className="w-full"
-                  value={eventSearchQuery}
-                  onChange={setEventSearchQuery}
-                  placeholder={t('calendar.searchEventsPlaceholder')}
-                  isDarkMode={isDarkMode}
-                  id="calendar-event-search"
-                  aria-label={t('calendar.searchEventsAria')}
-                />
-                <SearchFilterChips
-                  aria-label={t('calendar.kindFilterAria')}
-                  options={calendarKindOptions}
-                  value={calendarKindFilter}
-                  onChange={setCalendarKindFilter}
-                  isDarkMode={isDarkMode}
-                  size="sm"
-                />
-              </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
               <div className="flex gap-1">
                 {['day', 'week', 'month'].map((v) => (
                   <button
@@ -559,6 +540,24 @@ function CalendarPage() {
             </div>
           </div>
         </div>
+
+        <PageSearchToolbar
+          value={eventSearchQuery}
+          onChange={setEventSearchQuery}
+          placeholder={t('calendar.searchEventsPlaceholder')}
+          isDarkMode={isDarkMode}
+          id="calendar-event-search"
+          aria-label={t('calendar.searchEventsAria')}
+        >
+          <SearchFilterChips
+            aria-label={t('calendar.kindFilterAria')}
+            options={calendarKindOptions}
+            value={calendarKindFilter}
+            onChange={setCalendarKindFilter}
+            isDarkMode={isDarkMode}
+            size="sm"
+          />
+        </PageSearchToolbar>
 
         <div className="min-h-0 flex-1 grid grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-3 lg:gap-5 lg:p-5">
           {/* Calendar View — khung riêng, 2/3 chiều ngang trên desktop */}

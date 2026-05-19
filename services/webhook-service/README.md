@@ -7,6 +7,7 @@ Webhook service được xây dựng bằng FastAPI để xử lý các events t
 ```
 webhook-service/
 ├── main.py                    # FastAPI application entry point
+├── worker.py                  # Queue consumer entry point
 ├── src/
 │   ├── handlers/             # Webhook handlers cho từng loại event
 │   │   ├── friend_handler.py
@@ -17,6 +18,7 @@ webhook-service/
 │   │   ├── role_handler.py
 │   │   └── organization_handler.py
 │   └── utils/
+│       ├── webhook_queue.py   # Optional RabbitMQ queue bridge
 │       └── notification_client.py  # Client để gọi Notification Service
 ├── requirements.txt
 ├── Dockerfile
@@ -107,7 +109,14 @@ NODE_ENV=development
 PORT=3016
 WEBHOOK_SECRET=your-webhook-secret-key-change-this-in-production
 NOTIFICATION_SERVICE_URL=http://notification-service:3003
+WEBHOOK_ASYNC_QUEUE=false
+WEBHOOK_DELIVERY_QUEUE=voicehub.webhook.delivery
+WEBHOOK_DELIVERY_DLQ=voicehub.webhook.delivery.dlq
+WEBHOOK_DELIVERY_MAX_RETRIES=6
+# RABBITMQ_URL=amqp://voicehub:voicehub-dev-change-me@rabbitmq:5672
 ```
+
+Nếu `WEBHOOK_ASYNC_QUEUE=false`, HTTP service sẽ dispatch trực tiếp qua `dispatch_domain_event()` và không cần RabbitMQ. Nếu bật queue mode, hãy chạy thêm `worker.py` và cung cấp `RABBITMQ_URL`.
 
 ## Security
 
@@ -121,8 +130,11 @@ NOTIFICATION_SERVICE_URL=http://notification-service:3003
 # Install dependencies
 pip install -r requirements.txt
 
-# Run locally
+# Run HTTP API locally
 python main.py
+
+# Run delivery worker locally
+WEBHOOK_ASYNC_QUEUE=true RABBITMQ_URL=amqp://voicehub:voicehub-dev-change-me@rabbitmq:5672 python worker.py
 
 # Run with Docker
 docker build -t webhook-service .

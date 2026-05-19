@@ -1,5 +1,6 @@
-import { Bell, Search } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Bell } from 'lucide-react';
+import { AppSearchField } from '../../features/search';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import AddFriendModal from '../../components/Friends/AddFriendModal';
 import NavigationSidebar from '../../components/Layout/NavigationSidebar';
@@ -49,6 +50,7 @@ function truncateText(value, maxLength = 56) {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
+
 /** Màu ô heatmap theo mức hoạt động (task + tin nhắn trong ngày). */
 function activityCellClass(total, isDarkMode = true) {
   const n = Math.max(0, Number(total) || 0);
@@ -64,6 +66,7 @@ function activityCellClass(total, isDarkMode = true) {
   if (n <= 3) return 'bg-cyan-200';
   if (n <= 6) return 'bg-cyan-400/85';
   return 'bg-cyan-500';
+
 }
 
 function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
@@ -71,7 +74,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     landingDemo && demoVariant === 'tasks' ? 'tasks' : 'all',
   );
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedStat, setSelectedStat] = useState(null);
+  const [selectedStatKey, setSelectedStatKey] = useState(null);
   const [showActivityDetail, setShowActivityDetail] = useState(null);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
@@ -216,17 +219,16 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           orgList.map((org) => [String(org?._id || org?.id || ''), String(org?.slug || '')])
         );
         const orgCount = orgList.length;
-        const rawOrgId = orgList[0]?._id ?? orgList[0]?.id;
-        const firstOrgId = rawOrgId != null ? String(rawOrgId) : null;
+        const orgIds = orgList
+          .map((org) => String(org?._id || org?.id || '').trim())
+          .filter(isValidObjectId);
 
         let taskDone = null;
-        if (firstOrgId) {
-          const ts = await taskAPI.getStatistics(firstOrgId).catch(() => null);
-          const stat = ts?.data ?? ts;
-          const formatted = stat?.data ?? stat;
-          if (formatted && typeof formatted === 'object') {
-            taskDone = formatted.done ?? null;
-          }
+        if (orgIds.length === 0) {
+          taskDone = 0;
+        } else {
+          const taskStats = await sumTaskDoneAcrossOrgs(orgIds);
+          taskDone = taskStats.allFailed ? null : taskStats.total;
         }
 
         const fr = await friendService.getFriends().catch(() => null);
@@ -293,7 +295,9 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         }
         setUpcomingMeetings(meetingsUi);
 
-        const pend = await friendService.getPendingRequests().catch(() => null);
+        const pend = await friendService
+          .getPendingRequests({ skipGlobalErrorHandling: true })
+          .catch(() => null);
         let pendingCount = 0;
         if (pend) {
           const raw = pend.data ?? pend;
@@ -301,7 +305,9 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           pendingCount = arr.length;
         }
 
-        const notif = await api.get('/notifications', { params: { limit: 1 } }).catch(() => null);
+        const notif = await api
+          .get('/notifications', { params: { limit: 1 }, skipGlobalErrorHandling: true })
+          .catch(() => null);
         let unread = 0;
         if (notif) {
           const nd = notif.data?.data ?? notif.data ?? notif;
@@ -549,6 +555,23 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     ? 'rounded-lg border border-slate-800 bg-[#040f2a] px-3 py-2 text-sm text-white transition-all hover:bg-slate-800/70'
     : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-all hover:bg-slate-50';
 
+  const activityCellClass = (value) => {
+    const total = Number(value) || 0;
+    if (total <= 0) {
+      return isDarkMode ? 'bg-white/[0.03]' : 'bg-slate-100';
+    }
+    if (total === 1) {
+      return isDarkMode ? 'bg-cyan-500/[0.12]' : 'bg-cyan-100';
+    }
+    if (total === 2) {
+      return isDarkMode ? 'bg-cyan-400/[0.22]' : 'bg-cyan-200';
+    }
+    if (total === 3) {
+      return isDarkMode ? 'bg-cyan-400/[0.34]' : 'bg-cyan-300';
+    }
+    return isDarkMode ? 'bg-cyan-300/[0.46]' : 'bg-cyan-400';
+  };
+
   const stats = useMemo(() => {
     const fmt = (n) => {
       if (metrics.loading) return '…';
@@ -569,7 +592,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         trend: 'up',
         detail: metrics.loading ? loadingDetail : t('dashboard.detailOrg'),
         drilldown: {
-          nguon: 'GET /api/organizations/my',
+          nguon: t('dashboard.drilldownSourceOrgApi'),
           soToChuc: metrics.orgCount ?? '—',
         },
       },
@@ -585,8 +608,9 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         trend: 'down',
         detail: metrics.loading ? loadingDetail : t('dashboard.detailTask'),
         drilldown: {
-          nguon: 'GET /api/tasks/statistics?organizationId=…',
+          nguon: t('dashboard.drilldownSourceTasksApi'),
           done: metrics.taskDone ?? '—',
+          soToChuc: metrics.orgCount ?? '—',
         },
       },
       {
@@ -603,7 +627,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           ? loadingDetail
           : t('dashboard.detailFriends', { count: metrics.pendingCount }),
         drilldown: {
-          nguon: 'GET /api/friends, /api/friends/pending',
+          nguon: t('dashboard.drilldownSourceFriendsApi'),
           soBan: metrics.friendsTotal ?? '—',
           loiMoiCho: metrics.pendingCount,
         },
@@ -620,12 +644,33 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         trend: 'up',
         detail: metrics.loading ? loadingDetail : t('dashboard.detailUnread'),
         drilldown: {
-          nguon: 'GET /api/notifications',
+          nguon: t('dashboard.drilldownSourceNotifyApi'),
           chuaDoc: metrics.unread,
         },
       },
     ];
   }, [metrics, t]);
+
+  const selectedStat = useMemo(() => {
+    if (!selectedStatKey) return null;
+    return stats.find((stat) => stat.key === selectedStatKey) || null;
+  }, [selectedStatKey, stats]);
+
+  const drilldownLabel = useCallback(
+    (key) => {
+      const map = {
+        nguon: 'dashboard.drilldownSource',
+        done: 'dashboard.drilldownDone',
+        soToChuc: 'dashboard.drilldownOrgCount',
+        soBan: 'dashboard.drilldownFriends',
+        loiMoiCho: 'dashboard.drilldownPending',
+        chuaDoc: 'dashboard.drilldownUnread',
+      };
+      const path = map[key];
+      return path ? t(path) : key;
+    },
+    [t]
+  );
 
   const activities = useMemo(() => {
     if (!landingDemo) return [];
@@ -789,19 +834,15 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           <p className={`max-w-[40%] truncate text-sm font-medium md:max-w-none md:text-[15px] ${isDarkMode ? 'text-white/90' : 'text-slate-800'}`}>
             {getGreeting()}
           </p>
-          <div className="relative min-w-0 flex-1 md:mx-auto md:max-w-xl">
-            <button
-              type="button"
-              className={`absolute left-2 top-1/2 z-[1] -translate-y-1/2 rounded-lg p-1.5 transition ${isDarkMode ? 'text-[#9ca3af] hover:bg-white/[0.06] hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'}`}
-              aria-label={t('dashboard.ariaSearch')}
-              onClick={() => setQuickNavOpen(true)}
-            >
-              <Search className="h-4 w-4" strokeWidth={2} />
-            </button>
-            <input
-              type="search"
+          <div className="min-w-0 flex-1 md:mx-auto md:max-w-xl">
+            <AppSearchField
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={setSearchQuery}
+              placeholder={t('dashboard.searchPlaceholder')}
+              isDarkMode={isDarkMode}
+              id="dashboard-header-search"
+              aria-label={t('dashboard.ariaSearch')}
+              size="lg"
               onFocus={() => setQuickNavOpen(true)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -809,8 +850,6 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   setQuickNavOpen(true);
                 }
               }}
-              placeholder={t('dashboard.searchPlaceholder')}
-              className={`w-full rounded-2xl py-2.5 pl-11 pr-4 text-sm outline-none transition ${inputSurface}`}
             />
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -844,7 +883,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               <GlassCard
                 key={idx}
                 hover
-                onClick={() => setSelectedStat(stat)}
+                onClick={() => setSelectedStatKey(stat.key)}
                 className={`group relative cursor-pointer overflow-hidden rounded-2xl p-4 transition duration-300 ${cardSurface} ${isDarkMode ? 'shadow-[0_8px_32px_rgba(0,0,0,0.35)] hover:border-white/[0.1] hover:shadow-[0_12px_48px_rgba(0,0,0,0.5)]' : 'shadow-md hover:border-cyan-200/80 hover:shadow-lg'}`}
                 style={{ animationDelay: `${idx * 0.06}s` }}
               >
@@ -884,19 +923,25 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           <GlassCard className={`mb-8 ${cardSurface} ${isDarkMode ? 'shadow-[0_8px_32px_rgba(0,0,0,0.25)]' : 'shadow-md'}`}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className={`text-base font-bold ${textHeading}`}>Personal activity</h2>
-                <p className={`mt-1 text-xs ${textMuted}`}>Tasks and messages in the last 35 days</p>
-                <p className={`mt-1 text-[11px] ${textSub}`}>Each square is one day; darker means more activity.</p>
+                <h2 className={`text-base font-bold ${textHeading}`}>{t('dashboard.personalActivityTitle')}</h2>
+                <p className={`mt-1 text-xs ${textMuted}`}>{t('dashboard.personalActivitySub')}</p>
+                <p className={`mt-1 text-[11px] ${textSub}`}>{t('dashboard.personalActivityHint')}</p>
               </div>
               <div className={`text-xs ${textSub}`}>
+
                 {personalActivityDays.reduce((sum, item) => sum + (item?.total || 0), 0)} activities
+
               </div>
             </div>
             <div className="grid grid-cols-7 gap-1.5">
               {personalActivityDays.map((day) => (
                 <div
                   key={day.key}
-                  title={`${day.key}: ${day.tasks} tasks, ${day.messages} messages`}
+                  title={t('dashboard.personalActivityDayTitle', {
+                    date: day.key,
+                    tasks: day.tasks,
+                    messages: day.messages,
+                  })}
                   className={`aspect-square rounded-[4px] border ${
                     isDarkMode ? 'border-white/[0.05]' : 'border-white'
                   } ${activityCellClass(day.total, isDarkMode)}`}
@@ -909,7 +954,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               <GlassCard className={`${cardSurface} ${isDarkMode ? 'shadow-[0_8px_32px_rgba(0,0,0,0.25)]' : 'shadow-md'}`}>
                 <div className="mb-3 flex items-center justify-between">
-                  <h2 className={`text-base font-bold ${textHeading}`}>Tin nhắn riêng</h2>
+                  <h2 className={`text-base font-bold ${textHeading}`}>{t('dashboard.privateMessagesTitle')}</h2>
                   <button
                     type="button"
                     onClick={() => navigate('/chat/friends')}
@@ -1291,7 +1336,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     {/* Stat Detail Modal */}
     <Modal
       isOpen={selectedStat !== null}
-      onClose={() => setSelectedStat(null)}
+      onClose={() => setSelectedStatKey(null)}
       title={selectedStat?.label || t('dashboard.statModalTitle')}
       size="lg"
     >
@@ -1309,10 +1354,12 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               <GlassCard className={modalGlass}>
                 <h4 className={`font-bold mb-4 ${textHeading}`}>{t('dashboard.modalStatsTitle')}</h4>
                 <div className="space-y-3">
+
                   {Object.entries(selectedStat.drilldown || {}).filter(([key]) => !['projects', 'nguoiDongGopNhieuNhat', 'roles', 'channels'].includes(key)).map(([key, value]) => (
                     <div key={key} className="flex items-center justify-between">
                       <span className={`${textMuted} capitalize`}>{key}:</span>
                       <span className={`font-bold ${textHeading}`}>{value}</span>
+
                     </div>
                   ))}
                 </div>
@@ -1328,7 +1375,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                     const link = getStatDetailRoute(selectedStat.key);
                     if (link) {
                       navigate(link.path);
-                      setSelectedStat(null);
+                      setSelectedStatKey(null);
                     }
                   }}
                 >
