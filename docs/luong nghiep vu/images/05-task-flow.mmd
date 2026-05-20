@@ -1,0 +1,30 @@
+sequenceDiagram
+autonumber
+actor User as TaskUser
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant TaskCtrl as TaskController
+participant TaskSvc as TaskService
+participant OrgApi as OrganizationService
+participant TaskDb as MongoTask
+participant Queue as RabbitMQ
+participant Worker as TaskFromFileWorker
+User->>Client: Tao task thuong
+Client->>Gateway: POST /api/tasks
+Gateway->>TaskCtrl: createTask
+TaskCtrl->>TaskSvc: validate actor + payload
+TaskSvc->>OrgApi: verify org/assignee
+alt Hop le
+  TaskSvc->>TaskDb: insert task
+  TaskSvc-->>Client: 201 created
+else Sai rule
+  TaskSvc-->>Client: 400/403/404
+end
+User->>Client: Tao task tu file chat
+Client->>Gateway: POST /api/tasks/from-chat-file
+Gateway->>TaskCtrl: createTaskFromFile
+TaskCtrl->>TaskSvc: publish async job
+TaskSvc->>Queue: enqueue task.from.chat.file
+TaskSvc-->>Client: 202 accepted
+Queue->>Worker: consume + promote file + tao task
+Worker->>TaskDb: persist result

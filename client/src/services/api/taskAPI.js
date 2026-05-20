@@ -24,7 +24,11 @@ export const taskAPI = {
 
   // Create new task
   createTask: (taskData) => {
-    return apiClient.post('/tasks', taskData);
+    const payload = { ...(taskData || {}) };
+    if (!payload.serverId && payload.organizationId) {
+      payload.serverId = payload.organizationId;
+    }
+    return apiClient.post('/tasks', payload);
   },
 
   // Get task by ID
@@ -43,13 +47,13 @@ export const taskAPI = {
   },
 
   // Update task status
-  updateStatus: (id, status) => {
-    return apiClient.patch(`/tasks/${id}/status`, { status });
+  updateStatus: (id, status, opts = {}) => {
+    return apiClient.patch(`/tasks/${id}/status${orgQuery(opts.organizationId)}`, { status });
   },
 
   // Assign task to user
-  assignTask: (id, userId) => {
-    return apiClient.post(`/tasks/${id}/assign`, { userId });
+  assignTask: (id, userId, opts = {}) => {
+    return apiClient.post(`/tasks/${id}/assign${orgQuery(opts.organizationId)}`, { userId });
   },
 
   // Get task statistics

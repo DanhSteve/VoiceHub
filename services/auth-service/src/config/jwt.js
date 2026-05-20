@@ -1,9 +1,17 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = String(process.env.JWT_SECRET || '').trim();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key';
+const JWT_REFRESH_SECRET = String(process.env.JWT_REFRESH_SECRET || '').trim();
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '30d';
+
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is required');
+}
+
+if (!JWT_REFRESH_SECRET) {
+  throw new Error('JWT_REFRESH_SECRET is required');
+}
 
 // Tạo access token
 const generateAccessToken = (payload) => {

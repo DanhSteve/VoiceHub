@@ -1,8 +1,5 @@
 const Document = require('../models/Document');
-const { getRedisClient, logger } = require('/shared');
-const axios = require('axios');
-
-const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3004';
+const { getRedisClient, logger, fetchUserProfileByIdInternal } = require('/shared');
 
 class DocumentService {
   // Tạo document mới
@@ -23,7 +20,7 @@ class DocumentService {
 
       // Kiểm tra uploadedBy có tồn tại không
       try {
-        await axios.get(`${USER_SERVICE_URL}/api/users/${uploadedBy}`);
+        await fetchUserProfileByIdInternal(uploadedBy);
       } catch (error) {
         throw new Error('Uploader user not found');
       }

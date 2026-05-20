@@ -8,6 +8,7 @@ const { protect, authorize } = require('../middleware/auth');
 router.use(protect); // All routes require authentication
 
 router.get('/my', organizationController.getMyOrganizations);
+router.get('/by-slug/:slug', organizationController.getOrganizationBySlug);
 router.get(
   '/my/pending-join-applications',
   joinApplicationController.listMyPendingJoinApplications
@@ -47,7 +48,64 @@ router.patch(
   joinApplicationController.reviewJoinApplication
 );
 
+router.get('/:orgId/structure', organizationController.getOrganizationStructure);
 router.get('/:orgId/accessible-channel-ids', organizationController.getAccessibleChannelIds);
+router.get('/:orgId/task-workspace-scope', organizationController.getTaskWorkspaceScope);
+router.get(
+  '/:orgId/channels/:channelId/access',
+  authorize(['owner', 'admin']),
+  organizationController.listChannelAccess
+);
+router.post(
+  '/:orgId/channels/:channelId/access/grant',
+  authorize(['owner', 'admin']),
+  organizationController.grantChannelAccess
+);
+router.post(
+  '/:orgId/channels/:channelId/access/revoke',
+  authorize(['owner', 'admin']),
+  organizationController.revokeChannelAccess
+);
+router.get(
+  '/:orgId/channels/:channelId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listChannelRoleAccess
+);
+router.put(
+  '/:orgId/channels/:channelId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveChannelRoleAccess
+);
+router.get(
+  '/:orgId/divisions/:divisionId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listDivisionRoleAccess
+);
+router.put(
+  '/:orgId/divisions/:divisionId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveDivisionRoleAccess
+);
+router.get(
+  '/:orgId/departments/:departmentId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listDepartmentRoleAccess
+);
+router.put(
+  '/:orgId/departments/:departmentId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveDepartmentRoleAccess
+);
+router.get(
+  '/:orgId/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listTeamRoleAccess
+);
+router.put(
+  '/:orgId/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveTeamRoleAccess
+);
 
 router.get('/:id', organizationController.getOrganization);
 router.put('/:id', authorize(['owner', 'admin']), organizationController.updateOrganization);

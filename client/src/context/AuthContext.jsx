@@ -22,6 +22,7 @@ import authService from '../services/authService';
 // Import userService để update user status
 import userService from '../services/userService';
 import { getToken, setToken, removeToken } from '../utils/tokenStorage';
+import { isAutoLogoutDisabled } from '../utils/devAuth';
 
 /* ========================================
    CONTEXT: đối tượng React Context được tạo trong ./auth-context.js (tách file để HMR ổn định).
@@ -69,9 +70,8 @@ function AuthProvider({ children }) {
   // Khi login thành công → setUser(userData từ API)
   const [user, setUser] = useState(null);
   
-  // State loading: true khi đang check auth hoặc đang login
-  // Dùng để hiển thị loading spinner
-  const [loading, setLoading] = useState(false);
+  // State loading: true khi đang check auth lần đầu (reload) — tránh ProtectedRoute redirect oan
+  const [loading, setLoading] = useState(true);
 
   /* ========================================
      useEffect: CHECK AUTH KHI APP KHỞI ĐỘNG
@@ -83,6 +83,7 @@ function AuthProvider({ children }) {
   useEffect(() => {
     // Async function để check authentication
     const checkAuth = async () => {
+      setLoading(true);
       try {
         // Lấy token từ localStorage (được lưu khi login)
         const token = getToken();
@@ -97,11 +98,12 @@ function AuthProvider({ children }) {
           setUser(userData?.data || userData);
         }
       } catch (error) {
-        // Nếu có lỗi (token hết hạn, invalid, etc.)
+        // Chỉ xóa token khi server xác nhận 401 — lỗi mạng/503 không được logout oan
         console.error('Auth check failed:', error);
-        
-        // Xóa token lỗi khỏi localStorage
-        removeToken();
+        const st = error?.response?.status ?? error?.status;
+        if (st === 401 && !isAutoLogoutDisabled()) {
+          removeToken();
+        }
       } finally {
         // Dù thành công hay thất bại cũng set loading = false
         setLoading(false);
@@ -268,7 +270,7 @@ function AuthProvider({ children }) {
       // Xử lý timeout - request vượt quá 60 giây
       if (error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
         const duration = Date.now() - startTime;
-        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+        const API_URL = import.meta.env.VITE_API_URL || '/api';
         const message = `Yêu cầu quá thời gian chờ (60s). Backend không phản hồi.\n\nVui lòng kiểm tra:\n1. API Gateway có đang chạy tại ${API_URL}?\n2. Auth Service có đang chạy không?\n3. Kiểm tra logs backend để xem có lỗi không`;
         toast.error(message, { duration: 7000 });
         console.error('[AuthContext] ❌ Request timeout - backend may be slow or unresponsive');

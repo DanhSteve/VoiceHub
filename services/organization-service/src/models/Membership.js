@@ -14,7 +14,7 @@ const membershipSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['owner', 'admin', 'member'],
+      enum: ['owner', 'admin', 'hr', 'member'],
       default: 'member',
     },
     department: {
@@ -22,9 +22,19 @@ const membershipSchema = new mongoose.Schema(
       ref: 'Department',
       default: null,
     },
+    branch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
+    },
+    division: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Division',
+      default: null,
+    },
     team: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Channel',
+      ref: 'Team',
       default: null,
     },
     joinedAt: {
@@ -55,6 +65,9 @@ membershipSchema.statics.normalizeRole = (role) => {
   const roleMap = {
     owner: 'owner',
     admin: 'admin',
+    hr: 'hr',
+    human_resources: 'hr',
+    nhan_su: 'hr',
     member: 'member',
     org_admin: 'admin',
     department_head: 'admin',

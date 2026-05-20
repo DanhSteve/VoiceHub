@@ -1,0 +1,684 @@
+services:
+  api-gateway:
+    image: ${REGISTRY}/${OWNER}/voicehub/api-gateway:${TAG}
+    ports:
+      - target: 3000
+        published: 3000
+        protocol: tcp
+        mode: ingress
+    env_file:
+      - .env
+      - ./api-gateway/.env
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${API_GATEWAY_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 320M
+        reservations:
+          cpus: "0.15"
+          memory: 80M
+
+  auth-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/auth-service:${TAG}
+    env_file:
+      - .env
+      - ./services/auth-service/.env
+    environment:
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${AUTH_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 80M
+
+  user-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/user-service:${TAG}
+    env_file:
+      - .env
+      - ./services/user-service/.env
+    environment:
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${USER_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 80M
+
+  organization-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/organization-service:${TAG}
+    env_file:
+      - .env
+      - ./services/organization-service/.env
+    environment:
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${ORGANIZATION_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 80M
+
+  friend-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/friend-service:${TAG}
+    env_file:
+      - .env
+      - ./services/friend-service/.env
+    environment:
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${FRIEND_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 80M
+
+  role-permission-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/role-permission-service:${TAG}
+    env_file:
+      - .env
+      - ./services/role-permission-service/.env
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${ROLE_PERMISSION_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 80M
+
+  chat-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/chat-service:${TAG}
+    env_file:
+      - .env
+      - ./services/chat-service/.env
+    environment:
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - FRIEND_DM_USE_QUEUE=${FRIEND_DM_USE_QUEUE}
+      - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${CHAT_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 384M
+        reservations:
+          cpus: "0.20"
+          memory: 96M
+
+  task-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/task-service:${TAG}
+    env_file:
+      - .env
+      - ./services/task-service/.env
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+      - TASK_FROM_FILE_WORKER=false
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${TASK_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 384M
+        reservations:
+          cpus: "0.20"
+          memory: 96M
+
+  task-worker:
+    image: ${TASK_SERVICE_IMAGE:-voicehub/task-service:latest}
+    command: ["node", "src/workers/taskFromFileWorker.js"]
+    env_file:
+      - .env
+      - ./services/task-service/.env
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+      - TASK_FROM_FILE_WORKER=true
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${TASK_WORKER_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 384M
+        reservations:
+          cpus: "0.20"
+          memory: 96M
+
+  ai-task-service:
+    image: ${AI_TASK_SERVICE_IMAGE:-voicehub/ai-task-service:latest}
+    env_file:
+      - .env
+      - ./services/ai-task-service/.env
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${AI_TASK_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+  ai-task-worker:
+    image: ${REGISTRY}/${OWNER}/voicehub/ai-task-worker:${TAG}
+    env_file:
+      - .env
+      - ./services/ai-task-worker/.env
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+      - TASK_SERVICE_URL=${TASK_SERVICE_URL}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - PADDLEOCR_BASE_URL=${PADDLEOCR_BASE_URL}
+      - AI_TASK_WORKER_MODE=both
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${AI_TASK_WORKER_REPLICAS:-0}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1.50"
+          memory: 1G
+        reservations:
+          cpus: "0.50"
+          memory: 320M
+
+  ai-task-extract-worker:
+    image: ${REGISTRY}/${OWNER}/voicehub/ai-task-worker:${TAG}
+    env_file:
+      - .env
+      - ./services/ai-task-worker/.env
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+      - TASK_SERVICE_URL=${TASK_SERVICE_URL}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - PADDLEOCR_BASE_URL=${PADDLEOCR_BASE_URL}
+      - AI_TASK_WORKER_MODE=extract
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${AI_TASK_EXTRACT_WORKER_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "1.50"
+          memory: 1G
+        reservations:
+          cpus: "0.50"
+          memory: 320M
+      placement:
+        constraints:
+          - node.labels.ai == true
+
+  ai-task-sync-worker:
+    image: ${REGISTRY}/${OWNER}/voicehub/ai-task-worker:${TAG}
+    env_file:
+      - .env
+      - ./services/ai-task-worker/.env
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN}
+      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+      - TASK_SERVICE_URL=${TASK_SERVICE_URL}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - PADDLEOCR_BASE_URL=${PADDLEOCR_BASE_URL}
+      - AI_TASK_WORKER_MODE=sync
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${AI_TASK_SYNC_WORKER_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+        reservations:
+          cpus: "0.30"
+          memory: 256M
+      placement:
+        constraints:
+          - node.labels.ai == true
+
+  document-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/document-service:${TAG}
+    env_file:
+      - .env
+      - ./services/document-service/.env
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${DOCUMENT_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 80M
+
+  voice-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/voice-service:${TAG}
+    ports:
+      - target: 3005
+        published: 3005
+        protocol: tcp
+        mode: ingress
+      - target: 40000
+        published: 40000
+        protocol: udp
+        mode: host
+      - target: 40001
+        published: 40001
+        protocol: udp
+        mode: host
+      - target: 40002
+        published: 40002
+        protocol: udp
+        mode: host
+      - target: 40003
+        published: 40003
+        protocol: udp
+        mode: host
+      - target: 40004
+        published: 40004
+        protocol: udp
+        mode: host
+      - target: 40005
+        published: 40005
+        protocol: udp
+        mode: host
+      - target: 40006
+        published: 40006
+        protocol: udp
+        mode: host
+      - target: 40007
+        published: 40007
+        protocol: udp
+        mode: host
+      - target: 40008
+        published: 40008
+        protocol: udp
+        mode: host
+      - target: 40009
+        published: 40009
+        protocol: udp
+        mode: host
+      - target: 40010
+        published: 40010
+        protocol: udp
+        mode: host
+    env_file:
+      - .env
+      - ./services/voice-service/.env
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${VOICE_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.voice == true
+      resources:
+        limits:
+          cpus: "1.50"
+          memory: 512M
+        reservations:
+          cpus: "0.50"
+          memory: 192M
+
+  notification-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/notification-service:${TAG}
+    env_file:
+      - .env
+      - ./services/notification-service/.env
+    environment:
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN}
+      - NOTIFICATION_ASYNC_DISPATCH=${NOTIFICATION_ASYNC_DISPATCH:-false}
+      - NOTIFICATION_DISPATCH_WORKER=false
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${NOTIFICATION_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 80M
+
+  notification-dispatch-worker:
+    image: ${REGISTRY}/${OWNER}/voicehub/notification-service:${TAG}
+    command: ["node", "src/worker.js"]
+    env_file:
+      - .env
+      - ./services/notification-service/.env
+    environment:
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN}
+      - NOTIFICATION_ASYNC_DISPATCH=true
+      - NOTIFICATION_DISPATCH_WORKER=true
+      - RABBITMQ_URL=${RABBITMQ_URL}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${NOTIFICATION_DISPATCH_WORKER_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 320M
+        reservations:
+          cpus: "0.20"
+          memory: 96M
+
+  webhook-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/webhook-service:${TAG}
+    env_file:
+      - .env
+      - ./services/webhook-service/.env
+    environment:
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN}
+      - WEBHOOK_ASYNC_QUEUE=${WEBHOOK_ASYNC_QUEUE:-false}
+      - WEBHOOK_DELIVERY_WORKER=false
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${WEBHOOK_SERVICE_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 192M
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+
+  webhook-delivery-worker:
+    image: ${REGISTRY}/${OWNER}/voicehub/webhook-service:${TAG}
+    command: ["python", "worker.py"]
+    env_file:
+      - .env
+      - ./services/webhook-service/.env
+    environment:
+      - WEBHOOK_ASYNC_QUEUE=true
+      - WEBHOOK_DELIVERY_WORKER=true
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN}
+      - NOTIFICATION_SERVICE_URL=${NOTIFICATION_SERVICE_URL}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${WEBHOOK_DELIVERY_WORKER_REPLICAS:-1}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 384M
+        reservations:
+          cpus: "0.20"
+          memory: 128M
+
+  socket-service:
+    image: ${REGISTRY}/${OWNER}/voicehub/socket-service:${TAG}
+    env_file:
+      - .env
+      - ./services/socket-service/.env
+    environment:
+      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - FRIEND_DM_USE_QUEUE=${FRIEND_DM_USE_QUEUE}
+      - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN}
+      - SOCKET_IO_REDIS_ADAPTER=${SOCKET_IO_REDIS_ADAPTER:-true}
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: ${SOCKET_SERVICE_REPLICAS:-2}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 320M
+        reservations:
+          cpus: "0.20"
+          memory: 96M
+
+  mongodb:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 192M
+      placement:
+        constraints:
+          - node.role == manager
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 192M
+        reservations:
+          cpus: "0.10"
+          memory: 48M
+      placement:
+        constraints:
+          - node.role == manager
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          cpus: "0.20"
+          memory: 128M
+      placement:
+        constraints:
+          - node.role == manager
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "4.00"
+          memory: 6G
+        reservations:
+          cpus: "1.00"
+          memory: 1536M
+      placement:
+        constraints:
+          - node.labels.ai == true
+
+  paddleocr-service:
+    image: blazordevlab/paddleocrapi:latest
+    networks:
+      - enterprise-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1G
+        reservations:
+          cpus: "0.50"
+          memory: 320M
+      placement:
+        constraints:
+          - node.labels.ai == true
+
+volumes:
+  mongodb_data:
+  redis_data:
+  rabbitmq_data:
+  ollama_data:
+
+networks:
+  enterprise-network:
+    driver: overlay
+    attachable: true

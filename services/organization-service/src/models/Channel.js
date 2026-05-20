@@ -21,10 +21,25 @@ const channelSchema = new mongoose.Schema(
       ref: 'Organization',
       required: true,
     },
+    branch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
+    },
+    division: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Division',
+      default: null,
+    },
     department: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Department',
-      required: true,
+      default: null,
+    },
+    team: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Team',
+      default: null,
     },
     leader: {
       type: mongoose.Schema.Types.ObjectId,
@@ -48,5 +63,6 @@ const channelSchema = new mongoose.Schema(
 );
 
 channelSchema.index({ organization: 1, department: 1, isActive: 1 });
+channelSchema.index({ organization: 1, team: 1, isActive: 1 });
 
 module.exports = mongoose.model('Channel', channelSchema);

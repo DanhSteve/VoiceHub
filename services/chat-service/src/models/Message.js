@@ -14,13 +14,17 @@ const messageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Room',
     },
+    conversationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Conversation',
+    },
     content: {
       type: String,
       required: true,
     },
     messageType: {
       type: String,
-      enum: ['text', 'image', 'file', 'system'],
+      enum: ['text', 'image', 'file', 'system', 'business_card'],
       default: 'text',
     },
     isRead: {
@@ -65,6 +69,14 @@ const messageSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /** Phản hồi emoji (DM / kênh) */
+    reactions: [
+      {
+        emoji: { type: String, required: true },
+        userId: { type: mongoose.Schema.Types.ObjectId, required: true },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     /** Metadata file/hình (Firebase Storage); TTL & cleanup */
     fileMeta: {
       storagePath: { type: String },
@@ -98,6 +110,7 @@ const messageSchema = new mongoose.Schema(
 messageSchema.index({ senderId: 1, createdAt: -1 });
 messageSchema.index({ receiverId: 1, createdAt: -1 });
 messageSchema.index({ roomId: 1, createdAt: -1 });
+messageSchema.index({ conversationId: 1, createdAt: -1 });
 messageSchema.index({ organizationId: 1, createdAt: -1 });
 messageSchema.index({ 'fileMeta.expiresAt': 1 });
 messageSchema.index({ 'fileMeta.storagePath': 1 });

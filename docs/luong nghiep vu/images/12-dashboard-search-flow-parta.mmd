@@ -1,0 +1,22 @@
+sequenceDiagram
+autonumber
+actor User as NguoiTimKiem
+participant UI as DashboardSearchModal
+participant Fetcher as DashboardSearchFetcher
+participant Gateway as ApiGateway
+participant Services as NhomDichVu
+
+Note over User,Services: Chặng 1 - Tìm kiếm tổng hợp đa dịch vụ
+User->>UI: Nhập từ khóa
+UI->>Fetcher: fetchDashboardSearchResults
+Fetcher->>Fetcher: Debounce + xác định scope
+par Song song theo tab
+  Fetcher->>Gateway: /api/organizations/my
+  Fetcher->>Gateway: /api/friends
+  Fetcher->>Gateway: /api/messages/search
+  Fetcher->>Gateway: /api/tasks và /api/meetings
+  Fetcher->>Gateway: /api/notifications và /api/documents
+end
+Gateway->>Services: Proxy đến từng service
+Services-->>Fetcher: Trả dữ liệu
+Fetcher-->>UI: Merge + render kết quả

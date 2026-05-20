@@ -1,4 +1,13 @@
 require('dotenv').config();
+
+if (process.env.NODE_ENV === 'production') {
+  const jwt = String(process.env.JWT_SECRET || '').trim();
+  if (!jwt || jwt === 'your-secret-key' || jwt === 'your-secret-key-change-in-production') {
+    console.error('[auth-service] FATAL: set JWT_SECRET to a strong non-default value in production.');
+    process.exit(1);
+  }
+}
+
 const app = require('./app');
 // Sử dụng hàm connectDB / disconnectDB / connectRedis chung từ /shared
 const { connectDB, disconnectDB, connectRedis } = require('/shared');

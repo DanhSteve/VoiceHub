@@ -1,6 +1,11 @@
 # Core: API Gateway + microservices (không gồm Mongo/Redis — xem docker-compose.infra.yml)
 # File này được gộp qua docker-compose.yml (include). Hoặc chạy tay:
 # docker compose -f docker-compose.infra.yml -f docker-compose.core.yml up -d
+#
+# Biến chung (token, RabbitMQ, …): file .env ở root repo — mọi service dùng env_file: [.env, ./services/.../.env]
+#
+# Bề mặt mạng: chỉ publish api-gateway (+ voice-service cho WebRTC). Các service khác chỉ enterprise-network.
+# Debug trực tiếp một service: docker compose exec <service> wget … hoặc thêm ports: tạm thời.
 
 services:
   api-gateway:
@@ -9,7 +14,9 @@ services:
     ports:
       - "3000:3000"
     env_file:
+      - .env
       - ./api-gateway/.env
+    # GATEWAY_INTERNAL_TOKEN: chỉ từ .env gốc + api-gateway/.env (tránh environment: ghi đè bằng chuỗi rỗng khi biến host trống trên Windows)
     depends_on:
       - auth-service
       - user-service
@@ -29,15 +36,16 @@ services:
       - ./api-gateway:/app
       - /app/node_modules
     # Đồng bộ node_modules trong volume với package.json (tránh MODULE_NOT_FOUND sau khi thêm dependency)
-    command: ["sh", "-c", "npm install && node src/server.js"]
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   auth-service:
     build: ./services/auth-service
     container_name: enterprise-auth-service
-    ports:
-      - "3001:3001"
     env_file:
+      - .env
       - ./services/auth-service/.env
+    environment:
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
     depends_on:
       - mongodb
       - redis
@@ -47,13 +55,13 @@ services:
       - ./services/auth-service:/app
       - ./shared:/shared
       - /app/node_modules
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   user-service:
     build: ./services/user-service
     container_name: enterprise-user-service
-    ports:
-      - "3004:3004"
     env_file:
+      - .env
       - ./services/user-service/.env
     environment:
       - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
@@ -66,14 +74,17 @@ services:
       - ./services/user-service:/app
       - ./shared:/shared
       - /app/node_modules
+    # Đồng bộ node_modules trong volume với package.json (axios, v.v.) — tránh MODULE_NOT_FOUND
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   organization-service:
     build: ./services/organization-service
     container_name: enterprise-organization-service
-    ports:
-      - "3013:3013"
     env_file:
+      - .env
       - ./services/organization-service/.env
+    environment:
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN:-dev-gateway-internal-token-change-me}
     depends_on:
       - mongodb
       - redis
@@ -83,13 +94,13 @@ services:
       - ./services/organization-service:/app
       - ./shared:/shared
       - /app/node_modules
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   friend-service:
     build: ./services/friend-service
     container_name: enterprise-friend-service
-    ports:
-      - "3014:3014"
     env_file:
+      - .env
       - ./services/friend-service/.env
     environment:
       - AUTH_SERVICE_URL=http://auth-service:3001
@@ -108,13 +119,13 @@ services:
       - ./services/friend-service:/app
       - ./shared:/shared
       - /app/node_modules
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   role-permission-service:
     build: ./services/role-permission-service
     container_name: enterprise-role-permission-service
-    ports:
-      - "3015:3015"
     env_file:
+      - .env
       - ./services/role-permission-service/.env
     depends_on:
       - mongodb
@@ -126,18 +137,19 @@ services:
       - ./services/role-permission-service:/app
       - ./shared:/shared
       - /app/node_modules
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   chat-service:
     build: ./services/chat-service
     container_name: enterprise-chat-service
-    ports:
-      - "3006:3006"
     env_file:
+      - .env
       - ./services/chat-service/.env
     environment:
       - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN:-dev-shared-chat-internal-token-change-me}
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-voicehub}:${RABBITMQ_PASS:-voicehub-dev-change-me}@rabbitmq:5672
       - FRIEND_DM_USE_QUEUE=${FRIEND_DM_USE_QUEUE:-true}
+      - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN:-dev-shared-realtime-token-change-me}
     depends_on:
       mongodb:
         condition: service_started
@@ -155,14 +167,13 @@ services:
       - ./services/chat-service:/app
       - ./shared:/shared
       - /app/node_modules
-    command: ["sh", "-c", "npm install && node src/server.js"]
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   task-service:
     build: ./services/task-service
     container_name: enterprise-task-service
-    ports:
-      - "3009:3009"
     env_file:
+      - .env
       - ./services/task-service/.env
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-voicehub}:${RABBITMQ_PASS:-voicehub-dev-change-me}@rabbitmq:5672
@@ -185,14 +196,13 @@ services:
       - ./services/task-service:/app
       - ./shared:/shared
       - /app/node_modules
-    command: ["sh", "-c", "npm install && node src/server.js"]
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   ai-task-service:
     build: ./services/ai-task-service
     container_name: enterprise-ai-task-service
-    ports:
-      - "3020:3020"
     env_file:
+      - .env
       - ./services/ai-task-service/.env
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-voicehub}:${RABBITMQ_PASS:-voicehub-dev-change-me}@rabbitmq:5672
@@ -213,18 +223,20 @@ services:
       - ./services/ai-task-service:/app
       - ./shared:/shared
       - /app/node_modules
-    command: ["sh", "-c", "npm install && node src/server.js"]
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   ai-task-worker:
     build: ./services/ai-task-worker
     container_name: enterprise-ai-task-worker
     env_file:
+      - .env
       - ./services/ai-task-worker/.env
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-voicehub}:${RABBITMQ_PASS:-voicehub-dev-change-me}@rabbitmq:5672
       - CHAT_SERVICE_URL=http://chat-service:3006
       - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN:-dev-shared-chat-internal-token-change-me}
       - USER_SERVICE_URL=http://user-service:3004
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
       - TASK_SERVICE_URL=http://task-service:3009
       - OLLAMA_BASE_URL=http://ollama:11434
       - PADDLEOCR_BASE_URL=http://paddleocr-service:8000
@@ -245,14 +257,13 @@ services:
       - ./services/ai-task-worker:/app
       - ./shared:/shared
       - /app/node_modules
-    command: ["sh", "-c", "npm install && node src/worker.js"]
+    command: ["sh", "-c", "npm ci || npm install; node src/worker.js"]
 
   document-service:
     build: ./services/document-service
     container_name: enterprise-document-service
-    ports:
-      - "3010:3010"
     env_file:
+      - .env
       - ./services/document-service/.env
     depends_on:
       - mongodb
@@ -263,6 +274,7 @@ services:
       - ./services/document-service:/app
       - ./shared:/shared
       - /app/node_modules
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   voice-service:
     build: ./services/voice-service
@@ -272,6 +284,7 @@ services:
       - "40000-40100:40000-40100/udp"
       - "40000-40100:40000-40100/tcp"
     env_file:
+      - .env
       - ./services/voice-service/.env
     depends_on:
       - mongodb
@@ -282,15 +295,16 @@ services:
       - ./services/voice-service:/app
       - ./shared:/shared
       - /app/node_modules
-    command: sh -c "npm install && node src/server.js"
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
   notification-service:
     build: ./services/notification-service
     container_name: enterprise-notification-service
-    ports:
-      - "3003:3003"
     env_file:
+      - .env
       - ./services/notification-service/.env
+    environment:
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN:-dev-gateway-internal-token-change-me}
     depends_on:
       - mongodb
       - redis
@@ -300,14 +314,17 @@ services:
       - ./services/notification-service:/app
       - ./shared:/shared
       - /app/node_modules
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
+  # Webhook từ bên ngoài (Stripe, …) cần route public — thêm ports: ["3016:3016"] tạm nếu không dùng reverse proxy.
   webhook-service:
     build: ./services/webhook-service
     container_name: enterprise-webhook-service
-    ports:
-      - "3016:3016"
     env_file:
+      - .env
       - ./services/webhook-service/.env
+    environment:
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN:-dev-gateway-internal-token-change-me}
     depends_on:
       - notification-service
     networks:
@@ -321,6 +338,7 @@ services:
     expose:
       - "3017"
     env_file:
+      - .env
       - ./services/socket-service/.env
     environment:
       - USER_SERVICE_URL=http://user-service:3004
@@ -329,6 +347,7 @@ services:
       - REDIS_PORT=6379
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-voicehub}:${RABBITMQ_PASS:-voicehub-dev-change-me}@rabbitmq:5672
       - FRIEND_DM_USE_QUEUE=${FRIEND_DM_USE_QUEUE:-true}
+      - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN:-dev-shared-realtime-token-change-me}
     depends_on:
       redis:
         condition: service_started
@@ -346,7 +365,7 @@ services:
       - ./services/socket-service:/app
       - ./shared:/shared
       - /app/node_modules
-    command: ["sh", "-c", "npm install && node src/server.js"]
+    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
 
 networks:
   enterprise-network:

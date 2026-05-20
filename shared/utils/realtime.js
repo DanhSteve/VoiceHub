@@ -13,11 +13,14 @@ async function emitRealtimeEvent(event = {}, options = {}) {
     return { ok: false, reason: 'missing_event_name' };
   }
 
+  const token = String(INTERNAL_REALTIME_TOKEN || '').trim();
+  if (!token) {
+    logger.warn('[realtime] REALTIME_INTERNAL_TOKEN not set; skip emit');
+    return { ok: false, reason: 'missing_realtime_token' };
+  }
+
   try {
-    const headers = {};
-    if (INTERNAL_REALTIME_TOKEN) {
-      headers['x-realtime-token'] = INTERNAL_REALTIME_TOKEN;
-    }
+    const headers = { 'x-realtime-token': token };
 
     const response = await axios.post(
       `${SOCKET_SERVICE_URL}/internal/realtime/publish`,

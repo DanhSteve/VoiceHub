@@ -1,0 +1,19 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDung
+participant Client as UngDungWeb
+participant AiSvc as AiTaskService
+participant Queue as RabbitMQ
+participant Worker as AiTaskWorker
+participant LLM as Ollama
+participant AiDb as Mongo_AiTaskExtraction
+
+Note over User,AiDb: Chặng 1 - Trích xuất đề xuất task
+User->>Client: Chọn message cần trích xuất
+Client->>AiSvc: POST /api/ai-tasks/extract
+AiSvc->>AiDb: Lưu extraction queued
+AiSvc->>Queue: Publish task-ai.extract
+AiSvc-->>Client: 202 accepted
+Queue->>Worker: Consume job
+Worker->>LLM: Suy luận task draft
+Worker->>AiDb: Lưu draft + confidence

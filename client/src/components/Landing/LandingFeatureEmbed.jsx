@@ -9,7 +9,7 @@ const LoginPage = lazy(() => import('../../pages/Auth/LoginPage'));
 const DashboardPage = lazy(() => import('../../pages/Dashboard/DashboardPage'));
 const FriendChatPage = lazy(() => import('../../pages/Chat/FriendChatPage'));
 const VoiceRoomPage = lazy(() => import('../../pages/Voice/VoiceRoomPage'));
-const OrganizationsPage = lazy(() => import('../../pages/Organization/OrganizationsPage'));
+const OrganizationsPage = lazy(() => import('../../pages/Workspace/OrganizationsPage'));
 
 function Fallback() {
   return (

@@ -1,0 +1,29 @@
+sequenceDiagram
+autonumber
+actor User as AnalystUser
+participant Client as WebClient
+participant AiApi as AiTaskService
+participant AiDb as MongoAiTaskExtraction
+participant Queue as RabbitMQ
+participant Worker as AiTaskWorker
+participant Llm as OllamaModel
+participant TaskApi as TaskService
+participant SyncDb as MongoSyncSuggestion
+User->>Client: Yeu cau trich xuat task tu message
+Client->>AiApi: POST /api/ai-tasks/extract
+AiApi->>AiDb: save extraction status=queued
+AiApi->>Queue: publish task-ai.extract
+AiApi-->>Client: 202 accepted
+Queue->>Worker: consume extract job
+Worker->>Llm: infer draft task + confidence
+Worker->>AiDb: update extraction completed
+User->>Client: Xac nhan tao task that
+Client->>AiApi: POST /api/ai-tasks/confirm + Idempotency-Key
+AiApi->>TaskApi: create task
+alt Confirm hop le
+  AiApi->>AiDb: mark confirmed
+  AiApi-->>Client: 201 task created
+else Duplicate key / task service error
+  AiApi-->>Client: 409/5xx
+end
+Note over Worker,SyncDb: message sua/xoa se tao sync suggestion

@@ -24,12 +24,35 @@ async function getChannel() {
 async function publishJson(queue, payload) {
   const ch = await getChannel();
   await ch.assertQueue(queue, { durable: true });
-  const ok = ch.sendToQueue(queue, Buffer.from(JSON.stringify(payload)), {
+  const buf = Buffer.from(JSON.stringify(payload));
+  const opts = {
     persistent: true,
     contentType: 'application/json',
-  });
-  return ok;
+  };
+  const trySend = () => ch.sendToQueue(queue, buf, opts);
+  if (!trySend()) {
+    await new Promise((resolve) => ch.once('drain', resolve));
+    if (!trySend()) {
+      await new Promise((resolve) => ch.once('drain', resolve));
+    }
+  }
+  return true;
 }
 
-module.exports = { getChannel, publishJson };
+async function closeRabbit() {
+  try {
+    if (channel) await channel.close();
+  } catch (e) {
+    /* ignore */
+  }
+  channel = null;
+  try {
+    if (conn) await conn.close();
+  } catch (e) {
+    /* ignore */
+  }
+  conn = null;
+}
+
+module.exports = { getChannel, publishJson, closeRabbit };
 

@@ -1,0 +1,20 @@
+﻿sequenceDiagram
+autonumber
+actor User as User
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant AuthSvc as AuthService
+participant UserAuthDb as MongoUserAuth
+
+Note over User,UserAuthDb: Luong 1 - Dang ky tai khoan
+User->>Client: Nhap email, mat khau, ho ten, ngay sinh
+Client->>Gateway: POST /api/auth/register
+Gateway->>AuthSvc: Forward payload
+AuthSvc->>UserAuthDb: Validate + tao UserAuth (inactive, unverified)
+alt Hop le
+  AuthSvc-->>Gateway: 201 + huong dan verify email
+  Gateway-->>Client: Dang ky thanh cong
+else Email trung / mat khau yeu / DOB sai
+  AuthSvc-->>Gateway: 400/409
+  Gateway-->>Client: Thong bao loi nghiep vu
+end

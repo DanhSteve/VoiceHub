@@ -1,0 +1,22 @@
+﻿sequenceDiagram
+autonumber
+actor User as User
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant AuthSvc as AuthService
+participant UserAuthDb as MongoUserAuth
+participant UserSvc as UserService
+
+Note over User,UserSvc: Luong 2 - Verify email + bootstrap profile
+User->>Client: Bam link verify tu email
+Client->>Gateway: GET /api/auth/verify-email?token=...
+Gateway->>AuthSvc: Forward verify token
+AuthSvc->>UserAuthDb: Check token + set isActive/isEmailVerified
+alt Token hop le
+  AuthSvc->>UserSvc: Bootstrap profile noi bo
+  AuthSvc-->>Gateway: 200 verified
+  Gateway-->>Client: Tai khoan san sang dang nhap
+else Token sai/het han
+  AuthSvc-->>Gateway: 400/410
+  Gateway-->>Client: Verify that bai
+end

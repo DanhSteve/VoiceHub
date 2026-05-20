@@ -22,6 +22,8 @@ router.get('/metrics', (req, res) => {
   });
 });
 
+// GET /api/health/gateway-trust được đăng ký trong app.js (trước auth) — tránh 401 khi client chưa có JWT.
+
 // Apply authentication middleware cho tất cả routes (trừ public routes)
 router.use(authMiddleware);
 

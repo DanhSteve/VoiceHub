@@ -41,6 +41,12 @@ router.get(
   messageController.getSignedReadUrlInternal.bind(messageController)
 );
 
+router.post(
+  '/internal/purge-organization-messages',
+  internalServiceOnly,
+  messageController.purgeOrganizationMessagesInternal.bind(messageController)
+);
+
 // Tất cả routes đều cần authentication
 router.use(authenticate);
 
@@ -76,6 +82,13 @@ router.delete('/:messageId', messageController.deleteMessage.bind(messageControl
 
 // Thu hồi tin nhắn (recall)
 router.patch('/:messageId/recall', messageController.recallMessage.bind(messageController));
+
+// Phản hồi emoji
+router.post('/:messageId/reactions', messageController.addReaction.bind(messageController));
+router.delete(
+  '/:messageId/reactions/:emoji',
+  messageController.removeReaction.bind(messageController)
+);
 
 // Chỉnh sửa tin nhắn
 router.patch('/:messageId/edit', messageController.editMessage.bind(messageController));

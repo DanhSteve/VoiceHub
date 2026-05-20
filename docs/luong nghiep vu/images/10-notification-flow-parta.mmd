@@ -1,0 +1,20 @@
+sequenceDiagram
+autonumber
+actor Domain as DichVuNguon
+actor User as NguoiDung
+participant Gateway as ApiGateway
+participant NotiSvc as NotificationService
+participant NotiDb as Mongo_Notification
+participant Realtime as SocketService
+participant Client as UngDungWeb
+
+Note over Domain,Client: Chặng 1 - Tạo thông báo và hiển thị realtime
+Domain->>Gateway: POST /api/notifications (internal token)
+Gateway->>NotiSvc: Forward
+NotiSvc->>NotiDb: Insert notification
+NotiSvc->>Realtime: Emit notification:new
+NotiSvc-->>Domain: 201
+User->>Client: Mở chuông thông báo
+Client->>Gateway: GET /api/notifications
+Gateway->>NotiSvc: Query theo user
+NotiSvc-->>Client: Danh sách thông báo

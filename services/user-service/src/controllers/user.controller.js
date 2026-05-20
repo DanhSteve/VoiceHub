@@ -1,5 +1,19 @@
 const userService = require('../services/user.service');
-const { logger, getRedisClient } = require('/shared');
+const { logger, getRedisClient, decryptFieldSafe } = require('/shared');
+
+/** Định danh người gọi (chỉ từ userContext sau khi header gateway đã được tin cậy). */
+function actorUserId(req) {
+  return req.userContext?.userId || req.user?.id || null;
+}
+
+function safeProfilePayload(profile) {
+  if (!profile) return profile;
+  const plain = typeof profile.toObject === 'function' ? profile.toObject() : { ...profile };
+  return {
+    ...plain,
+    phone: decryptFieldSafe(plain.phone, plain.phone || ''),
+  };
+}
 
 class UserController {
   // Tạo user profile mới
@@ -30,7 +44,7 @@ class UserController {
 
       res.status(201).json({
         success: true,
-        data: userProfile,
+        data: safeProfilePayload(userProfile),
       });
     } catch (error) {
       logger.error('Create user profile error:', error);
@@ -62,7 +76,7 @@ class UserController {
 
       res.json({
         success: true,
-        data: userProfile,
+        data: safeProfilePayload(userProfile),
       });
     } catch (error) {
       logger.error('Get user profile error:', error);
@@ -94,7 +108,7 @@ class UserController {
 
       res.json({
         success: true,
-        data: userProfile,
+        data: safeProfilePayload(userProfile),
       });
     } catch (error) {
       logger.error('Get user profile by username error:', error);
@@ -128,7 +142,7 @@ class UserController {
 
       res.json({
         success: true,
-        data: userProfile,
+        data: safeProfilePayload(userProfile),
       });
     } catch (error) {
       logger.error('Get user profile by phone error:', error);
@@ -142,7 +156,7 @@ class UserController {
   // Lấy thông tin user hiện tại (userId từ gateway header x-user-id hoặc userContext)
   async getCurrentUser(req, res) {
     try {
-      const userId = req.user?.id || req.userContext?.userId || req.headers['x-user-id'];
+      const userId = actorUserId(req);
 
       if (!userId) {
         return res.status(401).json({
@@ -170,7 +184,7 @@ class UserController {
 
       res.json({
         success: true,
-        data: userProfile,
+        data: safeProfilePayload(userProfile),
       });
     } catch (error) {
       logger.error('Get current user error:', error);
@@ -184,21 +198,27 @@ class UserController {
   // Cập nhật user profile
   async updateUserProfile(req, res) {
     try {
-      const userId = req.user?.id || req.userContext?.userId || req.headers['x-user-id'] || req.params.userId;
-
-      if (!userId) {
+      const actorId = actorUserId(req);
+      if (!actorId) {
         return res.status(401).json({
           success: false,
           message: 'Unauthorized',
         });
       }
+      if (req.params.userId && String(req.params.userId) !== String(actorId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden',
+        });
+      }
+      const userId = actorId;
 
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const userProfile = await userService.updateUserProfile(userId, body);
 
       res.json({
         success: true,
-        data: userProfile,
+        data: safeProfilePayload(userProfile),
       });
     } catch (error) {
       logger.error('Update user profile error:', error);
@@ -212,7 +232,7 @@ class UserController {
   // Cập nhật status
   async updateStatus(req, res) {
     try {
-      const userId = req.user?.id || req.userContext?.userId || req.headers['x-user-id'];
+      const userId = actorUserId(req);
       const { status } = req.body;
 
       if (!userId) {
@@ -369,7 +389,7 @@ class UserController {
   async deleteUserProfile(req, res) {
     try {
       const { userId } = req.params;
-      const currentUserId = req.user?.id || req.userContext?.userId || req.headers['x-user-id'];
+      const currentUserId = actorUserId(req);
 
       if (!currentUserId) {
         return res.status(401).json({

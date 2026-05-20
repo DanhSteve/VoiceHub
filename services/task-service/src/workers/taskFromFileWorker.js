@@ -5,6 +5,14 @@ const taskService = require('../services/task.service');
 const { firebaseStorage, emitRealtimeEvent, logger } = require('/shared');
 
 const QUEUE = process.env.RABBITMQ_TASK_FROM_FILE_QUEUE || 'voicehub.task.from_file';
+const DLQ =
+  process.env.RABBITMQ_TASK_FROM_FILE_DLQ_QUEUE || `${process.env.RABBITMQ_TASK_FROM_FILE_QUEUE || 'voicehub.task.from_file'}.dlq`;
+const MAX_TRANSIENT_RETRIES = Math.max(
+  0,
+  parseInt(process.env.TASK_FROM_FILE_MAX_RETRIES || '8', 10) || 8
+);
+
+let workerHandle = null;
 
 const CHAT_SERVICE_URL = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
@@ -96,6 +104,36 @@ async function processJob(payload) {
   }
 }
 
+function isTransientWorkerError(err) {
+  const code = err && err.code;
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED') return true;
+  const status = err && err.response && err.response.status;
+  if (status >= 500) return true;
+  return false;
+}
+
+function getRetryCount(msg) {
+  const h = (msg && msg.properties && msg.properties.headers) || {};
+  const n = h['x-retry-count'];
+  if (n === undefined || n === null) return 0;
+  const parsed = parseInt(String(n), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function publishToDlq(ch, msg, err) {
+  const original = msg.content.toString('utf8');
+  const body = {
+    error: String(err && err.message ? err.message : err),
+    transient: isTransientWorkerError(err),
+    original,
+  };
+  await ch.assertQueue(DLQ, { durable: true });
+  ch.sendToQueue(DLQ, Buffer.from(JSON.stringify(body)), {
+    persistent: true,
+    contentType: 'application/json',
+  });
+}
+
 async function startTaskFromFileWorker() {
   const url = process.env.RABBITMQ_URL;
   if (!url || process.env.TASK_FROM_FILE_WORKER === 'false') {
@@ -106,18 +144,36 @@ async function startTaskFromFileWorker() {
   const conn = await amqp.connect(url);
   const ch = await conn.createChannel();
   await ch.assertQueue(QUEUE, { durable: true });
+  await ch.assertQueue(DLQ, { durable: true });
 
-  await ch.consume(
+  const { consumerTag } = await ch.consume(
     QUEUE,
     async (msg) => {
       if (!msg) return;
+      const retryCount = getRetryCount(msg);
       try {
         const payload = JSON.parse(msg.content.toString('utf8'));
         await processJob(payload);
         ch.ack(msg);
       } catch (err) {
         logger.error('[taskFromFileWorker]', err.message);
-        ch.nack(msg, false, false);
+        const transient = isTransientWorkerError(err);
+        if (transient && retryCount < MAX_TRANSIENT_RETRIES) {
+          const next = retryCount + 1;
+          ch.sendToQueue(QUEUE, msg.content, {
+            persistent: true,
+            contentType: 'application/json',
+            headers: { 'x-retry-count': next },
+          });
+          ch.ack(msg);
+          return;
+        }
+        try {
+          await publishToDlq(ch, msg, err);
+        } catch (dlqErr) {
+          logger.error('[taskFromFileWorker] DLQ publish failed', dlqErr.message);
+        }
+        ch.ack(msg);
       }
     },
     { noAck: false }
@@ -125,7 +181,28 @@ async function startTaskFromFileWorker() {
 
   conn.on('error', (err) => logger.error('[taskFromFileWorker] conn', err.message));
   console.log(`[taskFromFileWorker] listening on ${QUEUE}`);
-  return { conn, ch };
+  workerHandle = { conn, ch, consumerTag };
+  return workerHandle;
 }
 
-module.exports = { startTaskFromFileWorker };
+async function stopTaskFromFileWorker() {
+  if (!workerHandle) return;
+  try {
+    await workerHandle.ch.cancel(workerHandle.consumerTag);
+  } catch (e) {
+    /* ignore */
+  }
+  try {
+    await workerHandle.ch.close();
+  } catch (e) {
+    /* ignore */
+  }
+  try {
+    await workerHandle.conn.close();
+  } catch (e) {
+    /* ignore */
+  }
+  workerHandle = null;
+}
+
+module.exports = { startTaskFromFileWorker, stopTaskFromFileWorker };

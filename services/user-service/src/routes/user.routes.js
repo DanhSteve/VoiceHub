@@ -3,6 +3,7 @@ const router = express.Router();
 const userController = require('../controllers/user.controller');
 const userContext = require('../middlewares/userContext');
 const internalServiceAuth = require('../middlewares/internalServiceAuth');
+const { protect } = require('../middleware/auth');
 
 // Presence từ socket-service (trước userContext — không cần x-user-id)
 router.patch(
@@ -17,11 +18,34 @@ router.post(
   userController.internalPresenceBatch.bind(userController)
 );
 
-// Apply user context middleware cho các route còn lại
-router.use(userContext);
+// Đọc profile theo ID / SĐT — gọi nội bộ từ friend-service, chat-service (không có JWT user)
+router.get(
+  '/internal/profile/:userId',
+  internalServiceAuth,
+  userController.getUserProfileById.bind(userController)
+);
+router.get(
+  '/internal/phone/:phone',
+  internalServiceAuth,
+  userController.getUserProfileByPhone.bind(userController)
+);
 
-// Tạo user profile mới
-router.post('/', userController.createUserProfile.bind(userController));
+router.get(
+  '/internal/search',
+  internalServiceAuth,
+  userController.searchUsers.bind(userController)
+);
+
+// Bootstrap profile sau verify email — chỉ auth-service (x-internal-token)
+router.post(
+  '/internal/bootstrap',
+  internalServiceAuth,
+  userController.createUserProfile.bind(userController)
+);
+
+// Các route còn lại: JWT bắt buộc (giống friend-service), rồi enrich profile
+router.use(protect);
+router.use(userContext);
 
 // Lấy thông tin user hiện tại
 router.get('/me', userController.getCurrentUser.bind(userController));

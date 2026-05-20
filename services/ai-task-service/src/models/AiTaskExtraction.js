@@ -21,22 +21,39 @@ const aiTaskExtractionSchema = new mongoose.Schema(
     },
     draft: {
       title: { type: String, default: '' },
+      summary: { type: String, default: '' },
       description: { type: String, default: '' },
       assigneeId: { type: mongoose.Schema.Types.ObjectId, default: null },
       assigneeName: { type: String, default: '' },
+      departmentId: { type: mongoose.Schema.Types.ObjectId, default: null },
+      teamId: { type: mongoose.Schema.Types.ObjectId, default: null },
+      departmentName: { type: String, default: '' },
       dueDate: { type: Date, default: null },
       priority: { type: String, default: 'medium' },
       tags: { type: [String], default: [] },
     },
+    contextHints: {
+      mentions: { type: mongoose.Schema.Types.Mixed, default: [] },
+      channelId: { type: String, default: '' },
+    },
     confidence: { type: Number, default: null },
     rawModelOutput: { type: mongoose.Schema.Types.Mixed, default: null },
     error: { type: String, default: '' },
+    /** Khóa idempotent cho POST /confirm (header Idempotency-Key) */
+    confirmIdempotencyKey: { type: String, default: null },
   },
   { timestamps: true }
 );
 
 aiTaskExtractionSchema.index({ organizationId: 1, status: 1, createdAt: -1 });
 aiTaskExtractionSchema.index({ 'sourceRef.messageId': 1 });
+aiTaskExtractionSchema.index(
+  { generatedBy: 1, confirmIdempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { confirmIdempotencyKey: { $type: 'string', $ne: '' } },
+  }
+);
 
 module.exports = mongoose.model('AiTaskExtraction', aiTaskExtractionSchema);
 

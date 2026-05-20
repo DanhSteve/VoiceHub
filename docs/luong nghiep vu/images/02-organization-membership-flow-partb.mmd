@@ -1,0 +1,23 @@
+sequenceDiagram
+autonumber
+actor NguoiDung as NguoiNopDon
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant OrgSvc as OrganizationService
+participant JoinDb as Mongo_JoinApplication
+participant MemberDb as Mongo_Membership
+
+Note over NguoiDung,MemberDb: Chặng 2 - Nộp đơn và xử lý ngoại lệ
+NguoiDung->>Client: Gửi đơn tham gia tổ chức
+Client->>Gateway: POST /api/organizations/:orgId/join-applications
+Gateway->>OrgSvc: Forward request
+OrgSvc->>JoinDb: Validate form + lưu pending
+
+alt Reviewer duyệt
+  OrgSvc->>MemberDb: Tạo membership active
+  OrgSvc-->>Client: 200 duyệt thành công
+else Đơn trùng hoặc dữ liệu sai
+  OrgSvc-->>Client: 400/409
+else Không đủ quyền duyệt
+  OrgSvc-->>Client: 403
+end

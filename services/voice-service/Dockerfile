@@ -13,13 +13,13 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends python3 python3-pip make g++ && \
     rm -rf /var/lib/apt/lists/*
 
-# 4️⃣ Copy dependency files
+# 4️⃣ Chỉ đưa manifest vào image — dependencies luôn tải từ npm registry (không bundle node_modules từ máy host).
 COPY package*.json ./
 
 # 5️⃣ Cài dependencies (và nodemon để dev mode dùng được)
 RUN npm install && npm install -g nodemon
 
-# 6️⃣ Copy toàn bộ code
+# 6️⃣ Copy mã nguồn (node_modules trên host bị loại bởi .dockerignore để không ghi đè bước cài ở trên)
 COPY . .
 
 # 7️⃣ Mở cổng app

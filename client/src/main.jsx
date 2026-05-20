@@ -42,12 +42,15 @@ import { AuthProvider } from './context/AuthContext';
 // File: ./context/SocketContext.jsx  
 // Cung cấp: socket instance, online users, realtime events
 import { SocketProvider } from './context/SocketContext';
+import FriendCallRealtimeHost from './components/Call/FriendCallRealtimeHost';
+import { FriendCallSessionProvider } from './context/FriendCallSessionContext';
 
 // Import ThemeProvider để quản lý dark/light theme
 // File: ./context/ThemeContext.jsx
 // Cung cấp: theme state, toggleTheme(), theme colors
 import { ThemeProvider } from './context/ThemeContext';
 import { LocaleProvider } from './context/LocaleContext';
+import { WorkspaceProvider } from './context/WorkspaceContext';
 
 /* ========================================
    RENDER ỨNG DỤNG VÀO DOM
@@ -101,22 +104,27 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             - Auto refresh khi reload page
             - File: ./context/AuthContext.jsx */}
         <AuthProvider>
-          {/* SocketProvider: quản lý Socket.IO connection
-              - Kết nối đến backend socket server
-              - Cần user từ AuthContext để authenticate
-              - Provide: socket, onlineUsers, emit(), on()
-              - File: ./context/SocketContext.jsx */}
-          <SocketProvider>
-            {/* App component: chứa tất cả routes và pages
-                - File: ./App.jsx
-                - Có thể access tất cả contexts ở trên */}
-            <App />
-            
-            {/* Toaster: hiển thị toast notifications
-                - Đặt ở đây để dùng được ở mọi nơi
-                - toast.success(), toast.error() ở bất kỳ component nào */}
-            <VoiceHubToaster />
-          </SocketProvider>
+          <FriendCallSessionProvider>
+            <WorkspaceProvider>
+            {/* SocketProvider: quản lý Socket.IO connection
+                - Kết nối đến backend socket server
+                - Cần user từ AuthContext để authenticate
+                - Provide: socket, onlineUsers, emit(), on()
+                - File: ./context/SocketContext.jsx */}
+            <SocketProvider>
+              {/* App component: chứa tất cả routes và pages
+                  - File: ./App.jsx
+                  - Có thể access tất cả contexts ở trên */}
+              <App />
+              <FriendCallRealtimeHost />
+
+              {/* Toaster: hiển thị toast notifications
+                  - Đặt ở đây để dùng được ở mọi nơi
+                  - toast.success(), toast.error() ở bất kỳ component nào */}
+              <VoiceHubToaster />
+            </SocketProvider>
+            </WorkspaceProvider>
+          </FriendCallSessionProvider>
         </AuthProvider>
         </LocaleProvider>
       </ThemeProvider>

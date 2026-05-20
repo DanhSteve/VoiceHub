@@ -2,7 +2,8 @@ const axios = require('axios');
 const logger = require('./logger');
 
 const WEBHOOK_SERVICE_URL = process.env.WEBHOOK_SERVICE_URL || 'http://webhook-service:3016';
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'your-webhook-secret-key-change-this-in-production';
+const WEBHOOK_SECRET = String(process.env.WEBHOOK_SECRET || '').trim();
+let hasWarnedMissingSecret = false;
 
 /**
  * Gửi webhook event đến webhook service
@@ -23,11 +24,16 @@ async function sendWebhook(eventType, eventName, data) {
       {
         headers: {
           'Content-Type': 'application/json',
-          'X-Webhook-Secret': WEBHOOK_SECRET,
+          ...(WEBHOOK_SECRET ? { 'X-Webhook-Secret': WEBHOOK_SECRET } : {}),
         },
         timeout: 5000, // 5 seconds timeout
       }
     );
+
+    if (!WEBHOOK_SECRET && !hasWarnedMissingSecret) {
+      hasWarnedMissingSecret = true;
+      logger.warn('WEBHOOK_SECRET is not configured; outbound webhook requests are unsigned');
+    }
 
     logger.info(`Webhook sent: ${eventType}/${eventName}`);
   } catch (error) {

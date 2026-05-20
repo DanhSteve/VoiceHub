@@ -48,6 +48,16 @@ export function buildOrgMessageSearchParams(tokens, keyword, ctx) {
 
   if (qParts.length) params.set('q', qParts.join(' '));
 
+  if (ctx.hasAttachment === true || ctx.hasAttachment === 'true') {
+    params.set('hasAttachment', 'true');
+  }
+  if (ctx.hasLink === true || ctx.hasLink === 'true') {
+    params.set('hasLink', 'true');
+  }
+  if (ctx.messageType) {
+    params.set('messageType', String(ctx.messageType));
+  }
+
   params.set('page', String(ctx.page || 1));
   params.set('limit', String(ctx.limit || 20));
 
@@ -62,4 +72,24 @@ export async function fetchOrgMessageSearch(tokens, keyword, ctx) {
   const body = res?.data !== undefined ? res.data : res;
   const data = body?.data !== undefined ? body.data : body;
   return data;
+}
+
+/**
+ * Lỗi từ api.js interceptor: { message, status, data, code } — không có .response.
+ */
+export function formatOrgMessageSearchError(err) {
+  const code = err?.data?.code;
+  if (code === 'CHANNEL_ACCESS_VERIFY_FAILED') {
+    return 'Tạm thời không kiểm tra được quyền kênh. Kiểm tra organization-service và cấu hình gateway, rồi thử lại.';
+  }
+  if (code === 'CHANNEL_ACCESS_ORG_ERROR') {
+    return 'Organization-service lỗi khi xác minh kênh. Xem log service và thử lại.';
+  }
+  if (code === 'ORG_CHANNEL_ACCESS_DENIED') {
+    return err?.data?.message || 'Không có quyền tìm trong tổ chức hoặc kênh này.';
+  }
+  if (code === 'ORG_CHANNEL_AUTH_REQUIRED') {
+    return err?.data?.message || 'Phiên đăng nhập không hợp lệ. Đăng nhập lại.';
+  }
+  return err?.data?.message || err?.message || err?.response?.data?.message || '';
 }

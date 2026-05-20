@@ -1,0 +1,23 @@
+sequenceDiagram
+autonumber
+actor Host as ChuTri
+actor Member as ThanhVien
+participant Gateway as ApiGateway
+participant VoiceSvc as VoiceService
+participant MeetDb as Mongo_Meeting
+participant SFU as Mediasoup
+
+Note over Host,SFU: Chặng 2 - Ngoại lệ join/end
+Member->>Gateway: Yêu cầu join meeting
+Gateway->>VoiceSvc: Validate meeting + quyền
+alt Meeting đã kết thúc
+  VoiceSvc-->>Member: Từ chối join
+else Không đủ quyền
+  VoiceSvc-->>Member: 403
+else Hợp lệ
+  VoiceSvc->>SFU: Cấp transport
+  SFU-->>Member: Join success
+end
+Host->>Gateway: POST /api/meetings/:id/end
+VoiceSvc->>MeetDb: Set ended
+VoiceSvc->>SFU: Close room

@@ -31,6 +31,166 @@ export const organizationAPI = {
     return response;
   },
 
+  createWorkspace: async (data) => {
+    const response = await apiClient.post('/organizations', data);
+    return response;
+  },
+
+  getStructure: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/structure`);
+    return response;
+  },
+
+  getBranches: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/hierarchy/branches`);
+    return response;
+  },
+
+  createBranch: async (orgId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/hierarchy/branches`, data);
+    return response;
+  },
+
+  getDivisions: async (orgId, branchId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/hierarchy/branches/${branchId}/divisions`);
+    return response;
+  },
+
+  createDivision: async (orgId, branchId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/hierarchy/branches/${branchId}/divisions`, data);
+    return response;
+  },
+  updateDivision: async (orgId, divisionId, data) => {
+    const response = await apiClient.put(`/organizations/${orgId}/hierarchy/divisions/${divisionId}`, data);
+    return response;
+  },
+
+  getDepartmentsByDivision: async (orgId, divisionId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/hierarchy/divisions/${divisionId}/departments`);
+    return response;
+  },
+
+  createDepartmentByDivision: async (orgId, divisionId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/hierarchy/divisions/${divisionId}/departments`, data);
+    return response;
+  },
+
+  getTeamsByDepartment: async (orgId, deptId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/hierarchy/departments/${deptId}/teams`);
+    return response;
+  },
+
+  createTeamByDepartment: async (orgId, deptId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/hierarchy/departments/${deptId}/teams`, data);
+    return response;
+  },
+  updateTeamByHierarchy: async (orgId, teamId, data) => {
+    const response = await apiClient.put(`/organizations/${orgId}/hierarchy/teams/${teamId}`, data);
+    return response;
+  },
+
+  getChannelsByTeam: async (orgId, teamId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/hierarchy/teams/${teamId}/channels`);
+    return response;
+  },
+
+  createChannelByTeam: async (orgId, teamId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/hierarchy/teams/${teamId}/channels`, data);
+    return response;
+  },
+  createChannelByScope: async (orgId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/hierarchy/channels`, data);
+    return response;
+  },
+  updateChannelByTeam: async (orgId, teamId, channelId, data) => {
+    const response = await apiClient.put(`/organizations/${orgId}/hierarchy/teams/${teamId}/channels/${channelId}`, data);
+    return response;
+  },
+  updateChannelByScope: async (orgId, channelId, data) => {
+    const response = await apiClient.put(`/organizations/${orgId}/hierarchy/channels/${channelId}`, data);
+    return response;
+  },
+
+  getWorkspaceBySlug: async (slug) => {
+    const response = await apiClient.get(`/organizations/by-slug/${encodeURIComponent(slug)}`);
+    return response;
+  },
+  getAccessibleChannelIds: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/accessible-channel-ids`);
+    return response;
+  },
+
+  getTaskWorkspaceScope: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/task-workspace-scope`);
+    return response;
+  },
+  listChannelAccess: async (orgId, channelId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/channels/${channelId}/access`);
+    return response;
+  },
+  grantChannelAccess: async (orgId, channelId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/channels/${channelId}/access/grant`, data);
+    return response;
+  },
+  revokeChannelAccess: async (orgId, channelId, data) => {
+    const response = await apiClient.post(`/organizations/${orgId}/channels/${channelId}/access/revoke`, data);
+    return response;
+  },
+  listChannelRoleAccess: async (orgId, channelId) => {
+    const response = await apiClient.get(
+      `/organizations/${orgId}/channels/${channelId}/role-access`
+    );
+    return response;
+  },
+  saveChannelRoleAccess: async (orgId, channelId, data) => {
+    const response = await apiClient.put(
+      `/organizations/${orgId}/channels/${channelId}/role-access`,
+      data
+    );
+    return response;
+  },
+  listDivisionRoleAccess: async (orgId, divisionId) => {
+    const response = await apiClient.get(
+      `/organizations/${orgId}/divisions/${divisionId}/role-access`
+    );
+    return response;
+  },
+  saveDivisionRoleAccess: async (orgId, divisionId, data) => {
+    const response = await apiClient.put(
+      `/organizations/${orgId}/divisions/${divisionId}/role-access`,
+      data
+    );
+    return response;
+  },
+  listDepartmentRoleAccess: async (orgId, departmentId) => {
+    const response = await apiClient.get(
+      `/organizations/${orgId}/departments/${departmentId}/role-access`
+    );
+    return response;
+  },
+  saveDepartmentRoleAccess: async (orgId, departmentId, data) => {
+    const response = await apiClient.put(
+      `/organizations/${orgId}/departments/${departmentId}/role-access`,
+      data
+    );
+    return response;
+  },
+  listTeamRoleAccess: async (orgId, teamId, config) => {
+    const response = await apiClient.get(
+      `/organizations/${orgId}/hierarchy/teams/${teamId}/role-access`,
+      config
+    );
+    return response;
+  },
+  saveTeamRoleAccess: async (orgId, teamId, data, config) => {
+    const response = await apiClient.put(
+      `/organizations/${orgId}/hierarchy/teams/${teamId}/role-access`,
+      data,
+      config
+    );
+    return response;
+  },
+
   // Get pending invitations for current user
   getMyInvitations: async () => {
     const response = await apiClient.get('/organizations/invitations');
@@ -122,8 +282,8 @@ export const organizationAPI = {
   },
 
   // Create invite link for organization
-  createInviteLink: async (orgId) => {
-    const response = await apiClient.post(`/organizations/${orgId}/members/invite-link`);
+  createInviteLink: async (orgId, data = {}) => {
+    const response = await apiClient.post(`/organizations/${orgId}/members/invite-link`, data);
     return response;
   },
 

@@ -1,0 +1,21 @@
+sequenceDiagram
+autonumber
+actor Admin as ChuToChuc_Admin
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant OrgSvc as OrganizationService
+participant DeptDb as Mongo_Department
+participant ChannelDb as Mongo_Channel
+
+Note over Admin,ChannelDb: Chặng 1 - Quản trị cấu trúc phòng ban và kênh
+Admin->>Client: Tạo phòng ban
+Client->>Gateway: POST /api/organizations/:orgId/departments
+Gateway->>OrgSvc: protect + authorize
+OrgSvc->>DeptDb: Insert department
+OrgSvc-->>Client: 201
+
+Admin->>Client: Tạo kênh trong phòng ban
+Client->>Gateway: POST /api/.../channels
+Gateway->>OrgSvc: protect + authorize
+OrgSvc->>ChannelDb: Insert channel
+OrgSvc-->>Client: 201

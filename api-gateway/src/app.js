@@ -1,11 +1,14 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { services } = require('./config/services');
 require('dotenv').config();
 
 const app = express();
+
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -17,18 +20,35 @@ const apiLimiter = rateLimit({
 app.use(apiLimiter);
 const VOICE_SIGNAL_PATH = process.env.VOICE_SIGNAL_PATH || '/voice-socket';
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function toOriginMatcher(rule) {
+  const normalized = String(rule || '').replace(/\/+$/, '').trim();
+  if (!normalized) return null;
+  if (normalized === '*') return () => true;
+  if (!normalized.includes('*')) {
+    return (origin) => origin.replace(/\/+$/, '') === normalized;
+  }
+  const pattern = '^' + escapeRegExp(normalized).replace(/\\\*/g, '.*') + '$';
+  const regex = new RegExp(pattern);
+  return (origin) => regex.test(origin.replace(/\/+$/, ''));
+}
+
 const isProd = process.env.NODE_ENV === 'production';
-const corsAllowList = (process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:3000')
+const corsAllowList = String(process.env.CORS_ORIGIN || '')
   .split(',')
   .map((o) => o.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim())
   .filter(Boolean);
+const corsMatchers = corsAllowList.map(toOriginMatcher).filter(Boolean);
 
 // Middleware — production: chỉ origin trong whitelist; dev: cho phép không có Origin (mobile/curl)
 app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
-      if (corsAllowList.includes(origin)) return callback(null, true);
+      if (corsMatchers.some((match) => match(origin))) return callback(null, true);
       if (!isProd) return callback(null, true);
       return callback(new Error('CORS blocked'));
     },
@@ -48,22 +68,11 @@ app.use(
     ws: false,
     xfwd: true,
     logLevel: 'warn',
-    on: {
-      error(err, req, res) {
-        console.error('[API-Gateway] /socket.io proxy error:', err?.code || err?.message, '| upstream:', services.socket.url);
-        if (res && typeof res.writeHead === 'function' && !res.headersSent) {
-          res.writeHead(503, { 'Content-Type': 'application/json' });
-          res.end(
-            JSON.stringify({
-              success: false,
-              message: 'Socket service unreachable via gateway',
-              hint:
-                'Set SOCKET_SERVICE_URL to a reachable URL (Docker: http://socket-service:3017; host: http://127.0.0.1:3017). Or use client VITE_SOCKET_DIRECT_URL=http://127.0.0.1:3017 to bypass gateway for Socket.IO.',
-            })
-          );
-        }
-      },
-    },
+    /**
+     * Express mount `/socket.io` sẽ làm req.url trong middleware chỉ còn `/?EIO=...`
+     * nhưng socket-service cần path `/socket.io`.
+     */
+    pathRewrite: (path) => `/socket.io${path}`,
   })
 );
 
@@ -76,8 +85,24 @@ app.use(
     ws: false,
     xfwd: true,
     logLevel: 'warn',
+    /**
+     * Tương tự `/socket.io`: khi mount theo `VOICE_SIGNAL_PATH`, req.url bị strip prefix.
+     */
+    pathRewrite: (path) => `${VOICE_SIGNAL_PATH}${path}`,
   })
 );
+
+/** Public — phải khai báo trước router + auth để Express 5 không rơi vào 401 (client gọi không có JWT). */
+app.get('/api/health/gateway-trust', (req, res) => {
+  const configured = Boolean(String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim());
+  res.json({
+    success: true,
+    gatewayTrustConfigured: configured,
+    message: configured
+      ? 'Gateway trust đã cấu hình (GATEWAY_INTERNAL_TOKEN).'
+      : 'API Gateway chưa đặt GATEWAY_INTERNAL_TOKEN — đăng nhập sẽ không ổn định. Thêm biến này vào api-gateway/.env và đồng bộ với các microservice.',
+  });
+});
 
 // Routes
 const routes = require('./routes');

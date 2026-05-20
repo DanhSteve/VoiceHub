@@ -6,7 +6,7 @@ import { lazy, Suspense } from 'react';
 // Import Route và Routes từ react-router-dom để quản lý điều hướng
 // Routes: container chứa tất cả các route
 // Route: định nghĩa từng đường dẫn và component tương ứng
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 
 // Import ProtectedRoute để bảo vệ routes cần đăng nhập
 import ProtectedRoute from './components/ProtectedRoute';
@@ -48,14 +48,8 @@ const PrivacyPolicyPage = lazy(() => import('./pages/Auth/PrivacyPolicyPage'));
 // Lazy load dashboard - trang tổng quan sau khi đăng nhập
 const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage'));
 
-// Lazy load trang chat cũ (sẽ dần thay thế bằng 2 trang mới)
-const ChatPage = lazy(() => import('./pages/Chat/ChatPage'));
-
 // Lazy load trang chat bạn bè
 const FriendChatPage = lazy(() => import('./pages/Chat/FriendChatPage'));
-
-// Lazy load trang chat doanh nghiệp
-const OrgChatPage = lazy(() => import('./pages/Chat/OrgChatPage'));
 
 // Lazy load phòng voice chat - :roomId là dynamic parameter
 // Kết nối với WebRTC để gọi voice, sử dụng simple-peer
@@ -66,13 +60,13 @@ const ProfilePage = lazy(() => import('./pages/Profile/ProfilePage'));
 
 // Lazy load trang tổ chức - quản lý organizations
 // Kết nối với organization-service
-const OrganizationsPage = lazy(() => import('./pages/Organization/OrganizationsPage'));
+const OrganizationsPage = lazy(() => import('./pages/Workspace/OrganizationsPage'));
 
 // Cài đặt tổ chức full màn hình — đặt trước /organizations
-const OrganizationSettingsPage = lazy(() => import('./pages/Organization/OrganizationSettingsPage'));
+const OrganizationSettingsPage = lazy(() => import('./pages/Workspace/OrganizationSettingsPage'));
 
 // Đơn gia nhập tổ chức (trang riêng, có :orgId)
-const JoinApplicationPage = lazy(() => import('./pages/Organization/JoinApplicationPage'));
+const JoinApplicationPage = lazy(() => import('./pages/Workspace/JoinApplicationPage'));
 
 // Lazy load trang thông báo - hiển thị notifications realtime
 const NotificationsPage = lazy(() => import('./pages/Notifications/NotificationsPage'));
@@ -86,8 +80,6 @@ const DocumentsPage = lazy(() => import('./pages/Documents/DocumentsPage'));
 // Lazy load trang lịch - quản lý sự kiện và meetings
 const CalendarPage = lazy(() => import('./pages/Calendar/CalendarPage'));
 
-// Trang công việc (task)
-const TasksPage = lazy(() => import('./pages/Tasks/TasksPage'));
 
 // Lazy load trang cài đặt - thay đổi preferences
 const SettingsPage = lazy(() => import('./pages/Settings/SettingsPage'));
@@ -102,6 +94,11 @@ const NotFoundPage = lazy(() => import('./pages/NotFound/NotFoundPage'));
    - Quản lý toàn bộ routing của ứng dụng
 ======================================== */
 function App() {
+  const WorkspaceSlugEntry = () => {
+    const { slug } = useParams();
+    return <OrganizationsPage initialWorkspaceSlug={slug || ''} />;
+  };
+
   return (
     // Suspense: lazy routes — BrandPageLoader khi đang tải chunk
     <Suspense fallback={<BrandPageLoader />}>
@@ -148,12 +145,7 @@ function App() {
           </ProtectedRoute>
         } />
         
-        {/* Chat cũ - tạm thời giữ để tránh lỗi route cũ */}
-        <Route path="/chat" element={
-          <ProtectedRoute>
-            <ChatPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/chat" element={<Navigate to="/chat/friends" replace />} />
 
         {/* Chat bạn bè */}
         <Route path="/chat/friends" element={
@@ -162,12 +154,7 @@ function App() {
           </ProtectedRoute>
         } />
 
-        {/* Chat doanh nghiệp */}
-        <Route path="/chat/organization" element={
-          <ProtectedRoute>
-            <OrgChatPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/chat/organization" element={<Navigate to="/workspaces" replace />} />
         
         {/* Voice chat room - :roomId là dynamic param */}
         {/* VD: /voice/room123 → roomId = "room123" */}
@@ -184,12 +171,7 @@ function App() {
           </ProtectedRoute>
         } />
         
-        {/* Tasks - quản lý công việc */}
-        <Route path="/tasks" element={
-          <ProtectedRoute>
-            <TasksPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/tasks" element={<Navigate to="/workspaces" replace />} />
         
         {/* Profile - thông tin cá nhân */}
         {/* Hiển thị avatar, name, email từ AuthContext */}
@@ -226,6 +208,35 @@ function App() {
             <OrganizationsPage />
           </ProtectedRoute>
         } />
+        <Route path="/workspaces" element={
+          <ProtectedRoute>
+            <OrganizationsPage />
+          </ProtectedRoute>
+        } />
+        <Route
+          path="/w/:slug/*"
+          element={
+            <ProtectedRoute>
+              <WorkspaceSlugEntry />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/workspaces/join/:orgId"
+          element={
+            <ProtectedRoute>
+              <JoinApplicationPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/workspaces/:orgId/settings"
+          element={
+            <ProtectedRoute>
+              <OrganizationSettingsPage />
+            </ProtectedRoute>
+          }
+        />
         
         {/* Friends - tạm khóa giao diện riêng, gom vào trang Tin nhắn */}
         <Route path="/friends" element={

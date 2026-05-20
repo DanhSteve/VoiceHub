@@ -1,39 +1,48 @@
-import { Fragment, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useLocale } from '../../context/LocaleContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import CreateTaskFromAiModal from '../Chat/CreateTaskFromAiModal';
 import { getAiTaskEligibility, AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
-import { Bell, Zap } from 'lucide-react';
+
+import {
+  Bell,
+  ChevronsDown,
+  Filter,
+  Hash,
+  Home,
+  LayoutGrid,
+  List,
+  MessageSquare,
+  Plus,
+  Search,
+  Settings,
+  Zap,
+} from 'lucide-react';
+
 import { Modal } from '../Shared';
 import UnifiedChatComposer from '../Chat/UnifiedChatComposer';
 import ChatUploadProgressBar from '../Chat/ChatUploadProgressBar';
 import { ChatMessageAttachmentBody } from '../Chat/ChatFileAttachment';
 import ChannelMessageToolbar from './ChannelMessageToolbar';
+import OrgMessageInlineEditor from './OrgMessageInlineEditor';
 import ChannelMessageMoreMenu from './ChannelMessageMoreMenu';
+import TasksKanbanDnd, { COL_DONE, COL_PROGRESS, COL_TODO } from '../Tasks/TasksKanbanDnd';
 import { shouldPlaceToolbarBelowBubble } from '../../utils/messageToolbarPlacement';
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
-import OrgWorkspaceSearch from '../../features/search/components/OrgWorkspaceSearch';
-import PageSearchBar from '../../features/search/components/PageSearchBar';
-import SearchFilterChips from '../../features/search/components/SearchFilterChips';
 
-function formatJoinAnswerValue(value) {
-  if (value === undefined || value === null) return '—';
-  if (Array.isArray(value)) {
-    const parts = value.filter((v) => v != null && String(v).trim() !== '');
-    return parts.length ? parts.join(', ') : '—';
-  }
-  if (typeof value === 'object') return JSON.stringify(value);
-  const s = String(value).trim();
-  return s || '—';
-}
+import OrganizationVoiceChannelView from './OrganizationVoiceChannelView';
+import OrganizationWorkspaceStructureSidebar from './OrganizationWorkspaceStructureSidebar';
+import OrganizationSidebarAudioBar from './OrganizationSidebarAudioBar';
+import OrganizationVoiceConnectionPanel from './OrganizationVoiceConnectionPanel';
+import VoiceAudioSettingsPanel from '../../pages/Voice/VoiceAudioSettingsPanel';
+import { loadVoiceAudioPrefs } from '../../pages/Voice/voiceAudioPrefs';
+import { entShell, roleBadgeClass, roleBadgeLabel } from '../../theme/enterpriseWorkspace';
+import { parseMessageMentions } from '../../utils/parseMessageMentions';
+import { collectMentionLabelsFromContacts } from '../../utils/tokenizeMessageMentions';
 
-/**
- * Bản rõ: nhãn từ formSnapshot (lúc nộp đơn), giá trị từ answers.
- * Không có snapshot (đơn cũ) → trả mode raw.
- */
 function messageDayKey(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -53,41 +62,59 @@ function senderInitials(message) {
   return 'TV';
 }
 
-function buildJoinAnswerDisplayRows(answers, formSnapshot) {
-  const raw = answers && typeof answers === 'object' ? answers : {};
-  const fields = formSnapshot?.fields;
-  if (!Array.isArray(fields) || fields.length === 0) {
-    return { mode: 'raw', rows: [] };
+function senderDisplayName(message, isMine, currentUser, fallback) {
+  if (isMine) {
+    return (
+      currentUser?.displayName ||
+      currentUser?.fullName ||
+      currentUser?.username ||
+      currentUser?.email?.split?.('@')?.[0] ||
+      fallback
+    );
   }
-  const rows = fields.map((f) => {
-    const id = f.id;
-    return {
-      id: String(id),
-      label: String(f.label || id || '').trim() || String(id),
-      value: formatJoinAnswerValue(raw[id]),
-    };
-  });
-  const seen = new Set(fields.map((f) => String(f.id)));
-  for (const k of Object.keys(raw)) {
-    if (seen.has(k)) continue;
-    rows.push({
-      id: k,
-      label: k,
-      value: formatJoinAnswerValue(raw[k]),
-    });
+  const u = message?.senderId;
+  if (u && typeof u === 'object') {
+    return u.displayName || u.username || u.fullName || fallback;
   }
-  return { mode: 'labeled', rows };
+  return fallback;
+}
+
+function senderAvatarUrl(message, isMine, currentUser) {
+  if (isMine) {
+    return currentUser?.avatar || currentUser?.profile?.avatar || null;
+  }
+  const u = message?.senderId;
+  if (u && typeof u === 'object') {
+    return u.avatar || u.profile?.avatar || null;
+  }
+  return null;
+}
+
+function userInitialsFromProfile(user) {
+  const name =
+    user?.displayName || user?.fullName || user?.username || user?.email?.split?.('@')?.[0] || '';
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'U';
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
+  return `${parts[0][0] || ''}${parts[parts.length - 1][0] || ''}`.toUpperCase();
 }
 
 const OrganizationMainPanel = ({
+  landingDemo = false,
+  workspaceTabView = 'chat',
   selectedOrganization,
-  hasOrganizations = true,
-  /** false: chưa biết user có tổ chức hay không — không hiển thị màn empty/home để tránh nháy UI */
-  organizationsLoaded = false,
-  viewMode = 'home',
   departments = [],
   selectedDepartment,
+  branches = [],
+  selectedBranchId = '',
+  selectedDivisionId = '',
+  onSelectBranch,
+  onSelectDivision,
   channels = [],
+  channelPermissionMatrix = {},
+  membershipScope = null,
+  teams = [],
+  selectedTeamId = '',
   selectedChannelId,
   messages = [],
   messageInput = '',
@@ -96,32 +123,14 @@ const OrganizationMainPanel = ({
   loadingMessages = false,
   sendingMessage = false,
   currentUserId,
+  currentUser = null,
   onSelectChannel,
   onSelectDepartment,
-  onCreateOrganization,
-  onJoinQuickInvite,
-  quickInviteInput = '',
-  onChangeQuickInviteInput,
-  joiningQuickInvite = false,
-  invitations = [],
-  loadingInvitations = false,
-  respondingInvitationIds = [],
-  onRespondInvitation,
-  /** Đơn gia nhập cần duyệt (owner/admin) — Trang chủ tổ chức */
-  joinApplicationsToReview = [],
-  loadingJoinApplicationsToReview = false,
-  respondingJoinReviewKeys = [],
-  onApproveJoinApplication,
-  onRejectJoinApplication,
-  homeNotificationPreview = [],
-  homeCalendarPreview = [],
-  expandedHomeCards = { notifications: false, calendar: false },
-  onToggleHomeCard,
+  onSelectTeam,
   onOpenNotificationsPage,
-  onOpenCalendarPage,
-  onGoHome,
   onCreateDepartment,
   onCreateChannel,
+  onOpenChannelSettings,
   onSendChatOption,
   chatContacts = [],
   loadingChatContacts = false,
@@ -140,6 +149,30 @@ const OrganizationMainPanel = ({
   workspaceOnlineUserIds = [],
   /** Kết quả tìm kiếm workspace: chuyển kênh / nhảy tin */
   onWorkspaceSearchJump,
+  workspaceSearchOpen = false,
+  onWorkspaceSearchOpenChange,
+  workspaceTasks = [],
+  loadingWorkspaceTasks = false,
+  taskWorkspaceScope = null,
+  onMoveWorkspaceTask,
+  onCreateWorkspaceTask,
+  onWorkspaceTasksRefresh,
+  onOpenOrganizationSettings,
+  onInviteOrganization,
+  canInviteMembers = false,
+  canManageWorkspaceStructure = false,
+  canManageChannelRoleAccess = false,
+  canSeeAllStructure = false,
+  onWorkspaceTabChange,
+  onDisconnectVoice,
+  organizationId = '',
+  onVoiceRoomSessionEnd,
+  onOpenVoiceChatSidebar,
+  voiceChatSidebarOpen = true,
+  /** Đăng ký mở poll/danh thiếp cho composer chat voice (sidebar phải) */
+  onRegisterVoiceComposerHelpers,
+  /** Gắn emoji vào ô nhập đang active (text hoặc voice sidebar) */
+  onAppendComposerEmoji,
 }) => {
   const { locale } = useLocale();
   const { t } = useAppStrings();
@@ -174,34 +207,169 @@ const OrganizationMainPanel = ({
   const [pollDuration, setPollDuration] = useState('24h');
   const [allowMultiAnswer, setAllowMultiAnswer] = useState(false);
   const [contactSearch, setContactSearch] = useState('');
-  const [orgHomeSearch, setOrgHomeSearch] = useState('');
-  /** Trang chủ tổ chức: all | notifications | calendar */
-  const [orgHomeSection, setOrgHomeSection] = useState('all');
   const [contactCategory, setContactCategory] = useState('all');
   const [selectedContactId, setSelectedContactId] = useState('');
+  const [useManualContactEntry, setUseManualContactEntry] = useState(false);
+  const [manualContactFullName, setManualContactFullName] = useState('');
+  const [manualContactPhone, setManualContactPhone] = useState('');
+  const [manualContactEmail, setManualContactEmail] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [emojiSearch, setEmojiSearch] = useState('');
   const [emojiPickerTab, setEmojiPickerTab] = useState('emoji');
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
+  const chatScrollRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const isNearBottomRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editDraft, setEditDraft] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
   const [moreMenu, setMoreMenu] = useState({ open: false, anchorRect: null, message: null });
   const [createTaskModalOpen, setCreateTaskModalOpen] = useState(false);
   const [createTaskSourceMessage, setCreateTaskSourceMessage] = useState(null);
-  const [joinRejectDraft, setJoinRejectDraft] = useState({
-    open: false,
-    organizationId: null,
-    applicationId: null,
-    reason: '',
-  });
+  const [createTaskMentions, setCreateTaskMentions] = useState([]);
   /** Hover: thanh công cụ phía trên bubble hoặc phía dưới (tránh cắt khi tin ở đầu khung chat) */
   const [toolbarPlacementById, setToolbarPlacementById] = useState({});
+  const [workspaceTab, setWorkspaceTab] = useState(workspaceTabView === 'tasks' ? 'tasks' : 'chat');
+  const [taskSearchQuery, setTaskSearchQuery] = useState('');
+  const [taskDepartmentFilter, setTaskDepartmentFilter] = useState('all');
+  const [taskCreateOpen, setTaskCreateOpen] = useState(false);
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [taskForm, setTaskForm] = useState({
+    title: '',
+    description: '',
+    dueDate: '',
+    priority: 'medium',
+    assigneeId: '',
+    departmentId: '',
+  });
+  const [voiceConnectionState, setVoiceConnectionState] = useState('idle'); // idle | connecting | connected | error
+  const initialVoiceTogglePrefs = loadVoiceAudioPrefs();
+  const [voiceAudioState, setVoiceAudioState] = useState({
+    isMuted: Boolean(initialVoiceTogglePrefs.micMuted),
+    isSpeakerOff: Boolean(initialVoiceTogglePrefs.speakerOff),
+    canToggleMute: false,
+  });
+  const voiceControlActionsRef = useRef({
+    disconnect: null,
+    toggleMute: null,
+    toggleSpeaker: null,
+  });
+  const initialOrgVoiceAudio = loadVoiceAudioPrefs();
+  const [orgVoiceSettingsOpen, setOrgVoiceSettingsOpen] = useState(false);
+  const [orgMicId, setOrgMicId] = useState(initialOrgVoiceAudio.micDeviceId);
+  const [orgSpeakerId, setOrgSpeakerId] = useState(initialOrgVoiceAudio.speakerDeviceId);
+  const [orgMicVolume, setOrgMicVolume] = useState(initialOrgVoiceAudio.micVolume);
+  const [orgSpeakerVolume, setOrgSpeakerVolume] = useState(initialOrgVoiceAudio.speakerVolume);
 
-  const chatChannels = channels.filter((channel) => channel.type !== 'voice');
-  const voiceChannels = channels.filter((channel) => channel.type === 'voice');
-  const selectedChannel = channels.find((channel) => channel._id === selectedChannelId) || null;
+  // Sidebar trái (cấu trúc): kéo thu tối đa 100px, rộng tối đa mặc định + 100px.
+  const LEFT_ASIDE_BASE_W = 252;
+  const LEFT_ASIDE_MIN_W = 100;
+  const LEFT_ASIDE_MAX_W = LEFT_ASIDE_BASE_W + 100;
+  const [leftAsideW, setLeftAsideW] = useState(LEFT_ASIDE_BASE_W);
+  const leftAsideResizeRef = useRef(null);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      const st = leftAsideResizeRef.current;
+      if (!st || !st.active) return;
+      const x = e?.clientX ?? 0;
+      const dx = x - st.startX; // kéo sang phải => tăng width
+      const next = Math.round(st.startW + dx);
+      const clamped = Math.max(st.minW, Math.min(st.maxW, next));
+      setLeftAsideW(clamped);
+      e?.preventDefault?.();
+    };
+    const onUp = () => {
+      const st = leftAsideResizeRef.current;
+      if (!st || !st.active) return;
+      leftAsideResizeRef.current = null;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
+  const openWorkspaceChat = () => {
+    setWorkspaceTab('chat');
+    onWorkspaceTabChange?.('chat');
+  };
+
+  useEffect(() => {
+    onWorkspaceTabChange?.(workspaceTab);
+  }, [workspaceTab, onWorkspaceTabChange]);
+
+  useEffect(() => {
+    const nextTab = workspaceTabView === 'tasks' ? 'tasks' : 'chat';
+    setWorkspaceTab((prev) => (prev === nextTab ? prev : nextTab));
+  }, [workspaceTabView]);
+
+  const scopedChannels = selectedTeamId
+    ? channels.filter((channel) => String(channel.team || '') === String(selectedTeamId))
+    : channels;
+  const chatChannels = scopedChannels.filter((channel) => channel.type !== 'voice');
+  const voiceChannels = scopedChannels.filter((channel) => channel.type === 'voice');
+  const getChannelPerm = (channelId) => {
+    const row = channelPermissionMatrix?.[String(channelId)] || null;
+    const canSee = Boolean(row?.canSee ?? row?.canRead);
+    return {
+      canSee,
+      canRead: Boolean(row?.canRead),
+      canWrite: Boolean(row?.canWrite),
+      canDelete: Boolean(row?.canDelete),
+      canVoice: Boolean(row?.canVoice),
+    };
+  };
+  const selectedChannel =
+    channels.find((channel) => String(channel._id) === String(selectedChannelId)) || null;
+  const selectedChannelPerm = getChannelPerm(selectedChannelId);
+  const canWriteInChannel = Boolean(selectedChannelPerm.canWrite);
+  const channelReadOnly =
+    Boolean(selectedChannelId) &&
+    Boolean(selectedChannelPerm.canSee || selectedChannelPerm.canRead) &&
+    !canWriteInChannel;
+  const isVoiceChannel = selectedChannel?.type === 'voice';
+  const canVoiceChannel = Boolean(getChannelPerm(selectedChannelId).canVoice);
+  const selectedTeam = teams.find((team) => String(team._id) === String(selectedTeamId)) || null;
+  const voiceConnVisible = isVoiceChannel && canVoiceChannel;
+  const voiceConnConnected = voiceConnectionState === 'connected';
+  const currentUserName =
+    currentUser?.displayName ||
+    currentUser?.fullName ||
+    currentUser?.username ||
+    currentUser?.email?.split?.('@')?.[0] ||
+    t('orgPanel.you');
+  const currentUserAvatar = currentUser?.avatar || currentUser?.profile?.avatar || null;
+  useEffect(() => {
+    if (!isVoiceChannel || !canVoiceChannel) {
+      setVoiceConnectionState('idle');
+      const prefs = loadVoiceAudioPrefs();
+      setVoiceAudioState((prev) => ({
+        isMuted: prefs.micMuted,
+        isSpeakerOff: prefs.speakerOff,
+        canToggleMute: false,
+      }));
+      voiceControlActionsRef.current = { toggleMute: null, toggleSpeaker: null, disconnect: null };
+    }
+  }, [isVoiceChannel, canVoiceChannel, selectedChannelId]);
+
+  const handleOrgAudioPrefChange = ({ micMuted, speakerOff }) => {
+    setVoiceAudioState((prev) => ({
+      ...prev,
+      isMuted: micMuted ?? prev.isMuted,
+      isSpeakerOff: speakerOff ?? prev.isSpeakerOff,
+    }));
+  };
+  const canTeamReadAnyChannel = (teamId) =>
+    channels.some(
+      (channel) =>
+        String(channel.team || '') === String(teamId) && getChannelPerm(channel._id).canRead
+    );
 
   const sortedWorkspaceMessages = useMemo(() => {
     return [...messages].sort((a, b) => {
@@ -211,69 +379,162 @@ const OrganizationMainPanel = ({
     });
   }, [messages]);
 
-  const orgHomeFilteredNotifs = useMemo(() => {
-    const q = orgHomeSearch.trim().toLowerCase();
-    if (!q) return homeNotificationPreview;
-    return homeNotificationPreview.filter((item) => {
-      const hay = `${item?.title || ''} ${item?.message || ''} ${item?.time || ''}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [homeNotificationPreview, orgHomeSearch]);
+  const CHAT_NEAR_BOTTOM_PX = 64;
 
-  const orgHomeFilteredCal = useMemo(() => {
-    const q = orgHomeSearch.trim().toLowerCase();
-    if (!q) return homeCalendarPreview;
-    return homeCalendarPreview.filter((item) => {
-      const hay = `${item?.title || ''} ${item?.date || ''} ${item?.time || ''} ${item?.type || ''}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [homeCalendarPreview, orgHomeSearch]);
+  const updateNearBottomState = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) {
+      isNearBottomRef.current = true;
+      setShowJumpToLatest(false);
+      return;
+    }
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    if (maxScroll <= 4) {
+      isNearBottomRef.current = true;
+      setShowJumpToLatest(false);
+      return;
+    }
+    const distFromBottom = maxScroll - el.scrollTop;
+    const near = distFromBottom <= CHAT_NEAR_BOTTOM_PX;
+    isNearBottomRef.current = near;
+    setShowJumpToLatest(!near);
+  }, []);
 
-  const orgHomeSectionOptions = useMemo(
-    () => [
-      { id: 'all', label: t('orgPanel.homeSectionAll'), icon: '📋' },
-      { id: 'notifications', label: t('orgPanel.homeSectionNotif'), icon: '🔔' },
-      { id: 'calendar', label: t('orgPanel.homeSectionCal'), icon: '📅' },
-    ],
-    [t]
-  );
+  const handleChatScroll = useCallback(() => {
+    updateNearBottomState();
+  }, [updateNearBottomState]);
+
+  const scrollChatToLatest = useCallback((behavior = 'auto') => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const apply = () => {
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (maxScroll > 0) {
+        if (behavior === 'smooth') {
+          el.scrollTo({ top: maxScroll, behavior: 'smooth' });
+        } else {
+          el.scrollTop = maxScroll;
+        }
+      } else {
+        messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+      }
+      isNearBottomRef.current = true;
+      setShowJumpToLatest(false);
+    };
+    requestAnimationFrame(() => {
+      apply();
+      requestAnimationFrame(updateNearBottomState);
+    });
+  }, [updateNearBottomState]);
+
+  useEffect(() => {
+    if (workspaceTab === 'tasks' || isVoiceChannel) return;
+    isNearBottomRef.current = true;
+    setShowJumpToLatest(false);
+  }, [selectedChannelId, workspaceTab, isVoiceChannel]);
+
+  useEffect(() => {
+    if (workspaceTab === 'tasks' || isVoiceChannel || loadingMessages) return;
+    scrollChatToLatest('auto');
+  }, [
+    selectedChannelId,
+    loadingMessages,
+    workspaceTab,
+    isVoiceChannel,
+    scrollChatToLatest,
+  ]);
+
+  useEffect(() => {
+    if (workspaceTab === 'tasks' || isVoiceChannel || loadingMessages) return;
+    if (!isNearBottomRef.current) return;
+    scrollChatToLatest(sortedWorkspaceMessages.length > 0 ? 'smooth' : 'auto');
+  }, [
+    sortedWorkspaceMessages,
+    loadingMessages,
+    workspaceTab,
+    isVoiceChannel,
+    scrollChatToLatest,
+  ]);
+
+  const filteredWorkspaceTasks = useMemo(() => {
+    const q = String(taskSearchQuery || '').trim().toLowerCase();
+    return (workspaceTasks || []).filter((task) => {
+      const byQuery =
+        !q ||
+        `${task?.title || ''} ${task?.description || ''} ${task?.departmentName || ''}`
+          .toLowerCase()
+          .includes(q);
+      const taskDeptId = String(task?.departmentId || task?.department?._id || '');
+      const byDepartment = taskDepartmentFilter === 'all' || taskDeptId === taskDepartmentFilter;
+      return byQuery && byDepartment;
+    });
+  }, [workspaceTasks, taskSearchQuery, taskDepartmentFilter]);
+
+  const taskColumns = useMemo(() => {
+    const todo = [];
+    const inProgress = [];
+    const done = [];
+    for (const task of filteredWorkspaceTasks) {
+      const status = String(task?.status || 'todo');
+      if (status === 'done') done.push(task);
+      else if (status === 'in_progress' || status === 'review') inProgress.push(task);
+      else todo.push(task);
+    }
+    return { todo, inProgress, done };
+  }, [filteredWorkspaceTasks]);
+
+  const taskSummary = useMemo(() => {
+    const total = (workspaceTasks || []).length;
+    const inProgressCount = (workspaceTasks || []).filter((t) => {
+      const status = String(t?.status || '');
+      return status === 'in_progress' || status === 'review';
+    }).length;
+    const reviewCount = (workspaceTasks || []).filter((t) => String(t?.status || '') === 'review').length;
+    const doneCount = (workspaceTasks || []).filter((t) => String(t?.status || '') === 'done').length;
+    const progressPercent = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+    return { total, inProgressCount, reviewCount, doneCount, progressPercent };
+  }, [workspaceTasks]);
+
 
   const orgIdForTask = selectedOrganization?._id || selectedOrganization?.id || null;
-  const menuCreateTaskCheck = useMemo(
-    () =>
-      getAiTaskEligibility(moreMenu.message, {
-        organizationId: orgIdForTask ? String(orgIdForTask) : null,
-      }),
-    [moreMenu.message, orgIdForTask]
-  );
+  const canCreateWorkspaceTask = Boolean(taskWorkspaceScope?.canCreateTask);
+  const canUseAiWorkspaceTask = Boolean(taskWorkspaceScope?.canUseAiTask ?? taskWorkspaceScope?.canCreateTask);
+
+  const taskAssigneeLabel = (task) =>
+    task?.assignee?.displayName ||
+    task?.assignee?.username ||
+    (task?.assigneeId ? String(task.assigneeId).slice(-6) : 'Chưa gán');
+
+  const taskAssignerLabel = (task) =>
+    task?.createdByUser?.displayName ||
+    task?.createdByUser?.username ||
+    (task?.createdBy ? String(task.createdBy).slice(-6) : '—');
+
+  const menuCreateTaskCheck = useMemo(() => {
+    const base = getAiTaskEligibility(moreMenu.message, {
+      organizationId: orgIdForTask ? String(orgIdForTask) : null,
+    });
+    if (!base.ok) return base;
+    if (!canUseAiWorkspaceTask) {
+      return {
+        ok: false,
+        reason: 'Chỉ trưởng phòng, team leader, quản trị viên hoặc chủ sở hữu mới được tạo task tự động',
+      };
+    }
+    return base;
+  }, [moreMenu.message, orgIdForTask, canUseAiWorkspaceTask, t]);
 
   /** Workspace (kênh tổ chức): luôn gọi hook trước mọi return sớm. */
-  const workspace = useMemo(
-    () => ({
-      shell: isDarkMode
-        ? 'flex h-full min-h-0 flex-col bg-[#0b0e14]'
-        : 'flex h-full min-h-0 flex-col bg-sky-50/40',
-      aside: isDarkMode
-        ? 'flex w-[252px] shrink-0 flex-col border-r border-white/[0.06] bg-[#0c0f15]'
-        : 'flex w-[252px] shrink-0 flex-col border-r border-sky-200/70 bg-white/95',
-      main: isDarkMode
-        ? 'flex min-h-0 min-w-0 flex-1 flex-col bg-[#080a0f]'
-        : 'flex min-h-0 min-w-0 flex-1 flex-col bg-sky-50/25',
-      header: isDarkMode
-        ? 'shrink-0 border-b border-white/[0.06] bg-[#0b0e14] px-4 py-2.5'
-        : 'shrink-0 border-b border-sky-200/80 bg-white/90 px-4 py-2.5',
-      metaBar: isDarkMode
-        ? 'flex shrink-0 items-center justify-between border-b border-white/[0.05] bg-[#0b0e14] px-4 py-2'
-        : 'flex shrink-0 items-center justify-between border-b border-sky-200/60 bg-sky-50/90 px-4 py-2',
+  const workspace = useMemo(() => {
+    const ent = entShell(isDarkMode);
+    return {
+      ...ent,
       composerBar: isDarkMode
-        ? 'relative mt-auto shrink-0 border-t border-white/[0.06] bg-[#0b0e14] px-4 pb-4 pt-3'
-        : 'relative mt-auto shrink-0 border-t border-sky-200/80 bg-white/95 px-4 pb-4 pt-3',
-      composerWrap: isDarkMode
-        ? 'shrink-0 rounded-2xl border border-white/[0.06] bg-[#12151c] p-3'
-        : 'shrink-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm',
-    }),
-    [isDarkMode]
-  );
+        ? 'relative mt-auto shrink-0 rounded-b-xl border-t border-white/[0.06] bg-[#11141C]/98 px-4 pb-3 pt-2.5'
+        : 'relative mt-auto shrink-0 rounded-b-xl border-t border-slate-200/80 bg-white px-4 pb-3 pt-2.5',
+      composerWrap: 'shrink-0 bg-transparent p-0',
+    };
+  }, [isDarkMode]);
 
   const formatTime = (isoDate) => {
     if (!isoDate) return '';
@@ -325,15 +586,34 @@ const OrganizationMainPanel = ({
   };
 
   const cancelEdit = () => {
+    if (savingEdit) return;
     setEditingMessageId(null);
     setEditDraft('');
   };
 
+  const beginEditMessage = (msg) => {
+    const id = msg?._id || msg?.id;
+    if (!id || !canEditOrgMessage(msg)) return;
+    setEditingMessageId(id);
+    setEditDraft(plainTextForMessage(msg));
+  };
+
   const submitEdit = async (messageId) => {
     const trimmed = editDraft.trim();
-    if (!trimmed || !messageId) return;
-    await onSaveMessageEdit?.(messageId, trimmed);
-    cancelEdit();
+    if (!trimmed || !messageId || savingEdit) return;
+    if (!onSaveMessageEdit) {
+      toast.error(t('organizations.editFail'));
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await onSaveMessageEdit(messageId, trimmed);
+      cancelEdit();
+    } catch {
+      /* toast ở OrganizationsPage */
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const replyToLabel = (msg) => {
@@ -346,6 +626,10 @@ const OrganizationMainPanel = ({
     setContactSearch('');
     setContactCategory('all');
     setSelectedContactId('');
+    setUseManualContactEntry(false);
+    setManualContactFullName('');
+    setManualContactPhone('');
+    setManualContactEmail('');
     setIsContactModalOpen(true);
   };
 
@@ -357,10 +641,23 @@ const OrganizationMainPanel = ({
     setIsPollModalOpen(true);
   };
 
+  useEffect(() => {
+    if (!onRegisterVoiceComposerHelpers) return undefined;
+    onRegisterVoiceComposerHelpers({
+      openPoll: handleCreatePoll,
+      openContact: handleCreateContactCard,
+      openEmoji: () => {
+        setEmojiPickerTab('emoji');
+        setShowEmojiPicker((prev) => !prev);
+      },
+    });
+    return () => onRegisterVoiceComposerHelpers(null);
+  }, [onRegisterVoiceComposerHelpers]);
+
   const handleFileSelected = (event, kind) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file) return;
+    if (!file || !canWriteInChannel) return;
     onSendChatOption?.({ kind, file });
   };
 
@@ -369,12 +666,27 @@ const OrganizationMainPanel = ({
     return {
       id,
       name: item.name || item.displayName || item.username || t('organizations.userFallback'),
-      phone: item.phone || '',
-      email: item.email || item.username || '',
+      username: item.username || '',
+      role: item.role || '',
+      phone: item.phone || item.phoneNumber || item.mobile || '',
+      email: item.email || '',
       avatar: item.avatar || null,
       category: item.category || 'friend',
     };
   });
+
+  const mentionLabelsForChat = useMemo(
+    () => collectMentionLabelsFromContacts(chatContacts),
+    [chatContacts]
+  );
+
+  const assignableContactOptions = useMemo(() => {
+    const list = Array.isArray(normalizedContacts) ? normalizedContacts : [];
+    if (!taskWorkspaceScope || taskWorkspaceScope.visibility === 'org') return list;
+    const allowed = new Set((taskWorkspaceScope.assignableUserIds || []).map(String));
+    if (!allowed.size) return list;
+    return list.filter((c) => allowed.has(String(c.id)));
+  }, [normalizedContacts, taskWorkspaceScope]);
 
   const filteredContacts = normalizedContacts.filter((contact) => {
     const byCategory = contactCategory === 'all' || contact.category === contactCategory;
@@ -423,971 +735,489 @@ const OrganizationMainPanel = ({
   };
 
   const handleSubmitContact = () => {
-    const selected = normalizedContacts.find((item) => item.id === selectedContactId);
-    if (!selected) return;
-    onSendChatOption?.({
-      kind: 'contact',
-      payload: {
+    let payload = {};
+    
+    if (useManualContactEntry) {
+      // Manual entry mode
+      const fullName = manualContactFullName.trim();
+      if (!fullName) return;
+      payload = {
+        userId: `manual-${Date.now()}`, // Generate a temporary ID for manual entries
+        fullName,
+        phone: manualContactPhone.trim(),
+        email: manualContactEmail.trim(),
+      };
+    } else {
+      // List selection mode
+      const selected = normalizedContacts.find((item) => item.id === selectedContactId);
+      if (!selected) return;
+      payload = {
+        userId: selected.id,
         fullName: selected.name,
         phone: selected.phone,
         email: selected.email,
-      },
+        avatar: selected.avatar,
+        username: selected.username,
+        role: selected.role,
+      };
+    }
+    
+    onSendChatOption?.({
+      kind: 'contact',
+      payload,
     });
     setIsContactModalOpen(false);
   };
 
+  const openTaskCreateModal = () => {
+    const firstDepartmentId =
+      taskDepartmentFilter !== 'all'
+        ? taskDepartmentFilter
+        : String(selectedDepartment?._id || departments?.[0]?._id || '');
+    setTaskForm({
+      title: '',
+      description: '',
+      dueDate: '',
+      priority: 'medium',
+      assigneeId: '',
+      departmentId: firstDepartmentId,
+    });
+    setTaskCreateOpen(true);
+  };
+
+  const submitWorkspaceTask = async () => {
+    const title = String(taskForm.title || '').trim();
+    if (!title || creatingTask) return;
+    setCreatingTask(true);
+    try {
+      const department = departments.find(
+        (item) => String(item._id) === String(taskForm.departmentId)
+      );
+      await onCreateWorkspaceTask?.({
+        title,
+        description: String(taskForm.description || '').trim(),
+        dueDate: taskForm.dueDate
+          ? new Date(`${taskForm.dueDate}T23:59:00`).toISOString()
+          : undefined,
+        priority: taskForm.priority || 'medium',
+        assigneeId: taskForm.assigneeId || undefined,
+        departmentId: taskForm.departmentId || undefined,
+        departmentName: department?.name || undefined,
+        teamId: taskWorkspaceScope?.teamId || undefined,
+      });
+      setTaskCreateOpen(false);
+    } finally {
+      setCreatingTask(false);
+    }
+  };
+
   const appendEmoji = (emoji) => {
-    onChangeMessageInput?.(`${messageInput || ''}${emoji}`);
+    if (onAppendComposerEmoji) {
+      onAppendComposerEmoji(emoji);
+    } else {
+      onChangeMessageInput?.(`${messageInput || ''}${emoji}`);
+    }
     setShowEmojiPicker(false);
     setEmojiSearch('');
   };
-
-  const joinReviewKey = (organizationId, applicationId) => `${organizationId}:${applicationId}`;
-
-  const homeUi = useMemo(
-    () => ({
-      joinOuter: isDarkMode
-        ? 'rounded-2xl border border-white/10 bg-gradient-to-br from-[#1a1528]/90 to-[#111422]/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] p-4'
-        : 'rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-sm',
-      inviteOuter: isDarkMode
-        ? 'rounded-2xl border border-white/10 bg-gradient-to-br from-[#181b2a]/80 to-[#111422]/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)]'
-        : 'rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 shadow-sm',
-      widgetCard: isDarkMode
-        ? 'rounded-2xl border border-white/10 bg-white/[0.03] p-4'
-        : 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm',
-      widgetTitle: isDarkMode ? 'truncate text-sm font-semibold text-white' : 'truncate text-sm font-semibold text-slate-900',
-      widgetSub: isDarkMode ? 'mt-1 text-xs text-gray-400' : 'mt-1 text-xs text-slate-600',
-      widgetMeta: isDarkMode
-        ? 'rounded-full border border-white/15 px-2 py-0.5 text-xs text-gray-300'
-        : 'rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-700',
-      widgetToggle: isDarkMode
-        ? 'rounded-md border border-white/15 px-2 py-1 text-xs text-gray-200 transition hover:bg-white/10'
-        : 'rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 shadow-sm transition hover:bg-slate-50',
-      widgetViewAll: isDarkMode
-        ? 'rounded-lg border border-cyan-300/25 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-400/20'
-        : 'rounded-lg border border-cyan-600/35 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-900 transition hover:bg-cyan-100',
-      homeShell: isDarkMode
-        ? 'min-h-0 flex-1 rounded-2xl border border-white/10 bg-black/15 p-5'
-        : 'min-h-0 flex-1 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm',
-      homeHead: isDarkMode ? 'mb-4 flex items-start justify-between gap-3 border-b border-white/10 pb-4' : 'mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-4',
-      homeTitle: isDarkMode ? 'text-xl font-semibold text-white' : 'text-xl font-semibold text-slate-900',
-      homeSub: isDarkMode ? 'text-sm text-gray-400' : 'text-sm text-slate-600',
-      homeBadgeBtn: isDarkMode
-        ? 'rounded-lg border border-white/15 px-3 py-1.5 text-xs text-gray-200 transition hover:bg-white/10'
-        : 'rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-sm transition hover:bg-slate-50',
-    }),
-    [isDarkMode]
-  );
-
-  const renderJoinApplicationsToReviewPanel = () => (
-    <div className={homeUi.joinOuter}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex h-7 w-7 items-center justify-center rounded-lg text-sm ${isDarkMode ? 'bg-violet-500/20' : 'bg-violet-100'}`}
-            >
-              📋
-            </span>
-            <h4
-              className={`truncate text-sm font-semibold tracking-wide ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-            >
-              {t('orgPanel.joinReviewTitle')}
-            </h4>
-          </div>
-          <p className={homeUi.widgetSub}>{t('orgPanel.joinReviewSubtitle')}</p>
-        </div>
-        <span
-          className={`inline-flex min-w-[30px] items-center justify-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
-            isDarkMode
-              ? 'border-violet-300/30 bg-violet-400/15 text-violet-200'
-              : 'border-violet-300 bg-violet-100 text-violet-900'
-          }`}
-        >
-          {joinApplicationsToReview.length}
-        </span>
-      </div>
-
-      {loadingJoinApplicationsToReview && (
-        <div className="space-y-2">
-          <div className={`h-16 animate-pulse rounded-xl ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
-          <div className={`h-16 animate-pulse rounded-xl ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`} />
-        </div>
-      )}
-
-      {!loadingJoinApplicationsToReview && joinApplicationsToReview.length === 0 && (
-        <div
-          className={`rounded-xl border border-dashed px-3 py-3 text-center ${isDarkMode ? 'border-white/15 bg-white/[0.02]' : 'border-slate-300 bg-slate-50'}`}
-        >
-          <div className={`text-sm font-medium ${isDarkMode ? 'text-gray-200' : 'text-slate-800'}`}>
-            {t('orgPanel.noJoinApps')}
-          </div>
-          <div className={`mt-1 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-600'}`}>
-            {t('orgPanel.joinAppsEmptySub')}
-          </div>
-        </div>
-      )}
-
-      {!loadingJoinApplicationsToReview && joinApplicationsToReview.length > 0 && (
-        <ul className="space-y-3">
-          {joinApplicationsToReview.map((app) => {
-            const oid = app.organizationId;
-            const aid = app.applicationId;
-            const key = joinReviewKey(oid, aid);
-            const busy = respondingJoinReviewKeys.includes(key);
-            return (
-              <li
-                key={key}
-                className={`rounded-xl border p-3 text-sm ${
-                  isDarkMode
-                    ? 'border-white/10 bg-black/25 text-gray-200'
-                    : 'border-slate-200 bg-white text-slate-700 shadow-sm'
-                }`}
-              >
-                <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div
-                      className={`truncate font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-                    >
-                      {app.organizationName}
-                    </div>
-                    <div
-                      className={`mt-0.5 font-mono text-[11px] ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}
-                    >
-                      {t('orgPanel.applicantLine', { name: app.applicantUser })}
-                    </div>
-                  </div>
-                  <span
-                    className={`shrink-0 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}
-                  >
-                    {app.submittedAt
-                      ? new Date(app.submittedAt).toLocaleString(locale === 'en' ? 'en-US' : 'vi-VN')
-                      : ''}
-                  </span>
-                </div>
-                {(() => {
-                  const { mode, rows } = buildJoinAnswerDisplayRows(app.answers, app.formSnapshot);
-                  if (mode === 'labeled' && rows.length > 0) {
-                    return (
-                      <div
-                        className={`mb-3 max-h-48 space-y-2.5 overflow-y-auto rounded-lg border p-3 ${
-                          isDarkMode ? 'border-white/10 bg-black/35' : 'border-slate-200 bg-slate-50'
-                        }`}
-                      >
-                        {rows.map((row) => (
-                          <div key={row.id}>
-                            <div
-                              className={`text-[11px] font-semibold ${isDarkMode ? 'text-cyan-100/90' : 'text-cyan-800'}`}
-                            >
-                              {row.label}
-                            </div>
-                            <div
-                              className={`mt-0.5 whitespace-pre-wrap break-words text-sm ${isDarkMode ? 'text-gray-100' : 'text-slate-800'}`}
-                            >
-                              {row.value}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  }
-                  return (
-                    <pre
-                      className={`mb-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg p-2 text-xs ${
-                        isDarkMode ? 'bg-black/40 text-amber-100/90' : 'border border-slate-200 bg-amber-50 text-amber-900'
-                      }`}
-                    >
-                      {JSON.stringify(app.answers || {}, null, 2)}
-                    </pre>
-                  );
-                })()}
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onApproveJoinApplication?.(oid, aid)}
-                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t('orgPanel.approveBtn')}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      setJoinRejectDraft({
-                        open: true,
-                        organizationId: oid,
-                        applicationId: aid,
-                        reason: '',
-                      })
-                    }
-                    className="rounded-lg border border-red-500/50 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-950/30 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t('orgPanel.rejectBtnShort')}
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-
-  const renderInvitationPanel = (compact = false) => (
-    <div className={`${homeUi.inviteOuter} ${compact ? 'p-3.5' : 'p-4'}`}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex h-7 w-7 items-center justify-center rounded-lg text-sm ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}
-            >
-              📨
-            </span>
-            <h4
-              className={`truncate text-sm font-semibold tracking-wide ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-            >
-              {t('orgPanel.invitesPanelTitle')}
-            </h4>
-          </div>
-          <p className={homeUi.widgetSub}>{t('orgPanel.invitesPanelSubtitle')}</p>
-        </div>
-        <span
-          className={`inline-flex min-w-[30px] items-center justify-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
-            isDarkMode
-              ? 'border-cyan-300/30 bg-cyan-400/15 text-cyan-200'
-              : 'border-cyan-400 bg-cyan-50 text-cyan-900'
-          }`}
-        >
-          {invitations.length}
-        </span>
-      </div>
-
-      {loadingInvitations && (
-        <div className="space-y-2">
-          <div className={`h-11 animate-pulse rounded-xl ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
-          <div className={`h-11 animate-pulse rounded-xl ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`} />
-        </div>
-      )}
-
-      {!loadingInvitations && invitations.length === 0 && (
-        <div
-          className={`rounded-xl border border-dashed px-3 py-3 text-center ${isDarkMode ? 'border-white/15 bg-white/[0.02]' : 'border-slate-300 bg-slate-50'}`}
-        >
-          <div className={`text-sm font-medium ${isDarkMode ? 'text-gray-200' : 'text-slate-800'}`}>
-            {t('orgPanel.noInvites')}
-          </div>
-          <div className={`mt-1 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-600'}`}>
-            {t('orgPanel.invitesEmptySub')}
-          </div>
-        </div>
-      )}
-
-      {!loadingInvitations && invitations.length > 0 && (
-        <div className="space-y-2">
-          {invitations.map((invite) => {
-            const invitationId = invite.invitationId || invite._id;
-            const orgName = invite.organization?.name || t('orgPanel.orgFallback');
-            const isResponding = respondingInvitationIds.includes(invitationId);
-            const createdAt = invite.createdAt
-              ? new Date(invite.createdAt).toLocaleDateString(locale === 'en' ? 'en-US' : 'vi-VN')
-              : '';
-
-            return (
-              <div
-                key={invitationId}
-                className={`rounded-xl border p-3 transition ${
-                  isDarkMode
-                    ? 'border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]'
-                    : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
-                }`}
-              >
-                <div className="mb-2 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div
-                      className={`truncate text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-                    >
-                      {orgName}
-                    </div>
-                    <div
-                      className={`mt-0.5 flex flex-wrap items-center gap-2 text-[11px] ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}
-                    >
-                      <span
-                        className={`rounded-md px-1.5 py-0.5 ${isDarkMode ? 'bg-white/10' : 'bg-white'}`}
-                      >
-                        {t('orgPanel.roleBadge', { role: invite.role || 'member' })}
-                      </span>
-                      {createdAt && <span>{t('orgPanel.invitedDay', { date: createdAt })}</span>}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    disabled={isResponding}
-                    onClick={() => onRespondInvitation?.(invitationId, 'reject')}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                      isDarkMode
-                        ? 'border-white/20 text-gray-200 hover:bg-white/10'
-                        : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
-                    }`}
-                  >
-                    {t('orgPanel.rejectBtnShort')}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isResponding}
-                    onClick={() => onRespondInvitation?.(invitationId, 'accept')}
-                    className="rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 px-3 py-1.5 text-xs font-semibold text-white shadow-[0_0_12px_rgba(99,102,241,0.35)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t('orgPanel.acceptInvite')}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-
-  const renderHomeWidget = ({
-    icon,
-    title,
-    subtitle,
-    cardKey,
-    items = [],
-    expanded = false,
-    onToggle,
-    onViewAll,
-    emptyMessage,
-    renderItem,
-  }) => (
-    <div className={homeUi.widgetCard}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex h-7 w-7 items-center justify-center rounded-lg text-sm ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}
-            >
-              {icon}
-            </span>
-            <h4 className={homeUi.widgetTitle}>{title}</h4>
-          </div>
-          <p className={homeUi.widgetSub}>{subtitle}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={homeUi.widgetMeta}>{items.length}</span>
-          <button type="button" onClick={() => onToggle?.(cardKey)} className={homeUi.widgetToggle}>
-            {expanded ? t('orgPanel.collapseHide') : t('orgPanel.collapseShow')}
-          </button>
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="mt-3 space-y-2">
-          {items.length === 0 && (
-            <div
-              className={`rounded-lg border border-dashed px-3 py-2 text-sm ${isDarkMode ? 'border-white/15 text-gray-400' : 'border-slate-300 text-slate-600'}`}
-            >
-              {emptyMessage}
-            </div>
-          )}
-          {items.map((item, idx) => (
-            <div key={item.id || idx}>{renderItem(item)}</div>
-          ))}
-        </div>
-      )}
-
-      <div className="mt-3 flex justify-end">
-        <button type="button" onClick={onViewAll} className={homeUi.widgetViewAll}>
-          {t('orgPanel.viewAll')}
-        </button>
-      </div>
-    </div>
-  );
-
-  if (!organizationsLoaded) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center p-6">
-        <div
-          className={`rounded-2xl border px-12 py-14 text-center shadow-sm ${
-            isDarkMode
-              ? 'border-white/10 bg-black/20 shadow-[0_0_40px_rgba(0,0,0,0.35)]'
-              : 'border-slate-200 bg-white'
-          }`}
-        >
-          <div
-            className="mx-auto h-11 w-11 animate-spin rounded-full border-2 border-cyan-400/20 border-t-cyan-400"
-            role="status"
-            aria-label={t('orgPanel.loadingWorkspaceAria')}
-          />
-          <p className={`mt-5 text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
-            {t('orgPanel.loadingWorkspace')}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!hasOrganizations) {
-    return (
-      <div className="flex h-full flex-col p-6">
-        <div
-          className={`min-h-0 flex-1 rounded-2xl border p-5 ${
-            isDarkMode ? 'border-white/10 bg-black/15' : 'border-slate-200 bg-white shadow-sm'
-          }`}
-        >
-          <div className="flex h-full items-center justify-center">
-            <div className="mx-auto w-full max-w-xl text-center">
-              <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-3xl bg-gradient-to-br from-cyan-600/90 to-teal-600/80 text-4xl shadow-lg shadow-cyan-900/15">
-                🏢
-              </div>
-              <h3
-                className={`mt-4 text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-              >
-                {t('orgPanel.emptyOrgsTitle')}
-              </h3>
-              <p
-                className={`mt-2 text-sm leading-7 ${isDarkMode ? 'text-[#A0A0B2]' : 'text-slate-600'}`}
-              >
-                {t('orgPanel.emptyPitch1')}
-                <br />
-                {t('orgPanel.emptyPitch2')}
-                <br />
-                {t('orgPanel.emptyPitch3')}
-              </p>
-
-              <div className="mt-6 flex items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={onCreateOrganization}
-                  className="h-10 rounded-[10px] bg-gradient-to-r from-cyan-600 to-teal-600 px-5 text-sm font-semibold text-white shadow-md transition hover:brightness-110"
-                >
-                  {t('orgPanel.createOrgEmpty')}
-                </button>
-                <button
-                  type="button"
-                  onClick={onJoinQuickInvite}
-                  disabled={joiningQuickInvite}
-                  className={`h-10 rounded-[10px] border px-5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                    isDarkMode
-                      ? 'border-white/20 bg-transparent text-white hover:bg-white/5'
-                      : 'border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50'
-                  }`}
-                >
-                  {joiningQuickInvite ? t('orgPanel.joining') : t('orgPanel.joinBtn')}
-                </button>
-              </div>
-
-              <div className="mx-auto mt-5 flex max-w-lg items-center gap-2">
-                <input
-                  value={quickInviteInput}
-                  onChange={(event) => onChangeQuickInviteInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      onJoinQuickInvite();
-                    }
-                  }}
-                  placeholder={t('orgPanel.quickInvitePh')}
-                  className={`h-10 flex-1 rounded-lg border px-3 text-sm outline-none ${
-                    isDarkMode
-                      ? 'border-white/10 bg-white/5 text-white placeholder:text-[#6B6B80] focus:border-cyan-500/50 focus:shadow-[0_0_10px_rgba(6,182,212,0.25)]'
-                      : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/30'
-                  }`}
-                />
-                <button
-                  type="button"
-                  onClick={onJoinQuickInvite}
-                  disabled={joiningQuickInvite}
-                  className="h-10 rounded-lg bg-gradient-to-r from-cyan-600 to-teal-600 px-4 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {t('orgPanel.joinBtn')}
-                </button>
-              </div>
-
-              <div className="mx-auto mt-6 max-w-xl text-left">{renderInvitationPanel()}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (viewMode === 'home') {
-    const busyRejectKey =
-      joinRejectDraft.open && joinRejectDraft.organizationId && joinRejectDraft.applicationId
-        ? joinReviewKey(joinRejectDraft.organizationId, joinRejectDraft.applicationId)
-        : null;
-    const rejectModalBusy = busyRejectKey && respondingJoinReviewKeys.includes(busyRejectKey);
-
-    return (
-      <>
-        <div className="flex h-full flex-col p-6">
-          <div className={homeUi.homeShell}>
-            <div className={homeUi.homeHead}>
-              <div className="min-w-0 flex-1">
-                <h3 className={homeUi.homeTitle}>{t('orgPanel.orgHomeTitle')}</h3>
-                <p className={homeUi.homeSub}>{t('orgPanel.orgHomeHeaderSub')}</p>
-                <div className="mt-3 max-w-xl space-y-2">
-                  <PageSearchBar
-                    value={orgHomeSearch}
-                    onChange={setOrgHomeSearch}
-                    placeholder={t('orgPanel.homeSearchPlaceholder')}
-                    isDarkMode={isDarkMode}
-                    id="org-home-widgets-search"
-                    aria-label={t('orgPanel.homeSearchAria')}
-                  />
-                  <SearchFilterChips
-                    aria-label={t('orgPanel.homeSectionFilterAria')}
-                    options={orgHomeSectionOptions}
-                    value={orgHomeSection}
-                    onChange={setOrgHomeSection}
-                    isDarkMode={isDarkMode}
-                    size="sm"
-                  />
-                </div>
-              </div>
-              <button type="button" onClick={onGoHome} className={homeUi.homeBadgeBtn}>
-                {t('orgPanel.atHomeBadge')}
-              </button>
-            </div>
-
-            <div className="scrollbar-overlay h-[calc(100%-4.5rem)] space-y-4 overflow-y-auto pr-1">
-              {renderJoinApplicationsToReviewPanel()}
-              {renderInvitationPanel()}
-
-            {(orgHomeSection === 'all' || orgHomeSection === 'notifications') &&
-            renderHomeWidget({
-              icon: '🔔',
-              title: t('orgPanel.homeNotifTitle'),
-              subtitle: t('orgPanel.homeNotifSubtitle'),
-              cardKey: 'notifications',
-              items: orgHomeFilteredNotifs.slice(0, 5),
-              expanded: !!expandedHomeCards.notifications,
-              onToggle: onToggleHomeCard,
-              onViewAll: onOpenNotificationsPage,
-              emptyMessage: t('orgPanel.homeNotifEmpty'),
-              renderItem: (item) => (
-                <div
-                  className={`rounded-lg border px-3 py-2 ${isDarkMode ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-slate-50'}`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div
-                        className={`truncate text-sm font-medium ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-                      >
-                        {item.title}
-                      </div>
-                      <div className={`mt-0.5 text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
-                        {item.message}
-                      </div>
-                    </div>
-                    <span
-                      className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-                        item.priority === 'high'
-                          ? isDarkMode
-                            ? 'bg-red-500/20 text-red-200'
-                            : 'bg-red-100 text-red-800'
-                          : isDarkMode
-                            ? 'bg-blue-500/20 text-blue-200'
-                            : 'bg-blue-100 text-blue-800'
-                      }`}
-                    >
-                      {item.priority === 'high'
-                        ? t('orgPanel.priorityHigh')
-                        : t('orgPanel.priorityNormal')}
-                    </span>
-                  </div>
-                  <div className={`mt-1 text-[11px] ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-                    {item.time}
-                  </div>
-                </div>
-              ),
-            })}
-
-            {(orgHomeSection === 'all' || orgHomeSection === 'calendar') &&
-            renderHomeWidget({
-              icon: '📅',
-              title: t('orgPanel.homeCalTitle'),
-              subtitle: t('orgPanel.homeCalSubtitle'),
-              cardKey: 'calendar',
-              items: orgHomeFilteredCal.slice(0, 5),
-              expanded: !!expandedHomeCards.calendar,
-              onToggle: onToggleHomeCard,
-              onViewAll: onOpenCalendarPage,
-              emptyMessage: t('orgPanel.homeCalEmpty'),
-              renderItem: (item) => (
-                <div
-                  className={`rounded-lg border px-3 py-2 ${isDarkMode ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-slate-50'}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div
-                        className={`truncate text-sm font-medium ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-                      >
-                        {item.title}
-                      </div>
-                      <div className={`mt-0.5 text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
-                        {item.date} - {item.time}
-                      </div>
-                    </div>
-                    <span
-                      className={`rounded-md px-1.5 py-0.5 text-[10px] ${isDarkMode ? 'bg-white/10 text-gray-200' : 'bg-slate-200 text-slate-800'}`}
-                    >
-                      {item.type}
-                    </span>
-                  </div>
-                </div>
-              ),
-            })}
-          </div>
-        </div>
-      </div>
-
-        <Modal
-          isOpen={joinRejectDraft.open}
-          onClose={() => {
-            if (rejectModalBusy) return;
-            setJoinRejectDraft({
-              open: false,
-              organizationId: null,
-              applicationId: null,
-              reason: '',
-            });
-          }}
-          title={t('orgPanel.rejectJoinTitle')}
-          size="sm"
-        >
-          <p className="mb-3 text-sm text-gray-400">{t('orgPanel.rejectJoinReason')}</p>
-          <textarea
-            rows={4}
-            value={joinRejectDraft.reason}
-            onChange={(e) =>
-              setJoinRejectDraft((p) => ({ ...p, reason: e.target.value }))
-            }
-            className="mb-4 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
-          />
-          <div className="flex flex-wrap justify-end gap-2">
-            <button
-              type="button"
-              disabled={rejectModalBusy}
-              onClick={() => {
-                if (rejectModalBusy) return;
-                setJoinRejectDraft({
-                  open: false,
-                  organizationId: null,
-                  applicationId: null,
-                  reason: '',
-                });
-              }}
-              className="rounded-lg border border-white/20 px-4 py-2 text-sm text-gray-200 hover:bg-white/10 disabled:opacity-50"
-            >
-              {t('nav.cancel')}
-            </button>
-            <button
-              type="button"
-              disabled={rejectModalBusy}
-              onClick={async () => {
-                if (
-                  !joinRejectDraft.organizationId ||
-                  !joinRejectDraft.applicationId ||
-                  rejectModalBusy
-                )
-                  return;
-                await onRejectJoinApplication?.(
-                  joinRejectDraft.organizationId,
-                  joinRejectDraft.applicationId,
-                  joinRejectDraft.reason
-                );
-                setJoinRejectDraft({
-                  open: false,
-                  organizationId: null,
-                  applicationId: null,
-                  reason: '',
-                });
-              }}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t('orgPanel.rejectConfirmBtn')}
-            </button>
-          </div>
-        </Modal>
-      </>
-    );
-  }
 
   const orgName = selectedOrganization?.name || t('orgPanel.orgFallback');
   const deptName = selectedDepartment?.name
     ? displayDepartmentName(selectedDepartment.name, locale)
     : '—';
+  const selectedBranch = branches.find((b) => String(b._id) === String(selectedBranchId)) || null;
+  const selectedDivision = selectedBranch?.divisions?.find((d) => String(d._id) === String(selectedDivisionId)) || null;
+  const branchName = selectedBranch?.name ? displayDepartmentName(selectedBranch.name, locale) : '—';
+  const divisionName = selectedDivision?.name ? displayDepartmentName(selectedDivision.name, locale) : '—';
+  const teamName = selectedTeam?.name || '—';
   const chSlug = selectedChannel
     ? channelNameToDisplaySlug(selectedChannel.name || 'chat', locale)
     : '';
   const onlinePreviewIds = (workspaceOnlineUserIds || []).slice(0, 5);
+  const mapDropColumnToStatus = (colId) => {
+    if (colId === COL_DONE) return 'done';
+    if (colId === COL_PROGRESS) return 'in_progress';
+    return 'todo';
+  };
 
   return (
     <>
-    <div className={workspace.shell}>
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <aside className={workspace.aside}>
+    <div className={`${workspace.shell} h-full min-h-0`}>
+      <div className={workspace.shellInner || 'flex h-full min-h-0 flex-1 gap-2 overflow-hidden'}>
+        <aside
+          className={`${workspace.aside} relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden`}
+          style={{ width: leftAsideW, minWidth: LEFT_ASIDE_MIN_W, maxWidth: LEFT_ASIDE_MAX_W }}
+        >
           <div
-            className={`border-b px-3 py-3 ${isDarkMode ? 'border-white/[0.06]' : 'border-sky-200/70'}`}
-          >
-            <div className="mb-2 flex items-center justify-between">
-              <h2
-                className={`text-[11px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
-              >
-                {t('orgPanel.deptHeading')}
-              </h2>
-              <button
-                type="button"
-                onClick={onCreateDepartment}
-                className={`rounded-lg px-2 py-1 text-xs font-semibold transition disabled:opacity-50 ${
-                  isDarkMode
-                    ? 'bg-white/[0.06] text-white hover:bg-white/10'
-                    : 'bg-sky-100 text-slate-800 hover:bg-sky-200/80'
-                }`}
-              >
-                {t('orgPanel.createDeptShort')}
-              </button>
-            </div>
-            <div className="scrollbar-overlay max-h-[40vh] space-y-1 overflow-y-auto pr-0.5">
-              {loadingDepartments && (
-                <div
-                  className={`h-9 animate-pulse rounded-xl ${isDarkMode ? 'bg-white/10' : 'bg-slate-200/80'}`}
-                />
-              )}
-              {!loadingDepartments && departments.length === 0 && (
-                <div
-                  className={`rounded-xl border border-dashed p-3 text-xs ${
-                    isDarkMode
-                      ? 'border-white/10 text-[#8e9297]'
-                      : 'border-slate-300 text-slate-600'
-                  }`}
-                >
-                  {t('orgPanel.noDeptYet')}
-                </div>
-              )}
-              {departments.map((department) => (
+            className="absolute inset-y-0 right-0 z-20 w-2 cursor-col-resize"
+            title={`Kéo để đổi độ rộng (${LEFT_ASIDE_MIN_W}px – ${LEFT_ASIDE_MAX_W}px)`}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return;
+              leftAsideResizeRef.current = {
+                active: true,
+                startX: e.clientX,
+                startW: leftAsideW,
+                minW: LEFT_ASIDE_MIN_W,
+                maxW: LEFT_ASIDE_MAX_W,
+              };
+              e.preventDefault();
+            }}
+          />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-3 py-2.5">
+            <div
+              className={`mb-2.5 rounded-xl border p-2.5 ${isDarkMode ? 'border-white/10 bg-[#171B24]' : 'border-slate-200 bg-slate-50'}`}
+            >
+              <div className="flex items-center justify-between gap-2">
                 <button
-                  key={department._id}
                   type="button"
-                  onClick={() => onSelectDepartment(department._id)}
-                  className={`w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium transition ${
-                    selectedDepartment?._id === department._id
-                      ? isDarkMode
-                        ? 'bg-[#5865F2]/20 text-white ring-1 ring-[#5865F2]/40'
-                        : 'bg-cyan-100 text-cyan-950 ring-1 ring-cyan-300/70'
-                      : isDarkMode
-                        ? 'text-[#b4b8c4] hover:bg-white/[0.04]'
-                        : 'text-slate-600 hover:bg-slate-100'
-                  }`}
+                  onClick={() => {
+                    if (!canInviteMembers) return;
+                    if (selectedOrganization?._id) onInviteOrganization?.(selectedOrganization._id);
+                  }}
+                  className="min-w-0 text-left"
+                  title={canInviteMembers ? 'Mời vào tổ chức' : 'Bạn không có quyền mời thành viên'}
                 >
-                  {displayDepartmentName(department.name, locale)}
+                  <div className={`truncate text-lg font-semibold ${workspace.textPrimary}`}>
+                    {orgName}
+                  </div>
+                  <div className={`mt-0.5 text-xs ${isDarkMode ? 'text-emerald-400/90' : 'text-emerald-700'}`}>
+                    ● {t('orgPanel.onlineCount', { n: workspaceOnlineUserIds?.length || 0 })}
+                  </div>
                 </button>
-              ))}
+                {canInviteMembers ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedOrganization?._id) onInviteOrganization?.(selectedOrganization._id);
+                    }}
+                    className={`rounded-lg px-2 py-1 text-[10px] font-semibold ${
+                      isDarkMode ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    Mời
+                  </button>
+                ) : null}
+              </div>
             </div>
+
+            <OrganizationWorkspaceStructureSidebar
+              isDarkMode={isDarkMode}
+              locale={locale}
+              t={t}
+              branches={branches}
+              selectedBranchId={selectedBranchId}
+              onSelectBranch={onSelectBranch}
+              selectedDivisionId={selectedDivisionId}
+              onSelectDivision={onSelectDivision}
+              selectedDepartment={selectedDepartment}
+              selectedTeamId={selectedTeamId}
+              selectedChannelId={selectedChannelId}
+              teams={teams}
+              channels={channels}
+              channelPermissionMatrix={channelPermissionMatrix}
+              membershipScope={membershipScope}
+              loadingDepartments={loadingDepartments}
+              onSelectDepartment={onSelectDepartment}
+              onSelectTeam={onSelectTeam}
+              onSelectChannel={onSelectChannel}
+              onCreateChannel={onCreateChannel}
+              onOpenChannelSettings={onOpenChannelSettings}
+              canManageWorkspaceStructure={canManageWorkspaceStructure}
+              canManageChannelRoleAccess={canManageChannelRoleAccess}
+              canSeeAllStructure={canSeeAllStructure}
+            />
           </div>
 
-          {selectedDepartment && (
-            <div className="flex min-h-0 flex-1 flex-col px-3 py-3">
-              <div className="mb-2 flex items-center justify-between">
-                <span
-                  className={`text-[11px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
-                >
-                  {t('orgPanel.voiceChannels')}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onCreateChannel('voice')}
-                  className={`text-lg leading-none transition ${
-                    isDarkMode ? 'text-[#8e9297] hover:text-white' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  +
-                </button>
-              </div>
-              <div className="mb-4 space-y-0.5">
-                {voiceChannels.map((channel) => (
-                  <button
-                    key={channel._id}
-                    type="button"
-                    onClick={() => onSelectChannel(channel._id)}
-                    className={`w-full rounded-lg px-2 py-1.5 text-left text-sm ${
-                      selectedChannelId === channel._id
-                        ? isDarkMode
-                          ? 'bg-white/[0.08] text-white'
-                          : 'bg-sky-100 text-slate-900'
-                        : isDarkMode
-                          ? 'text-[#9aa0ae] hover:bg-white/[0.04]'
-                          : 'text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    🔊 {channelNameToDisplaySlug(channel.name, locale)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          {voiceConnVisible && voiceConnectionState !== 'idle' ? (
+            <OrganizationVoiceConnectionPanel
+              isDarkMode={isDarkMode}
+              t={t}
+              connected={voiceConnConnected}
+              channelLabel={
+                selectedChannel?.name
+                  ? channelNameToDisplaySlug(selectedChannel.name, locale)
+                  : ''
+              }
+              orgName={orgName}
+              onDisconnect={() => voiceControlActionsRef.current.disconnect?.()}
+            />
+          ) : null}
+          </div>
+
+          <div
+            className={`shrink-0 rounded-b-xl ${isDarkMode ? 'bg-[#11141C]' : 'bg-white'}`}
+          >
+            <OrganizationSidebarAudioBar
+              isDarkMode={isDarkMode}
+              t={t}
+              voiceInChannel={voiceConnVisible}
+              voiceAudioState={voiceAudioState}
+              onToggleMute={() => voiceControlActionsRef.current.toggleMute?.()}
+              onToggleSpeaker={() => voiceControlActionsRef.current.toggleSpeaker?.()}
+              onAudioPrefChange={handleOrgAudioPrefChange}
+              onOpenOrganizationSettings={() => onOpenOrganizationSettings?.(selectedOrganization)}
+              onOpenVoiceSettings={() => setOrgVoiceSettingsOpen(true)}
+            />
+          </div>
         </aside>
 
-        <div className={workspace.main}>
+        <div className={`${workspace.main} h-full min-h-0 overflow-hidden`}>
           <header className={workspace.header}>
-            {/* Hàng 1: breadcrumb + trạng thái / lệnh nhanh / thông báo — tìm kiếm nằm hàng 2 để khỏi chen với đường dẫn */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <nav
-                className={`min-w-0 text-[13px] ${isDarkMode ? 'text-[#9aa0ae]' : 'text-slate-600'}`}
-                aria-label={t('orgPanel.workspaceBreadcrumbAria')}
-              >
-                <span className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                  {orgName}
-                </span>
-                <span className={`mx-1.5 ${isDarkMode ? 'text-[#4e5258]' : 'text-slate-400'}`}>›</span>
-                <span>{deptName}</span>
-                <span className={`mx-1.5 ${isDarkMode ? 'text-[#4e5258]' : 'text-slate-400'}`}>›</span>
-                <span className="text-[#5865F2]">
-                  {t('orgPanel.channelHash', {
-                    name: chSlug || t('organizations.channelNameFallback'),
-                  })}
-                </span>
-              </nav>
-              <div className="flex flex-wrap items-center gap-2">
-                <div
-                  className={`flex items-center gap-2 rounded-full border py-1 pl-1 pr-2.5 ${
-                    isDarkMode
-                      ? 'border-white/[0.08] bg-[#12151f]'
-                      : 'border-slate-200 bg-slate-100'
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <nav
+                  aria-label={t('orgPanel.workspaceBreadcrumbAria')}
+                  className={`mb-0.5 flex flex-wrap items-center gap-1 text-[11px] ${
+                    isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'
                   }`}
                 >
-                  <div className="flex -space-x-2">
-                    {onlinePreviewIds.map((oid, i) => (
-                      <div
-                        key={`${oid}-${i}`}
-                        className={`flex h-8 w-8 items-center justify-center rounded-full border-2 bg-gradient-to-br from-violet-500 to-fuchsia-600 text-[10px] font-bold text-white ${
-                          isDarkMode ? 'border-[#12151f]' : 'border-slate-100'
-                        }`}
-                        title={String(oid).slice(-6)}
+                  <span className="truncate">{branchName}</span>
+                  <span className="opacity-50">/</span>
+                  <span className="truncate">{divisionName}</span>
+                  {selectedTeamId && teamName !== '—' ? (
+                    <>
+                      <span className="opacity-50">/</span>
+                      <span className="truncate">{teamName}</span>
+                    </>
+                  ) : deptName !== '—' && !selectedTeamId ? (
+                    <>
+                      <span className="opacity-50">/</span>
+                      <span className="truncate">{deptName}</span>
+                    </>
+                  ) : null}
+                  {selectedChannelId ? (
+                    <>
+                      <span className="opacity-50">/</span>
+                      <span
+                        className={`truncate font-medium ${isDarkMode ? 'text-[#A1A8B3]' : 'text-slate-700'}`}
                       >
-                        {String(oid).slice(-2)}
-                      </div>
-                    ))}
-                  </div>
-                  <span
-                    className={`text-xs font-semibold ${isDarkMode ? 'text-[#b4b8c4]' : 'text-slate-600'}`}
-                  >
-                    {t('orgPanel.onlineCount', { n: workspaceOnlineUserIds?.length || 0 })}
-                  </span>
-                </div>
+                        #{chSlug || t('organizations.channelNameFallback')}
+                      </span>
+                    </>
+                  ) : null}
+                </nav>
+                <h2
+                  className={`truncate text-base font-semibold ${workspace.textPrimary}`}
+                >
+                  {selectedChannelId
+                    ? `#${chSlug || t('organizations.channelNameFallback')}`
+                    : deptName}
+                </h2>
+                {workspaceTab !== 'tasks' && !isVoiceChannel && sortedWorkspaceMessages.length > 0 ? (
+                  <p className={`mt-0.5 text-[10px] ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}>
+                    {t('orgPanel.msgCountLine', { n: sortedWorkspaceMessages.length })}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   type="button"
-                  title={t('orgPanel.slashCmdTitle')}
-                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs transition ${
-                    isDarkMode
-                      ? 'border-white/[0.08] bg-[#12151f] text-[#9aa0ae] hover:bg-white/[0.06]'
-                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  title={t('orgPanel.workspaceSearchAria')}
+                  aria-label={t('orgPanel.workspaceSearchAria')}
+                  onClick={() => onWorkspaceSearchOpenChange?.(true)}
+                  className={`rounded-lg p-2 transition ${
+                    workspaceSearchOpen
+                      ? isDarkMode
+                        ? 'bg-[#5865F2]/25 text-white'
+                        : 'bg-indigo-100 text-indigo-700'
+                      : isDarkMode
+                        ? 'text-[#b4b8c4] hover:bg-white/[0.06] hover:text-white'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                   }`}
-                  onClick={() => onSendChatOption?.({ kind: 'quick-command-placeholder' })}
                 >
-                  <Zap className="h-4 w-4 shrink-0" />
-                  <span className="hidden sm:inline">{t('orgPanel.slashCmdTitle')}</span>
-                  <kbd
-                    className={`hidden rounded px-1.5 py-0.5 font-mono text-[10px] sm:inline ${
-                      isDarkMode ? 'bg-black/40 text-[#6d7380]' : 'bg-slate-200 text-slate-600'
-                    }`}
-                  >
-                    ⌘K
-                  </kbd>
+                  <Search className="h-5 w-5" strokeWidth={2} />
                 </button>
                 <button
                   type="button"
                   title={t('orgPanel.notifTitle')}
-                  className={`rounded-xl p-2 transition ${
-                    isDarkMode
-                      ? 'text-[#9aa0ae] hover:bg-white/[0.06] hover:text-white'
-                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
-                  }`}
+                  aria-label={t('orgPanel.notifTitle')}
                   onClick={() => onOpenNotificationsPage?.()}
+                  className={`rounded-lg p-2 transition ${
+                    isDarkMode
+                      ? 'text-[#b4b8c4] hover:bg-white/[0.06] hover:text-white'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
                 >
-                  <Bell className="h-5 w-5" />
+                  <Bell className="h-5 w-5" strokeWidth={2} />
                 </button>
               </div>
             </div>
-
-            {(selectedOrganization?._id || selectedOrganization?.id) && (
-              <div className="mt-2 w-full min-w-0" role="search" aria-label={t('orgPanel.workspaceSearchAria')}>
-                <OrgWorkspaceSearch
-                  organizationId={selectedOrganization?._id || selectedOrganization?.id}
-                  serverId={selectedOrganization?.serverId}
-                  channels={chatChannels}
-                  isDarkMode={isDarkMode}
-                  onJumpToResult={onWorkspaceSearchJump}
-                />
-              </div>
-            )}
-
-            {selectedDepartment && chatChannels.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {chatChannels.map((channel, cidx) => {
-                  const active = String(selectedChannelId) === String(channel._id);
-                  const fakeBadge = (cidx % 5) + 1;
-                  return (
-                    <button
-                      key={channel._id}
-                      type="button"
-                      onClick={() => onSelectChannel(channel._id)}
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                        active
-                          ? isDarkMode
-                            ? 'border-[#5865F2] bg-[#5865F2]/15 text-white shadow-[0_0_12px_rgba(88,101,242,0.25)]'
-                            : 'border-cyan-400 bg-cyan-50 text-slate-900 shadow-sm ring-1 ring-cyan-200/80'
-                          : isDarkMode
-                            ? 'border-white/[0.08] bg-[#12151f] text-[#9aa0ae] hover:border-white/15 hover:text-white'
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
-                      }`}
-                    >
-                      #{channelNameToDisplaySlug(channel.name || 'chat', locale)}
-                      {fakeBadge > 0 && (
-                        <span
-                          className={`rounded-full px-1.5 py-0 text-[10px] ${
-                            isDarkMode
-                              ? 'bg-[#5865F2]/40 text-white'
-                              : 'bg-cyan-200/80 text-slate-900'
-                          }`}
-                        >
-                          {fakeBadge}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => onCreateChannel('chat')}
-                  className={`rounded-full border border-dashed px-2.5 py-1.5 text-xs ${
-                    isDarkMode
-                      ? 'border-white/15 text-[#6d7380] hover:text-white'
-                      : 'border-slate-300 text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  {t('orgPanel.addChatChannel')}
-                </button>
-              </div>
-            )}
           </header>
 
-          <div className={workspace.metaBar}>
-            <p className={`text-xs ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}>
-              {t('orgPanel.msgCountLine', { n: messages.length })}
-            </p>
-            <p className={`hidden max-w-[min(100%,280px)] text-right text-xs sm:block ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-400'}`}>
-              {t('orgPanel.searchHintAbove')}
-            </p>
-          </div>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div
+            ref={chatScrollRef}
+            className="scrollbar-chat min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain"
+            onScroll={handleChatScroll}
+          >
+            {workspaceTab === 'tasks' ? (
+              <div className="min-h-0 px-4 py-3">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold ${isDarkMode ? 'bg-[#5865F2]/25 text-white' : 'bg-indigo-100 text-indigo-800'}`}
+                    >
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                      Bảng
+                    </button>
+                    <button
+                      type="button"
+                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold ${isDarkMode ? 'bg-white/[0.05] text-[#aab0bf]' : 'bg-slate-100 text-slate-600'}`}
+                    >
+                      <List className="h-3.5 w-3.5" />
+                      Danh sách
+                    </button>
+                  </div>
 
-          <div className="scrollbar-overlay min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div
+                      className={`flex items-center gap-2 rounded-xl px-3 py-2 ${isDarkMode ? 'bg-white/[0.04] text-[#9aa0ae]' : 'bg-white border border-slate-200 text-slate-600'}`}
+                    >
+                      <Search className="h-3.5 w-3.5" />
+                      <input
+                        value={taskSearchQuery}
+                        onChange={(e) => setTaskSearchQuery(e.target.value)}
+                        placeholder="Tìm task..."
+                        className={`w-40 bg-transparent text-xs outline-none ${isDarkMode ? 'placeholder:text-[#6d7380]' : 'placeholder:text-slate-400'}`}
+                      />
+
+                    </div>
+                    <div
+                      className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${isDarkMode ? 'bg-white/[0.04] text-[#aab0bf]' : 'bg-white border border-slate-200 text-slate-600'}`}
+                    >
+                      <Filter className="h-3.5 w-3.5" />
+                      <select
+                        value={taskDepartmentFilter}
+                        onChange={(e) => setTaskDepartmentFilter(e.target.value)}
+                        className="bg-transparent outline-none"
+                      >
+                        <option value="all">Tất cả phòng ban</option>
+                        {departments.map((department) => (
+                          <option key={department._id} value={String(department._id)}>
+                            {displayDepartmentName(department.name, locale)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {canCreateWorkspaceTask ? (
+
+                      <button
+                        type="button"
+                        onClickCapture={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          event.nativeEvent?.stopImmediatePropagation?.();
+                          openTaskCreateModal();
+                        }}
+                        onClick={() => openTaskCreateModal()}
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#5865F2] px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Tạo task mới
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                {loadingWorkspaceTasks ? (
+                  <div
+                    className={`rounded-xl p-4 text-sm ${isDarkMode ? 'bg-white/5 text-gray-300' : 'bg-white/80 text-slate-600 shadow-sm'}`}
+                  >
+                    Loading tasks...
+                  </div>
+                ) : taskSummary.total === 0 ? (
+                  <div
+                    className={`rounded-xl border border-dashed p-6 text-sm ${isDarkMode ? 'border-white/10 bg-white/[0.03] text-[#9aa0ae]' : 'border-slate-300 bg-slate-50 text-slate-600'}`}
+                  >
+                    Chưa có task nào trong workspace này.
+                  </div>
+                ) : (
+                  <TasksKanbanDnd
+                    columns={taskColumns}
+                    getAssigneeLabel={(task) => taskAssigneeLabel(task)}
+                    onCardClick={() => {}}
+                    onDropOnColumn={(task, _fromCol, toCol) =>
+                      onMoveWorkspaceTask?.(task, mapDropColumnToStatus(toCol))
+                    }
+                    renderCardInner={(task) => (
+                      <div className="space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div
+                            className={`text-[10px] font-semibold uppercase tracking-wide ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}
+                          >
+                            {String(task?.departmentName || task?.department || 'General')}
+                          </div>
+                          <span
+                            className={`h-2 w-2 rounded-full ${String(task?.status || 'todo') === 'done' ? 'bg-emerald-400' : String(task?.status || 'todo') === 'review' ? 'bg-orange-400' : String(task?.status || 'todo') === 'in_progress' ? 'bg-cyan-400' : 'bg-slate-400'}`}
+                          />
+                        </div>
+                        <div
+                          className={`text-sm font-semibold leading-snug line-clamp-2 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
+                        >
+                          {task?.title || 'Untitled task'}
+                        </div>
+                        <div className={`text-xs line-clamp-3 ${isDarkMode ? 'text-[#9aa0ae]' : 'text-slate-600'}`}>
+                          {task?.description || ''}
+                        </div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className={`space-y-0.5 text-[10px] ${isDarkMode ? 'text-[#9aa0ae]' : 'text-slate-600'}`}>
+                            <div>
+                              <span className={isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}>Giao: </span>
+                              <span className={isDarkMode ? 'text-violet-300' : 'text-violet-700'}>
+                                {taskAssignerLabel(task)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className={isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}>Làm: </span>
+                              <span className={isDarkMode ? 'text-cyan-300' : 'text-cyan-700'}>
+                                {taskAssigneeLabel(task)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className={`text-right text-[10px] ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}>
+                            {task?.dueDate
+                              ? new Date(task.dueDate).toLocaleDateString(locale === 'en' ? 'en-US' : 'vi-VN')
+                              : ''}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  />
+                )}
+              </div>
+            ) : isVoiceChannel ? (
+                selectedChannelId && (
+                  <OrganizationVoiceChannelView
+                    channelId={String(selectedChannelId)}
+                    channelDisplayName={
+                      selectedChannel?.name
+                        ? channelNameToDisplaySlug(selectedChannel.name, locale)
+                        : ''
+                    }
+                    organizationId={organizationId ? String(organizationId) : ''}
+                    channelLabel={selectedChannel?.name || ''}
+                    isDarkMode={isDarkMode}
+                    canVoice={canVoiceChannel}
+                    landingDemo={landingDemo}
+                    onConnectionStateChange={setVoiceConnectionState}
+                    onAudioStateChange={setVoiceAudioState}
+                    onRoomSessionEnd={onVoiceRoomSessionEnd}
+                    onDisconnect={onDisconnectVoice}
+                    onControlActionsReady={(actions) => {
+                      voiceControlActionsRef.current = actions || {
+                        toggleMute: null,
+                        toggleSpeaker: null,
+                        disconnect: null,
+                      };
+                    }}
+                  />
+                )
+              ) : (
+              <div className="flex min-h-full flex-col px-4 py-3">
+              <div className="mt-auto flex flex-col gap-3">
+              <>
               {loadingMessages && (
                 <div
                   className={`rounded-xl p-4 text-sm ${
@@ -1430,7 +1260,8 @@ const OrganizationMainPanel = ({
                     ? plainTextForMessage(parentMsg).slice(0, 160)
                     : t('orgPanel.threadRoot');
                   const isEditing = editingMessageId && String(editingMessageId) === String(mid);
-                  const showToolbar = !isEditing && !sendingMessage;
+                  const showToolbar =
+                    !isEditing && !sendingMessage && type !== 'system';
 
                   const toolbarPlace = toolbarPlacementById[String(mid)] ?? 'above';
 
@@ -1438,24 +1269,23 @@ const OrganizationMainPanel = ({
                   const showDayDivider =
                     !prev || messageDayKey(message.createdAt) !== messageDayKey(prev.createdAt);
 
-                  const displayName = isMine
-                    ? t('orgPanel.you')
-                    : message.senderId?.displayName ||
-                      message.senderId?.username ||
-                      message.senderId?.fullName ||
-                      t('orgPanel.member');
-                  const roleCapsule = isMine
-                    ? t('orgPanel.roleYouCaps')
-                    : type === 'system'
-                      ? t('orgPanel.roleSystemCaps')
-                      : t('orgPanel.roleMemberCaps');
+                  const displayName = senderDisplayName(
+                    message,
+                    isMine,
+                    currentUser,
+                    t('orgPanel.member')
+                  );
+                  const avatarUrl = senderAvatarUrl(message, isMine, currentUser);
+                  const avatarInitials = isMine
+                    ? userInitialsFromProfile(currentUser)
+                    : senderInitials(message);
+                  const messageRoleKey =
+                    type === 'system'
+                      ? 'system'
+                      : String(message?.senderOrgRole || message?.membershipRole || 'member').toLowerCase();
+                  const roleCapsule = roleBadgeLabel(messageRoleKey, t);
 
-                  const bubbleMine = isDarkMode
-                    ? 'border border-[#5865F2]/45 bg-gradient-to-br from-[#5865F2]/35 to-[#4752c4]/25 text-white shadow-[0_0_20px_rgba(88,101,242,0.12)]'
-                    : 'border border-cyan-300/60 bg-gradient-to-br from-cyan-50 to-sky-50 text-slate-900 shadow-sm';
-                  const bubbleOther = isDarkMode
-                    ? 'border border-white/[0.07] bg-[#1a1d26] text-slate-100'
-                    : 'border border-slate-200 bg-white text-slate-800 shadow-sm';
+                  const contentTextCls = isDarkMode ? 'text-[#dcddde]' : 'text-slate-800';
 
                   return (
                     <Fragment key={mid}>
@@ -1468,59 +1298,68 @@ const OrganizationMainPanel = ({
                                 : 'border-slate-200 bg-white text-slate-500 shadow-sm'
                             }`}
                           >
-                            <Zap className="h-3 w-3 text-amber-400" />
                             {formatDateDividerLabel(message.createdAt)}
                           </span>
                         </div>
                       )}
                       <div
-                        className={`flex w-full items-start gap-3 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}
+                        className={`group/msg relative -mx-4 px-4 py-0.5 transition-colors ${
+                          isDarkMode ? 'hover:bg-white/[0.035]' : 'hover:bg-slate-100/90'
+                        }`}
+                        onMouseEnter={(e) => handleMessageRowMouseEnter(mid, e)}
                       >
-                        {!isMine && (
-                          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600/80 to-fuchsia-700/80 text-xs font-bold text-white shadow-inner">
-                            {senderInitials(message)}
+                        {showToolbar && (
+                          <div
+                            className={`pointer-events-none absolute right-4 z-30 opacity-0 transition-opacity duration-150 group-hover/msg:pointer-events-auto group-hover/msg:opacity-100 ${
+                              toolbarPlace === 'below'
+                                ? 'top-full mt-1'
+                                : '-top-1 -translate-y-full'
+                            }`}
+                          >
+                            <ChannelMessageToolbar
+                              compact
+                              isMine={isMine}
+                              showEdit={isMine && canEditOrgMessage(message)}
+                              disabled={sendingMessage}
+                              onQuickReact={(emoji) => onQuickReactMessage?.(message, emoji)}
+                              onOpenEmojiPicker={() => {}}
+                              onMiddleAction={() => {
+                                if (isMine && canEditOrgMessage(message)) {
+                                  beginEditMessage(message);
+                                } else {
+                                  onReplyToMessage?.(message);
+                                }
+                              }}
+                              onForward={() => onForwardMessage?.(message)}
+                              onMore={(e) => {
+                                const r = e?.currentTarget?.getBoundingClientRect?.();
+                                if (r) {
+                                  setMoreMenu({
+                                    open: true,
+                                    anchorRect: r,
+                                    message,
+                                  });
+                                }
+                              }}
+                            />
                           </div>
                         )}
+                        <div className="flex w-full items-start justify-start gap-3">
                         <div
-                          className={`group relative min-w-0 max-w-[min(100%,36rem)] flex-1 ${isMine ? 'text-right' : ''}`}
-                          onMouseEnter={(e) => handleMessageRowMouseEnter(mid, e)}
+                          className="mt-0.5 flex h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-bold text-white shadow-inner"
+                          title={displayName}
                         >
-                          {showToolbar && (
-                            <div
-                              className={`absolute z-20 opacity-0 transition-opacity group-hover:opacity-100 ${
-                                toolbarPlace === 'below' ? 'top-full mt-1' : 'bottom-full mb-1'
-                              } ${isMine ? 'right-0' : 'left-0'}`}
-                            >
-                              <ChannelMessageToolbar
-                                isMine={isMine}
-                                showEdit={isMine && canEditOrgMessage(message)}
-                                disabled={sendingMessage}
-                                onQuickReact={(emoji) => onQuickReactMessage?.(message, emoji)}
-                                onOpenEmojiPicker={() => {}}
-                                onMiddleAction={() => {
-                                  if (isMine && canEditOrgMessage(message)) {
-                                    setEditingMessageId(mid);
-                                    setEditDraft(String(message.content || ''));
-                                  } else {
-                                    onReplyToMessage?.(message);
-                                  }
-                                }}
-                                onForward={() => onForwardMessage?.(message)}
-                                onMore={(e) => {
-                                  const r = e?.currentTarget?.getBoundingClientRect?.();
-                                  if (r) {
-                                    setMoreMenu({
-                                      open: true,
-                                      anchorRect: r,
-                                      message,
-                                    });
-                                  }
-                                }}
-                              />
-                            </div>
+                          {avatarUrl && String(avatarUrl).startsWith('http') ? (
+                            <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <span className="flex h-full w-full items-center justify-center">
+                              {avatarInitials}
+                            </span>
                           )}
+                        </div>
+                        <div className="min-w-0 max-w-[min(100%,42rem)] flex-1">
                           <div
-                            className={`mb-1 flex flex-wrap items-center gap-2 ${isMine ? 'justify-end' : 'justify-start'}`}
+                            className="mb-1 flex flex-wrap items-center gap-2 justify-start"
                           >
                             <span
                               className={`text-sm font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
@@ -1528,21 +1367,19 @@ const OrganizationMainPanel = ({
                               {displayName}
                             </span>
                             <span
-                              className={`rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                                isDarkMode
-                                  ? 'bg-white/[0.08] text-[#9aa0ae]'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${roleBadgeClass(messageRoleKey, isDarkMode)}`}
                             >
                               {roleCapsule}
                             </span>
+                            {type !== 'text' && type !== 'system' ? (
                             <span
                               className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${
-                                isDarkMode ? 'bg-white/[0.06] text-[#6d7380]' : 'bg-slate-100 text-slate-500'
+                                isDarkMode ? 'bg-white/[0.06] text-[#6B7280]' : 'bg-slate-100 text-slate-500'
                               }`}
                             >
                               {typeLabel}
                             </span>
+                            ) : null}
                             <span
                               className={`text-[11px] tabular-nums ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
                             >
@@ -1557,78 +1394,109 @@ const OrganizationMainPanel = ({
                             )}
                           </div>
                           <div
-                            className={`inline-block w-full rounded-2xl px-3.5 py-2.5 text-left text-sm ${isMine ? bubbleMine : bubbleOther}`}
+                            className={`text-sm leading-relaxed text-left ${contentTextCls}`}
                           >
                             {replyId && (
                               <div
-                                className={`mb-2 border-l-2 pl-2 text-[11px] ${isMine ? 'border-white/30 text-white/80' : 'border-[#5865F2]/40 text-[#8e9297]'}`}
+                                className={`mb-2 border-l-2 pl-2 text-[11px] text-left ${isMine ? 'border-[#5865F2]/50 text-[#949ba4]' : 'border-[#5865F2]/40 text-[#8e9297]'}`}
                               >
-                                <span className={`font-semibold ${isMine ? 'text-white' : 'text-[#a29bfe]'}`}>
+                                <span className={`font-semibold ${isMine ? 'text-[#a29bfe]' : 'text-[#a29bfe]'}`}>
                                   @{replyToLabel(parentMsg || {})}{' '}
                                 </span>
                                 <span className="line-clamp-2">{replyPreview}</span>
                               </div>
                             )}
                             {isEditing ? (
-                              <div className="space-y-2">
-                                <textarea
-                                  value={editDraft}
-                                  onChange={(e) => setEditDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && !e.shiftKey) {
-                                      e.preventDefault();
-                                      submitEdit(mid);
-                                    }
-                                    if (e.key === 'Escape') cancelEdit();
-                                  }}
-                                  rows={3}
-                                  className={`w-full resize-y rounded-lg border px-2 py-1.5 text-sm outline-none ${
-                                    isDarkMode
-                                      ? 'border-white/20 bg-black/35 text-white focus:border-[#5865F2]/50'
-                                      : 'border-slate-300 bg-white text-slate-900 focus:border-cyan-500/60'
-                                  }`}
-                                />
-                                <p
-                                  className={`text-[11px] ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}
-                                >
-                                  {t('orgPanel.escapeKey')}{' '}
-                                  <button type="button" className="text-[#a29bfe] hover:underline" onClick={cancelEdit}>
-                                    {t('orgPanel.editCancelShort')}
-                                  </button>
-                                  {' · '}
-                                  {t('orgPanel.enterKey')}{' '}
-                                  <button
-                                    type="button"
-                                    className="text-[#a29bfe] hover:underline"
-                                    onClick={() => submitEdit(mid)}
-                                  >
-                                    {t('orgPanel.editSaveShort')}
-                                  </button>
-                                </p>
-                              </div>
+                              <OrgMessageInlineEditor
+                                value={editDraft}
+                                onChange={setEditDraft}
+                                onSave={() => submitEdit(mid)}
+                                onCancel={cancelEdit}
+                                isDarkMode={isDarkMode}
+                                saving={savingEdit}
+                                escapeHint={t('orgPanel.editEscape')}
+                                enterHint={t('orgPanel.editEnter')}
+                                cancelLabel={t('orgPanel.editCancelShort')}
+                                saveLabel={t('orgPanel.editSaveShort')}
+                              />
                             ) : (
-                              <ChatMessageAttachmentBody message={message} />
+                              <ChatMessageAttachmentBody
+                                message={message}
+                                mentionVariant="org"
+                                mentionLabels={mentionLabelsForChat}
+                              />
                             )}
                           </div>
                         </div>
-                        {isMine && (
-                          <div
-                            className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-[10px] font-bold uppercase tracking-tight ${
-                              isDarkMode
-                                ? 'border-[#5865F2]/35 bg-[#1e2230] text-[#a29bfe]'
-                                : 'border-cyan-300/60 bg-cyan-50 text-cyan-800'
-                            }`}
-                          >
-                            {t('orgPanel.you')}
-                          </div>
-                        )}
+                        </div>
                       </div>
                     </Fragment>
                   );
                 })}
-            </div>
+              </>
+              <div ref={messagesEndRef} className="h-px w-full shrink-0" aria-hidden />
+              </div>
+              </div>
+              )}
 
+          </div>
+
+          {showJumpToLatest &&
+            sortedWorkspaceMessages.length > 0 &&
+            workspaceTab !== 'tasks' &&
+            !isVoiceChannel &&
+            !loadingMessages && (
+            <button
+              type="button"
+              title={t('orgPanel.scrollToLatest')}
+              aria-label={t('orgPanel.scrollToLatest')}
+              onClick={() => scrollChatToLatest('smooth')}
+              className={`pointer-events-auto absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 ${
+                isDarkMode
+                  ? 'border border-white/10 bg-[#171B24] text-[#A1A8B3] hover:bg-[#1D2330] hover:text-[#F3F4F6]'
+                  : 'border border-slate-200/90 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <ChevronsDown className="h-5 w-5" strokeWidth={2.25} />
+            </button>
+          )}
+
+          {isVoiceChannel && (
+            <button
+              type="button"
+              title="Mở chat kênh voice"
+              aria-label="Mở chat kênh voice"
+              onClick={() => onOpenVoiceChatSidebar?.()}
+              className={`pointer-events-auto absolute bottom-4 right-4 z-20 inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-semibold shadow-lg transition hover:scale-[1.02] active:scale-[0.98] ${
+                voiceChatSidebarOpen
+                  ? isDarkMode
+                    ? 'border-[#5865F2]/40 bg-[#5865F2]/20 text-[#cdd2ff]'
+                    : 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                  : isDarkMode
+                    ? 'border-white/10 bg-[#141821] text-white hover:bg-[#1a2230]'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span className="hidden sm:inline">Chat</span>
+            </button>
+          )}
+
+          </div>
+
+          {workspaceTab !== 'tasks' && !isVoiceChannel && (
             <div className={workspace.composerBar}>
+              {channelReadOnly ? (
+                <p
+                  className={`mb-2 rounded-lg border px-3 py-2 text-xs ${
+                    isDarkMode
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-100/90'
+                      : 'border-amber-200 bg-amber-50 text-amber-900'
+                  }`}
+                >
+                  {t('orgPanel.composerReadOnly')}
+                </p>
+              ) : null}
               <ChatUploadProgressBar
                 percent={channelUploadProgress}
                 label={t('orgPanel.uploadChannel')}
@@ -1648,9 +1516,13 @@ const OrganizationMainPanel = ({
               />
               <UnifiedChatComposer
                 richToolbar
-                showAiToggle
-                aiEnabled={false}
-                onAiToggle={() => onSendChatOption?.({ kind: 'ai-draft-toggle' })}
+                flatInner
+                showSendButton={false}
+                mentionItems={normalizedContacts.slice(0, 30).map((contact) => ({
+                  value: contact.id,
+                  label: contact.name,
+                  avatar: contact.avatar,
+                }))}
                 wrapperClassName={workspace.composerWrap}
                 topSlot={
                   replyingToMessage ? (
@@ -1690,47 +1562,52 @@ const OrganizationMainPanel = ({
                 onChange={onChangeMessageInput}
                 onSend={onSendMessage}
                 placeholder={
-                  selectedChannelId
-                    ? t('orgPanel.composerHint', {
-                        ch: chSlug || t('organizations.channelNameFallback'),
-                      })
-                    : t('orgPanel.composerPlaceholder')
+                  channelReadOnly
+                    ? t('orgPanel.composerReadOnlyHint')
+                    : selectedChannelId
+                      ? t('orgPanel.composerHint', {
+                          ch: chSlug || t('organizations.channelNameFallback'),
+                        })
+                      : t('orgPanel.composerPlaceholder')
                 }
-                disabled={!selectedChannelId || sendingMessage}
-                sendDisabled={!messageInput.trim()}
-                sendLabel={t('orgPanel.send')}
-                plusItems={[
-                  {
-                    key: 'upload-file',
-                    icon: '📁',
-                    label: t('orgPanel.menuUploadFile'),
-                    onClick: () => fileInputRef.current?.click(),
-                  },
-                  {
-                    key: 'upload-image',
-                    icon: '🖼️',
-                    label: t('orgPanel.menuUploadImage'),
-                    onClick: () => imageInputRef.current?.click(),
-                  },
-                  {
-                    key: 'topic',
-                    icon: '🧵',
-                    label: t('orgPanel.menuTopic'),
-                    onClick: () => onSendChatOption?.({ kind: 'topic' }),
-                  },
-                  {
-                    key: 'poll',
-                    icon: '🗳️',
-                    label: t('orgPanel.menuPoll'),
-                    onClick: handleCreatePoll,
-                  },
-                  {
-                    key: 'contact',
-                    icon: '👤',
-                    label: t('orgPanel.menuContact'),
-                    onClick: handleCreateContactCard,
-                  },
-                ]}
+                disabled={!selectedChannelId || sendingMessage || channelReadOnly}
+                sendDisabled={!messageInput.trim() || channelReadOnly}
+                plusItems={
+                  canWriteInChannel
+                    ? [
+                        {
+                          key: 'upload-file',
+                          icon: '📁',
+                          label: t('orgPanel.menuUploadFile'),
+                          onClick: () => fileInputRef.current?.click(),
+                        },
+                        {
+                          key: 'upload-image',
+                          icon: '🖼️',
+                          label: t('orgPanel.menuUploadImage'),
+                          onClick: () => imageInputRef.current?.click(),
+                        },
+                        {
+                          key: 'topic',
+                          icon: '🧵',
+                          label: t('orgPanel.menuTopic'),
+                          onClick: () => onSendChatOption?.({ kind: 'topic' }),
+                        },
+                        {
+                          key: 'poll',
+                          icon: '🗳️',
+                          label: t('orgPanel.menuPoll'),
+                          onClick: handleCreatePoll,
+                        },
+                        {
+                          key: 'contact',
+                          icon: '👤',
+                          label: t('orgPanel.menuContact'),
+                          onClick: handleCreateContactCard,
+                        },
+                      ]
+                    : []
+                }
                 actionItems={[
                   {
                     key: 'emoji',
@@ -1745,86 +1622,86 @@ const OrganizationMainPanel = ({
                 ]}
               />
 
-              {showEmojiPicker && (
-                <>
-                  <button
-                    type="button"
-                    aria-label={t('orgPanel.closeEmoji')}
-                    onClick={() => setShowEmojiPicker(false)}
-                    className="fixed inset-0 z-40 cursor-default bg-black/30"
-                  />
-                  <div className="fixed bottom-24 right-8 z-50 h-[420px] w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-[#0b1220] shadow-2xl">
-                    <div className="flex items-center gap-2 border-b border-slate-700 px-4 py-3">
-                      {[
-                        { id: 'gif', label: t('orgPanel.gifTab') },
-                        { id: 'sticker', label: t('orgPanel.stickerTab') },
-                        { id: 'emoji', label: t('orgPanel.emojiTab') },
-                      ].map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          onClick={() => setEmojiPickerTab(tab.id)}
-                          className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
-                            emojiPickerTab === tab.id
-                              ? 'bg-slate-700 text-white'
-                              : 'text-gray-300 hover:bg-slate-800/70'
-                          }`}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="border-b border-slate-700 px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <input
-                          value={emojiSearch}
-                          onChange={(event) => setEmojiSearch(event.target.value)}
-                          placeholder={t('orgPanel.emojiSearchPh')}
-                          className="h-11 flex-1 rounded-xl border border-blue-500/70 bg-[#0d1525] px-3 text-sm text-white outline-none placeholder:text-gray-400"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => onSendChatOption?.({ kind: 'add-emoji-beta' })}
-                          className="h-11 rounded-xl bg-slate-700 px-4 text-sm font-semibold text-white transition hover:bg-slate-600"
-                        >
-                          {t('orgPanel.addEmojiBtn')}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="h-[calc(100%-126px)] overflow-y-auto p-3 scrollbar-overlay">
-                      {emojiPickerTab !== 'emoji' ? (
-                        <div className="flex h-full items-center justify-center text-sm text-gray-400">
-                          {t('orgPanel.emojiBetaMsg')}
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-9 gap-2">
-                          {filteredComposerEmojis.map((emoji, idx) => (
-                            <button
-                              key={`${emoji}-${idx}`}
-                              type="button"
-                              onClick={() => appendEmoji(emoji)}
-                              className="h-11 rounded-lg bg-[#111a2c] text-2xl transition hover:bg-slate-700/80"
-                            >
-                              {emoji}
-                            </button>
-                          ))}
-                          {filteredComposerEmojis.length === 0 && (
-                            <div className="col-span-9 rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-sm text-gray-400">
-                              {t('orgPanel.emojiNoMatch')}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
             </div>
+            )}
           </div>
         </div>
       </div>
+
+      {workspaceTab !== 'tasks' && showEmojiPicker && (
+        <>
+          <button
+            type="button"
+            aria-label={t('orgPanel.closeEmoji')}
+            onClick={() => setShowEmojiPicker(false)}
+            className="fixed inset-0 z-40 cursor-default bg-black/30"
+          />
+          <div className="fixed bottom-24 right-8 z-50 h-[420px] w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-[#0b1220] shadow-2xl">
+            <div className="flex items-center gap-2 border-b border-slate-700 px-4 py-3">
+              {[
+                { id: 'gif', label: t('orgPanel.gifTab') },
+                { id: 'sticker', label: t('orgPanel.stickerTab') },
+                { id: 'emoji', label: t('orgPanel.emojiTab') },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setEmojiPickerTab(tab.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
+                    emojiPickerTab === tab.id
+                      ? 'bg-slate-700 text-white'
+                      : 'text-gray-300 hover:bg-slate-800/70'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <div className="border-b border-slate-700 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <input
+                  value={emojiSearch}
+                  onChange={(event) => setEmojiSearch(event.target.value)}
+                  placeholder={t('orgPanel.emojiSearchPh')}
+                  className="h-11 flex-1 rounded-xl border border-blue-500/70 bg-[#0d1525] px-3 text-sm text-white outline-none placeholder:text-gray-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => onSendChatOption?.({ kind: 'add-emoji-beta' })}
+                  className="h-11 rounded-xl bg-slate-700 px-4 text-sm font-semibold text-white transition hover:bg-slate-600"
+                >
+                  {t('orgPanel.addEmojiBtn')}
+                </button>
+              </div>
+            </div>
+            <div className="h-[calc(100%-126px)] overflow-y-auto p-3 scrollbar-overlay">
+              {emojiPickerTab !== 'emoji' ? (
+                <div className="flex h-full items-center justify-center text-sm text-gray-400">
+                  {t('orgPanel.emojiBetaMsg')}
+                </div>
+              ) : (
+                <div className="grid grid-cols-9 gap-2">
+                  {filteredComposerEmojis.map((emoji, idx) => (
+                    <button
+                      key={`${emoji}-${idx}`}
+                      type="button"
+                      onClick={() => appendEmoji(emoji)}
+                      className="h-11 rounded-lg bg-[#111a2c] text-2xl transition hover:bg-slate-700/80"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                  {filteredComposerEmojis.length === 0 && (
+                    <div className="col-span-9 rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-sm text-gray-400">
+                      {t('orgPanel.emojiNoMatch')}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       <ChannelMessageMoreMenu
         open={moreMenu.open}
@@ -1843,12 +1720,11 @@ const OrganizationMainPanel = ({
         }}
         onReply={() => moreMenu.message && onReplyToMessage?.(moreMenu.message)}
         onForward={() => moreMenu.message && onForwardMessage?.(moreMenu.message)}
-        onEdit={() => {
-          const m = moreMenu.message;
-          if (!m || !canEditOrgMessage(m)) return;
-          setEditingMessageId(m._id || m.id);
-          setEditDraft(String(m.content || ''));
-        }}
+        onEdit={
+          moreMenu.message && canEditOrgMessage(moreMenu.message)
+            ? () => beginEditMessage(moreMenu.message)
+            : undefined
+        }
         onDelete={() => {
           const m = moreMenu.message;
           if (m) onDeleteMessage?.(m._id || m.id);
@@ -1856,6 +1732,8 @@ const OrganizationMainPanel = ({
         onCreateTask={() => {
           const m = moreMenu.message;
           if (!m) return;
+          const content = plainTextForMessage(m);
+          setCreateTaskMentions(parseMessageMentions(content, normalizedContacts));
           setCreateTaskSourceMessage(m);
           setCreateTaskModalOpen(true);
         }}
@@ -1870,15 +1748,146 @@ const OrganizationMainPanel = ({
         onClose={() => {
           setCreateTaskModalOpen(false);
           setCreateTaskSourceMessage(null);
+          setCreateTaskMentions([]);
         }}
         messageId={createTaskSourceMessage?._id || createTaskSourceMessage?.id}
         organizationId={orgIdForTask ? String(orgIdForTask) : null}
         currentUserId={currentUserId}
+        mentions={createTaskMentions}
+        channelId={selectedChannelId ? String(selectedChannelId) : null}
         messagePreview={
           createTaskSourceMessage ? plainTextForMessage(createTaskSourceMessage).slice(0, 500) : ''
         }
-        onConfirmed={() => toast.success(t('orgPanel.taskFromAiOk'))}
+        onConfirmed={() => {
+          toast.success(t('orgPanel.taskFromAiOk'));
+          onWorkspaceTasksRefresh?.();
+        }}
       />
+
+      <Modal
+        isOpen={orgVoiceSettingsOpen}
+        onClose={() => setOrgVoiceSettingsOpen(false)}
+        title={t('voiceRoom.voiceSettingsTitle')}
+        size="md"
+      >
+        <p className={`mb-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
+          {t('voiceRoom.voiceSettingsDesc')}
+        </p>
+        <VoiceAudioSettingsPanel
+          t={t}
+          isDarkMode={isDarkMode}
+          micId={orgMicId}
+          speakerId={orgSpeakerId}
+          micVolume={orgMicVolume}
+          speakerVolume={orgSpeakerVolume}
+          onMicIdChange={setOrgMicId}
+          onSpeakerIdChange={setOrgSpeakerId}
+          onMicVolumeChange={setOrgMicVolume}
+          onSpeakerVolumeChange={setOrgSpeakerVolume}
+          active={orgVoiceSettingsOpen}
+        />
+      </Modal>
+
+      <Modal
+        isOpen={taskCreateOpen}
+        onClose={() => setTaskCreateOpen(false)}
+        title="Tạo task mới"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1 text-sm font-semibold text-white">Tên task</div>
+            <input
+              value={taskForm.title}
+              maxLength={180}
+              onChange={(event) => setTaskForm((prev) => ({ ...prev, title: event.target.value }))}
+              placeholder="Nhập tên task"
+              className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white outline-none placeholder:text-gray-500"
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-sm font-semibold text-white">Mô tả</div>
+            <textarea
+              value={taskForm.description}
+              rows={3}
+              onChange={(event) => setTaskForm((prev) => ({ ...prev, description: event.target.value }))}
+              placeholder="Nội dung công việc"
+              className="w-full resize-none rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white outline-none placeholder:text-gray-500"
+            />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-sm font-semibold text-white">Hạn xử lý</span>
+              <input
+                type="date"
+                value={taskForm.dueDate}
+                onChange={(event) => setTaskForm((prev) => ({ ...prev, dueDate: event.target.value }))}
+                className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-semibold text-white">Ưu tiên</span>
+              <select
+                value={taskForm.priority}
+                onChange={(event) => setTaskForm((prev) => ({ ...prev, priority: event.target.value }))}
+                className="w-full rounded-xl border border-white/15 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-semibold text-white">Phòng ban</span>
+              <select
+                value={taskForm.departmentId}
+                onChange={(event) => setTaskForm((prev) => ({ ...prev, departmentId: event.target.value }))}
+                className="w-full rounded-xl border border-white/15 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none"
+              >
+                <option value="">General</option>
+                {departments.map((department) => (
+                  <option key={department._id} value={String(department._id)}>
+                    {displayDepartmentName(department.name, locale)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-semibold text-white">Gán cho</span>
+              <select
+                value={taskForm.assigneeId}
+                onChange={(event) => setTaskForm((prev) => ({ ...prev, assigneeId: event.target.value }))}
+                className="w-full rounded-xl border border-white/15 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none"
+              >
+                <option value="">Chưa gán</option>
+                {assignableContactOptions.map((contact) => (
+                  <option key={contact.id} value={String(contact.id)}>
+                    {contact.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setTaskCreateOpen(false)}
+              className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white transition hover:bg-white/10"
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              onClick={submitWorkspaceTask}
+              disabled={!taskForm.title.trim() || creatingTask}
+              className="rounded-xl bg-[#5865F2] px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
+            >
+              {creatingTask ? 'Đang tạo...' : 'Tạo task'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         isOpen={isPollModalOpen}
@@ -1982,67 +1991,137 @@ const OrganizationMainPanel = ({
         size="lg"
       >
         <div className="space-y-3">
-          <input
-            value={contactSearch}
-            onChange={(event) => setContactSearch(event.target.value)}
-            placeholder={t('orgPanel.contactSearchPh')}
-            className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white outline-none placeholder:text-gray-500"
-          />
-
-          <div className="flex flex-wrap gap-2">
-            {[
-              { key: 'all', label: t('orgPanel.catAll') },
-              { key: 'friend', label: t('orgPanel.catFriend') },
-              { key: 'work', label: t('orgPanel.catWork') },
-              { key: 'family', label: t('orgPanel.catFamily') },
-            ].map((category) => (
-              <button
-                key={category.key}
-                type="button"
-                onClick={() => setContactCategory(category.key)}
-                className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                  contactCategory === category.key
-                    ? 'bg-blue-500 text-white'
-                    : 'border border-white/15 text-gray-300 hover:bg-white/10'
-                }`}
-              >
-                {category.label}
-              </button>
-            ))}
+          {/* Toggle between list and manual entry */}
+          <div className="flex gap-2 border-b border-white/10 pb-3">
+            <button
+              type="button"
+              onClick={() => {
+                setUseManualContactEntry(false);
+                setSelectedContactId('');
+              }}
+              className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                !useManualContactEntry
+                  ? 'bg-blue-600 text-white'
+                  : 'border border-white/15 text-gray-300 hover:bg-white/10'
+              }`}
+            >
+              Chọn từ danh sách
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUseManualContactEntry(true);
+                setContactSearch('');
+                setContactCategory('all');
+              }}
+              className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                useManualContactEntry
+                  ? 'bg-blue-600 text-white'
+                  : 'border border-white/15 text-gray-300 hover:bg-white/10'
+              }`}
+            >
+              Nhập thủ công
+            </button>
           </div>
 
-          <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.02] p-2">
-            {loadingChatContacts && (
-              <div className="rounded-lg bg-white/5 px-3 py-2 text-sm text-gray-300">{t('orgPanel.loadingContacts')}</div>
-            )}
-            {!loadingChatContacts && filteredContacts.length === 0 && (
-              <div className="rounded-lg border border-dashed border-white/15 px-3 py-2 text-sm text-gray-400">
-                {t('orgPanel.contactNoMatch')}
+          {!useManualContactEntry ? (
+            <>
+              <input
+                value={contactSearch}
+                onChange={(event) => setContactSearch(event.target.value)}
+                placeholder={t('orgPanel.contactSearchPh')}
+                className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white outline-none placeholder:text-gray-500"
+              />
+
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { key: 'all', label: t('orgPanel.catAll') },
+                  { key: 'friend', label: t('orgPanel.catFriend') },
+                  { key: 'work', label: t('orgPanel.catWork') },
+                  { key: 'family', label: t('orgPanel.catFamily') },
+                ].map((category) => (
+                  <button
+                    key={category.key}
+                    type="button"
+                    onClick={() => setContactCategory(category.key)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      contactCategory === category.key
+                        ? 'bg-blue-500 text-white'
+                        : 'border border-white/15 text-gray-300 hover:bg-white/10'
+                    }`}
+                  >
+                    {category.label}
+                  </button>
+                ))}
               </div>
-            )}
-            {!loadingChatContacts &&
-              filteredContacts.map((contact) => (
-                <label
-                  key={contact.id}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 transition hover:bg-white/5"
-                >
-                  <input
-                    type="radio"
-                    name="contact-card"
-                    checked={selectedContactId === contact.id}
-                    onChange={() => setSelectedContactId(contact.id)}
-                    className="h-4 w-4"
-                  />
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500/60 to-violet-500/60 text-xs font-bold text-white">
-                    {(contact.name || 'U').charAt(0)}
+
+              <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.02] p-2">
+                {loadingChatContacts && (
+                  <div className="rounded-lg bg-white/5 px-3 py-2 text-sm text-gray-300">{t('orgPanel.loadingContacts')}</div>
+                )}
+                {!loadingChatContacts && filteredContacts.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-white/15 px-3 py-2 text-sm text-gray-400">
+                    {t('orgPanel.contactNoMatch')}
                   </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-white">{contact.name}</div>
-                    <div className="truncate text-xs text-gray-400">{contact.phone || contact.email || '-'}</div>
-                  </div>
-                </label>
-              ))}
-          </div>
+                )}
+                {!loadingChatContacts &&
+                  filteredContacts.map((contact) => (
+                    <label
+                      key={contact.id}
+                      className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 transition hover:bg-white/5"
+                    >
+                      <input
+                        type="radio"
+                        name="contact-card"
+                        checked={selectedContactId === contact.id}
+                        onChange={() => setSelectedContactId(contact.id)}
+                        className="h-4 w-4"
+                      />
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500/60 to-violet-500/60 text-xs font-bold text-white">
+                        {(contact.name || 'U').charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-white">{contact.name}</div>
+                        <div className="truncate text-xs text-gray-400">{contact.phone || contact.email || '-'}</div>
+                      </div>
+                    </label>
+                  ))}
+              </div>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Tên *</label>
+                <input
+                  type="text"
+                  value={manualContactFullName}
+                  onChange={(e) => setManualContactFullName(e.target.value)}
+                  placeholder="Ví dụ: danh cong do"
+                  className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-gray-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Số điện thoại</label>
+                <input
+                  type="text"
+                  value={manualContactPhone}
+                  onChange={(e) => setManualContactPhone(e.target.value)}
+                  placeholder="Ví dụ: 0123456789 hoặc -"
+                  className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-gray-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Email</label>
+                <input
+                  type="text"
+                  value={manualContactEmail}
+                  onChange={(e) => setManualContactEmail(e.target.value)}
+                  placeholder="Ví dụ: user@example.com hoặc -"
+                  className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none placeholder:text-gray-500"
+                />
+              </div>
+            </div>
+          )}
 
           <div className="flex justify-end gap-2">
             <button
@@ -2055,7 +2134,7 @@ const OrganizationMainPanel = ({
             <button
               type="button"
               onClick={handleSubmitContact}
-              disabled={!selectedContactId}
+              disabled={useManualContactEntry ? !manualContactFullName.trim() : !selectedContactId}
               className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
             >
               {t('orgPanel.menuContact')}

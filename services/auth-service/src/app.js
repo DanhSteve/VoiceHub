@@ -1,11 +1,31 @@
 const express = require('express');
-const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const { createCorsMiddleware } = require('/shared/middleware/corsPolicy');
 require('dotenv').config();
 
 const app = express();
 
+// Sau reverse proxy / API Gateway request thường có X-Forwarded-For.
+// express-rate-limit v7+ bắt buộc trust proxy khớp, nếu không sẽ ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+function resolveTrustProxy() {
+  const v = process.env.TRUST_PROXY;
+  if (v === '0' || v === 'false') return false;
+  if (v === 'true' || v === '1') return true;
+  if (v != null && String(v).trim() !== '' && !Number.isNaN(Number(v))) return Number(v);
+  return 1; // mặc định: một hop (gateway → service)
+}
+app.set('trust proxy', resolveTrustProxy());
+
 // Middleware
-app.use(cors());
+app.use(createCorsMiddleware());
+
+const authRouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX_PER_MIN || 120),
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/auth', authRouteLimiter);
 
 // Body parser với limit và error handling
 app.use(express.json({ 

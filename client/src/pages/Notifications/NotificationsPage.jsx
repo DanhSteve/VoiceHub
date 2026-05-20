@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, GlassCard, GradientButton, NotificationBellBadge } from '../../components/Shared';
 import { useSocket } from '../../context/SocketContext';
@@ -9,12 +9,14 @@ import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
 import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
 import { useAppStrings } from '../../locales/appStrings';
-import { PageSearchBar, SearchFilterChips } from '../../features/search';
+import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 
 function NotificationsPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
+  const organizationIdFilter = String(searchParams.get('organizationId') || searchParams.get('orgId') || '').trim();
   const [filter, setFilter] = useState('all');
   const [notifSearch, setNotifSearch] = useState('');
   const [notifications, setNotifications] = useState([]);
@@ -33,6 +35,19 @@ function NotificationsPage() {
     if (diffHours < 24) return t('time.hoursAgo', { n: diffHours });
     const diffDays = Math.floor(diffHours / 24);
     return t('time.daysAgo', { n: diffDays });
+  };
+
+  const parseNotificationData = (item) => {
+    const raw = item?.data;
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw;
+    if (typeof raw !== 'string') return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
   };
 
   const iconByType = {
@@ -68,6 +83,7 @@ function NotificationsPage() {
   };
 
   const toViewNotification = (item) => {
+    const data = parseNotificationData(item);
     const id = item?._id || item?.id;
     const rawType = String(item?.type || 'system');
     const type =
@@ -82,6 +98,26 @@ function NotificationsPage() {
               : rawType === 'org_join_application'
                 ? 'system'
                 : rawType;
+    const orgLabel =
+      data?.workspaceName ||
+      data?.organizationName ||
+      data?.companyName ||
+      item?.workspaceName ||
+      item?.organizationName ||
+      item?.companyName ||
+      '';
+    const orgSlug =
+      data?.workspaceSlug ||
+      data?.organizationSlug ||
+      item?.workspaceSlug ||
+      item?.organizationSlug ||
+      '';
+    const orgId =
+      data?.workspaceId ||
+      data?.organizationId ||
+      item?.workspaceId ||
+      item?.organizationId ||
+      '';
     return {
       id,
       type,
@@ -91,8 +127,12 @@ function NotificationsPage() {
       message: item?.content || item?.message || '',
       time: getRelativeTime(item?.createdAt),
       read: Boolean(item?.isRead),
-      priority: item?.data?.priority || 'low',
+      priority: data?.priority || 'low',
       action: getActionLabel(rawType, type),
+      organizationLabel: orgLabel,
+      organizationName: orgLabel,
+      organizationSlug: orgSlug,
+      organizationId: orgId,
       /** Chuông + badge đỏ giống sidebar (chủ yếu lời mời kết bạn) */
       useBellCard: rawType === 'friend_request' || type === 'friend',
     };
@@ -101,7 +141,12 @@ function NotificationsPage() {
   const loadNotifications = useCallback(async () => {
     setNotificationsLoading(true);
     try {
-      const response = await api.get('/notifications', { params: { limit: 100 } });
+      const response = await api.get('/notifications', {
+        params: {
+          limit: 100,
+          ...(organizationIdFilter ? { organizationId: organizationIdFilter } : {}),
+        },
+      });
       const payload = response?.data || response;
       const data = payload?.data || payload;
       const list = Array.isArray(data?.notifications) ? data.notifications : [];
@@ -112,7 +157,7 @@ function NotificationsPage() {
     } finally {
       setNotificationsLoading(false);
     }
-  }, [t]);
+  }, [organizationIdFilter, t]);
 
   useEffect(() => {
     loadNotifications();
@@ -238,9 +283,15 @@ function NotificationsPage() {
       handleMarkAsRead(notif.id);
     }
 
+    const targetWorkspacePath = notif.organizationSlug
+      ? `/w/${encodeURIComponent(notif.organizationSlug)}`
+      : notif.organizationId
+        ? `/workspaces?orgId=${encodeURIComponent(notif.organizationId)}`
+        : null;
+
     switch (notif.type) {
       case 'mention':
-        navigate('/chat/organization');
+        navigate(targetWorkspacePath || '/chat/organization');
         toast(t('notifications.toastOpenOrgChat'), { icon: '💬' });
         break;
       case 'friend':
@@ -252,20 +303,24 @@ function NotificationsPage() {
         toast(t('notifications.toastOpenCalendar'), { icon: '📅' });
         break;
       case 'system':
-        navigate('/settings');
+        navigate(targetWorkspacePath || '/settings');
         toast(t('notifications.toastOpenSettings'), { icon: '⚙️' });
         break;
       case 'task':
       case 'deadline':
-        navigate('/tasks');
+        navigate(notif.organizationSlug ? `${targetWorkspacePath}?tab=tasks` : '/tasks');
         toast(t('notifications.toastOpenTasks'), { icon: '✅' });
         break;
       case 'file':
-        navigate('/documents');
+        navigate(
+          notif.organizationId
+            ? `/documents?organizationId=${encodeURIComponent(notif.organizationId)}`
+            : '/documents'
+        );
         toast(t('notifications.toastOpenDocs'), { icon: '📁' });
         break;
       default:
-        navigate('/dashboard');
+        navigate(targetWorkspacePath || '/dashboard');
         toast(t('notifications.toastOpenDetail'), { icon: 'ℹ️' });
     }
   };
@@ -279,13 +334,16 @@ function NotificationsPage() {
           : filter === 'friend'
             ? notifications.filter((n) => n.type === 'friend')
             : notifications.filter((n) => n.type === filter);
+    if (organizationIdFilter) {
+      list = list.filter((n) => String(n.organizationId || '').trim() === organizationIdFilter);
+    }
     const q = notifSearch.trim().toLowerCase();
     if (!q) return list;
     return list.filter((n) => {
       const hay = `${n.title || ''} ${n.message || ''} ${n.action || ''} ${n.type || ''}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [notifications, filter, notifSearch]);
+  }, [notifications, filter, notifSearch, organizationIdFilter]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -320,18 +378,10 @@ function NotificationsPage() {
               {t('notifications.title')}
             </h1>
             <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('notifications.subtitle')}</p>
-            <PageSearchBar
-              className="mt-4 max-w-md"
-              value={notifSearch}
-              onChange={setNotifSearch}
-              placeholder={t('notifications.searchPlaceholder')}
-              isDarkMode={isDarkMode}
-              id="notifications-search"
-            />
           </div>
           <div className="flex shrink-0 flex-wrap gap-3">
             <button 
-              onClick={() => navigate('/settings')}
+              onClick={() => navigate('/settings?tab=notifications')}
               className={`rounded-xl px-4 py-2 transition-all ${btnGhost}`}
             >
               {t('notifications.btnNotifSettings')}
@@ -344,6 +394,24 @@ function NotificationsPage() {
             </button>
           </div>
         </div>
+
+        <PageSearchToolbar
+          className="-mx-5 mb-6 lg:-mx-6"
+          value={notifSearch}
+          onChange={setNotifSearch}
+          placeholder={t('notifications.searchPlaceholder')}
+          isDarkMode={isDarkMode}
+          id="notifications-search"
+          aria-label={t('searchUi.searchAria')}
+        >
+          <SearchFilterChips
+            aria-label={t('notifications.filtersAria')}
+            options={notifFilterOptions}
+            value={filter}
+            onChange={setFilter}
+            isDarkMode={isDarkMode}
+          />
+        </PageSearchToolbar>
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4 mb-6">
@@ -393,20 +461,6 @@ function NotificationsPage() {
           </GlassCard>
         </div>
 
-        {/* Bộ lọc loại + từ khóa (ô tìm phía trên) */}
-        <div className="mb-6">
-          <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-            {t('notifications.filtersHeading')}
-          </p>
-          <SearchFilterChips
-            aria-label={t('notifications.filtersAria')}
-            options={notifFilterOptions}
-            value={filter}
-            onChange={setFilter}
-            isDarkMode={isDarkMode}
-          />
-        </div>
-
         {/* Notifications List */}
         <div className="space-y-3">
           {notificationsLoading && (
@@ -448,6 +502,14 @@ function NotificationsPage() {
                     <span>🕐 {notif.time}</span>
                     <span>•</span>
                     <span className="capitalize">{notif.type}</span>
+                    {notif.organizationName ? (
+                      <>
+                        <span>•</span>
+                        <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
+                          {notif.organizationName}
+                        </span>
+                      </>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">

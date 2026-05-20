@@ -1,0 +1,21 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDung
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant TaskSvc as TaskService
+participant Queue as RabbitMQ
+participant Worker as TaskFromFileWorker
+
+Note over User,Worker: Chặng 2 - Tạo task từ file chat + ngoại lệ
+User->>Client: Tạo task từ file chat
+Client->>Gateway: POST /api/tasks/from-chat-file
+Gateway->>TaskSvc: Forward
+TaskSvc->>Queue: Enqueue job
+TaskSvc-->>Client: 202 accepted
+Queue->>Worker: Consume job xử lý nền
+alt Job thành công
+  Worker-->>Client: Trạng thái hoàn tất
+else Retry thất bại
+  Worker-->>Client: Cảnh báo chờ xử lý lại
+end

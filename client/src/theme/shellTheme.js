@@ -55,8 +55,8 @@ export function navDivider(isDark) {
 
 export function threeFrameRightPanel(isDark) {
   return isDark
-    ? 'bg-[#101827]/92 backdrop-blur-xl border-l border-slate-700/50'
-    : 'bg-sky-50/95 backdrop-blur-xl border-l border-sky-200/90';
+    ? 'h-full rounded-xl border border-white/[0.08] bg-[#11141C] shadow-[0_1px_0_rgba(255,255,255,0.04)]'
+    : 'h-full rounded-xl border border-slate-200/90 bg-white shadow-sm';
 }
 
 export function tooltipBubble(isDark) {

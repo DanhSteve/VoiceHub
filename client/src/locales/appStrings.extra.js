@@ -5,6 +5,7 @@ export const extraStrings = {
   vi: {
     common: {
       email: 'Email',
+      emailPlaceholder: 'you@company.com',
       password: 'Mật khẩu',
       passwordPlaceholder: 'Mật khẩu',
       confirmPasswordPlaceholder: 'Xác nhận mật khẩu',
@@ -12,9 +13,31 @@ export const extraStrings = {
       backHome: 'Về trang chủ',
       backToLogin: 'Quay lại đăng nhập',
     },
+    login: {
+      title: 'Chào mừng quay lại',
+      subtitle: 'Đăng nhập để tiếp tục quản trị hệ thống của bạn.',
+      email: 'Email',
+      password: 'Mật khẩu',
+      forgot: 'Quên mật khẩu?',
+      placeholderEmail: 'acbxyz@gmail.com',
+      placeholderPwd: 'Mật khẩu',
+      hide: 'Ẩn',
+      show: 'Hiện',
+      remember: 'Ghi nhớ đăng nhập',
+      checkingConfig: 'Đang kiểm tra cấu hình…',
+      submitting: 'Đang đăng nhập…',
+      submit: 'Đăng nhập',
+      gatewayAlertTitle: 'Không thể đăng nhập ổn định',
+      gatewayAlertFallback:
+        'API Gateway chưa cấu hình GATEWAY_INTERNAL_TOKEN. Thêm biến này vào api-gateway/.env và cùng giá trị với các microservice (xem .env.example ở root repo).',
+      demoToast: 'Đây là bản demo trên trang chủ — đăng nhập thật từ trang Đăng nhập.',
+    },
     register: {
       title: 'Tạo tài khoản mới',
       subtitle: 'Khởi tạo không gian làm việc chuyên nghiệp cho doanh nghiệp.',
+      gatewayAlertTitle: 'Chưa thể đăng ký ổn định',
+      gatewayAlertFallback:
+        'API Gateway chưa cấu hình GATEWAY_INTERNAL_TOKEN. Thêm biến vào api-gateway/.env và đồng bộ với docker-compose / các service.',
       lastName: 'Họ',
       firstName: 'Tên',
       email: 'Email',
@@ -156,6 +179,7 @@ export const extraStrings = {
   en: {
     common: {
       email: 'Email',
+      emailPlaceholder: 'you@company.com',
       password: 'Password',
       passwordPlaceholder: 'Password',
       confirmPasswordPlaceholder: 'Confirm password',
@@ -163,9 +187,31 @@ export const extraStrings = {
       backHome: 'Back to home',
       backToLogin: 'Back to sign in',
     },
+    login: {
+      title: 'Welcome back',
+      subtitle: 'Sign in to continue managing your workspace.',
+      email: 'Email',
+      password: 'Password',
+      forgot: 'Forgot password?',
+      placeholderEmail: 'acbxyz@gmail.com',
+      placeholderPwd: 'Password',
+      hide: 'Hide',
+      show: 'Show',
+      remember: 'Remember me',
+      checkingConfig: 'Checking configuration…',
+      submitting: 'Signing in…',
+      submit: 'Log in',
+      gatewayAlertTitle: 'Unable to sign in reliably',
+      gatewayAlertFallback:
+        'API Gateway is missing GATEWAY_INTERNAL_TOKEN. Add it to api-gateway/.env and keep the same value across all microservices (see .env.example at the repo root).',
+      demoToast: 'This is the home preview — sign in from the Log in page for real auth.',
+    },
     register: {
       title: 'Create an account',
       subtitle: 'Set up a professional workspace for your team.',
+      gatewayAlertTitle: 'Unable to register reliably',
+      gatewayAlertFallback:
+        'API Gateway is missing GATEWAY_INTERNAL_TOKEN. Add it to api-gateway/.env and keep it aligned with docker-compose and the services.',
       lastName: 'Last name',
       firstName: 'First name',
       email: 'Email',

@@ -1,6 +1,7 @@
 const { socketAuth } = require('/shared/middleware/auth');
 const { logger } = require('/shared');
 const roomManager = require('../sfu/roomManager');
+const voiceRoomSessionService = require('../services/voiceRoomSession.service');
 
 const getUserFromSocket = (socket) => socket.data?.user || socket.user || {};
 
@@ -14,8 +15,9 @@ function registerVoiceNamespace(io) {
     const displayName = authUser.displayName || authUser.username || authUser.email || `user-${userId}`;
     logger.info(`[voice] user connected ${userId} socket:${socket.id}`);
 
-    socket.on('voice:joinRoom', async ({ roomId }, callback = () => {}) => {
+    socket.on('voice:joinRoom', async (payload = {}, callback = () => {}) => {
       try {
+        const roomId = payload.roomId;
         if (!roomId) throw new Error('roomId is required');
 
         const joined = await roomManager.joinRoom({
@@ -24,7 +26,22 @@ function registerVoiceNamespace(io) {
           userInfo: { ...authUser, userId, displayName },
         });
 
+        const peerCount = Array.isArray(joined.peers) ? joined.peers.length : 1;
+        let sessionMeta = null;
+        try {
+          sessionMeta = await voiceRoomSessionService.onUserJoinRoom({
+            roomId: String(roomId),
+            userId,
+            organizationId: payload.organizationId,
+            channelLabel: payload.channelLabel || payload.displayName,
+            peerCount,
+          });
+        } catch (sessionErr) {
+          logger.warn(`[voice] session start skipped room=${roomId}: ${sessionErr.message}`);
+        }
+
         socket.data.voiceRoomId = roomId;
+        socket.data.voiceJoinedAt = Date.now();
         socket.join(joined.roomTag);
 
         callback({
@@ -32,6 +49,7 @@ function registerVoiceNamespace(io) {
           roomId,
           rtpCapabilities: joined.rtpCapabilities,
           peers: joined.peers,
+          meetingId: sessionMeta?.meetingId || null,
         });
 
         socket.to(joined.roomTag).emit('voice:peerJoined', {
@@ -168,19 +186,34 @@ function registerVoiceNamespace(io) {
       }
     });
 
-    const leave = () => {
+    const leave = async () => {
       const roomId = socket.data.voiceRoomId;
       if (!roomId) return;
+      const roomTag = `voice:${roomId}`;
       const left = roomManager.leaveRoom({ roomId, socketId: socket.id });
-      socket.leave(`voice:${roomId}`);
-      delete socket.data.voiceRoomId;
       if (left.removed) {
-        socket.to(`voice:${roomId}`).emit('voice:peerLeft', {
+        socket.to(roomTag).emit('voice:peerLeft', {
           socketId: socket.id,
           userId: left.userId,
           displayName: left.displayName,
         });
       }
+      if (left.roomClosed) {
+        let closedPayload = { roomId: String(roomId), recordingSaved: false };
+        try {
+          const finalized = await voiceRoomSessionService.finalizeRoomSession(roomId);
+          if (finalized) {
+            closedPayload = { ...closedPayload, ...finalized };
+          }
+        } catch (finalizeErr) {
+          logger.error(`[voice] finalize session failed room=${roomId}:`, finalizeErr);
+        }
+        socket.emit('voice:roomClosed', closedPayload);
+        voiceNamespace.to(roomTag).emit('voice:roomClosed', closedPayload);
+      }
+      socket.leave(roomTag);
+      delete socket.data.voiceRoomId;
+      delete socket.data.voiceJoinedAt;
     };
 
     socket.on('voice:leaveRoom', (_payload, callback = () => {}) => {

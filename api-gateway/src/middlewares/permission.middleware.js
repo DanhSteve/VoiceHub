@@ -165,12 +165,11 @@ const permissionMiddleware = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Permission middleware error:', error);
-    
+
     // Fail-closed: deny access khi có lỗi
     return res.status(500).json({
       success: false,
       message: 'Permission check failed',
-      error: error.message,
     });
   }
 };

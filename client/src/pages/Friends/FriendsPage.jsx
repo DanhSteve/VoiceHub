@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import NavigationSidebar from '../../components/Layout/NavigationSidebar';
 import { GlassCard, GradientButton } from '../../components/Shared';
 import AddFriendModal from '../../components/Friends/AddFriendModal';
@@ -13,6 +13,9 @@ function FriendsPage() {
   const [activeTab, setActiveTab] = useState('all');
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [dismissedSuggestions, setDismissedSuggestions] = useState(() => new Set());
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [requestLoading, setRequestLoading] = useState(false);
+  const [requestActionLoadingId, setRequestActionLoadingId] = useState('');
 
   const sendFriendRequest = async (userId) => {
     const id = userId && String(userId).trim();
@@ -29,18 +32,49 @@ function FriendsPage() {
   };
 
   const friends = [
-    { name: 'Sarah Chen', status: 'online', avatar: '👩‍💼', role: 'Designer', mutualFriends: 12, lastActive: 'Đang hoạt động', activity: 'Đang làm việc trong dự án UI' },
-    { name: 'Mike Ross', status: 'online', avatar: '👨‍💻', role: 'Developer', mutualFriends: 8, lastActive: 'Đang hoạt động', activity: 'Code review' },
-    { name: 'Emma Wilson', status: 'away', avatar: '👩‍🎨', role: 'Product Manager', mutualFriends: 15, lastActive: '10 phút trước', activity: 'Trong cuộc họp' },
-    { name: 'David Kim', status: 'offline', avatar: '👨‍🔬', role: 'Data Scientist', mutualFriends: 6, lastActive: '2 giờ trước', activity: '' },
-    { name: 'Lisa Park', status: 'online', avatar: '👩‍💼', role: 'Marketing Lead', mutualFriends: 20, lastActive: 'Đang hoạt động', activity: 'Đang soạn báo cáo' },
-    { name: 'Tom Zhang', status: 'busy', avatar: '👨‍💻', role: 'DevOps', mutualFriends: 5, lastActive: 'Đang hoạt động', activity: 'Đừng làm phiền' }
+    { id: 'demo-sarah-chen', name: 'Sarah Chen', status: 'online', avatar: '👩‍💼', role: 'Designer', mutualFriends: 12, lastActive: 'Đang hoạt động', activity: 'Đang làm việc trong dự án UI' },
+    { id: 'demo-mike-ross', name: 'Mike Ross', status: 'online', avatar: '👨‍💻', role: 'Developer', mutualFriends: 8, lastActive: 'Đang hoạt động', activity: 'Code review' },
+    { id: 'demo-emma-wilson', name: 'Emma Wilson', status: 'away', avatar: '👩‍🎨', role: 'Product Manager', mutualFriends: 15, lastActive: '10 phút trước', activity: 'Trong cuộc họp' },
+    { id: 'demo-david-kim', name: 'David Kim', status: 'offline', avatar: '👨‍🔬', role: 'Data Scientist', mutualFriends: 6, lastActive: '2 giờ trước', activity: '' },
+    { id: 'demo-lisa-park', name: 'Lisa Park', status: 'online', avatar: '👩‍💼', role: 'Marketing Lead', mutualFriends: 20, lastActive: 'Đang hoạt động', activity: 'Đang soạn báo cáo' },
+    { id: 'demo-tom-zhang', name: 'Tom Zhang', status: 'busy', avatar: '👨‍💻', role: 'DevOps', mutualFriends: 5, lastActive: 'Đang hoạt động', activity: 'Đừng làm phiền' }
   ];
 
-  const friendRequests = [
-    { name: 'Anna Lee', avatar: '👩‍🔬', mutualFriends: 3, requestDate: '2 ngày trước' },
-    { name: 'John Smith', avatar: '👨‍💼', mutualFriends: 7, requestDate: '1 tuần trước' }
-  ];
+  const friendRequests = useMemo(
+    () =>
+      pendingRequests.map((req) => {
+        const from = req.fromUser || req.from || req.requester || {};
+        const reqId = String(req._id || req.id || from._id || from.userId || '');
+        return {
+          requestId: reqId,
+          friendId: String(from._id || from.userId || from.id || ''),
+          name: from.displayName || from.fullName || from.username || from.email || t('common.user'),
+          avatar: from.avatar || '👤',
+          mutualFriends: Number(req.mutualFriends || 0),
+          requestDate: req.createdAt ? new Date(req.createdAt).toLocaleDateString('vi-VN') : t('friends.requestUnknown'),
+        };
+      }),
+    [pendingRequests, t]
+  );
+
+  const loadPendingRequests = async () => {
+    setRequestLoading(true);
+    try {
+      const res = await friendService.getPendingRequests();
+      const payload = res?.data ?? res;
+      const arr = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
+      setPendingRequests(arr);
+    } catch (err) {
+      setPendingRequests([]);
+      toast.error(err?.response?.data?.message || t('friends.toastRequestErr'));
+    } finally {
+      setRequestLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPendingRequests();
+  }, []);
 
   const suggestions = [
     { name: 'Sophie Turner', avatar: '👩‍🎨', mutualFriends: 9, reason: 'Cùng tổ chức' },
@@ -100,6 +134,54 @@ function FriendsPage() {
   const clearSearch = () => {
     setSearchResult(null);
     setSearchPhone('');
+  };
+
+  const handleAcceptRequest = async (request) => {
+    const actionId = request.friendId || request.requestId;
+    if (!actionId) return;
+    setRequestActionLoadingId(actionId);
+    try {
+      if (request.friendId) await friendService.acceptFriend(request.friendId);
+      else await friendService.acceptRequest(request.requestId);
+      toast.success(t('friends.toastAcceptDemo', { name: request.name }));
+      await loadPendingRequests();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('friends.toastRequestErr'));
+    } finally {
+      setRequestActionLoadingId('');
+    }
+  };
+
+  const handleRejectRequest = async (request) => {
+    const actionId = request.friendId || request.requestId;
+    if (!actionId) return;
+    setRequestActionLoadingId(actionId);
+    try {
+      if (request.friendId) await friendService.rejectFriend(request.friendId);
+      else await friendService.rejectRequest(request.requestId);
+      toast(t('friends.toastRejectDemo', { name: request.name }), { icon: 'ℹ️' });
+      await loadPendingRequests();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('friends.toastRequestErr'));
+    } finally {
+      setRequestActionLoadingId('');
+    }
+  };
+
+  const handleBlockRequest = async (request) => {
+    const targetId = request.friendId || request.requestId;
+    if (!targetId) return;
+    setRequestActionLoadingId(targetId);
+    try {
+      if (request.friendId) await friendService.blockFriend(request.friendId);
+      else await friendService.blockUser(request.requestId);
+      toast.success(t('friends.toastFriendOptions'));
+      await loadPendingRequests();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('friends.toastRequestErr'));
+    } finally {
+      setRequestActionLoadingId('');
+    }
   };
 
   return (
@@ -183,9 +265,13 @@ function FriendsPage() {
                     </div>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Link to="/chat/friends" className="glass px-3 py-2 rounded-lg hover:bg-white/10 transition-all text-sm font-semibold flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => navigate('/chat/friends', { state: { openDmUserId: friend.id } })}
+                      className="glass px-3 py-2 rounded-lg hover:bg-white/10 transition-all text-sm font-semibold flex items-center gap-1"
+                    >
                       {t('friends.message')}
-                    </Link>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -263,6 +349,7 @@ function FriendsPage() {
         {/* Friend Requests Tab */}
         {activeTab === 'requests' && (
           <div className="grid gap-4 max-w-2xl">
+            {requestLoading && <div className="text-sm text-gray-400">{t('common.loading')}</div>}
             {friendRequests.map((request, idx) => (
               <GlassCard key={idx} hover className="animate-slideUp" style={{animationDelay: `${idx * 0.1}s`}}>
                 <div className="flex items-center gap-4">
@@ -278,16 +365,26 @@ function FriendsPage() {
                     <GradientButton
                       type="button"
                       variant="primary"
-                      onClick={() => toast.success(t('friends.toastAcceptDemo', { name: request.name }))}
+                      disabled={requestActionLoadingId === (request.friendId || request.requestId)}
+                      onClick={() => handleAcceptRequest(request)}
                     >
                       {t('friends.accept')}
                     </GradientButton>
                     <button
                       type="button"
-                      onClick={() => toast(t('friends.toastRejectDemo', { name: request.name }), { icon: 'ℹ️' })}
+                      disabled={requestActionLoadingId === (request.friendId || request.requestId)}
+                      onClick={() => handleRejectRequest(request)}
                       className="glass px-4 py-2 rounded-xl hover:bg-white/10 transition-all font-semibold"
                     >
                       {t('friends.reject')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={requestActionLoadingId === (request.friendId || request.requestId)}
+                      onClick={() => handleBlockRequest(request)}
+                      className="glass px-4 py-2 rounded-xl hover:bg-white/10 transition-all font-semibold text-red-300"
+                    >
+                      {t('friends.block')}
                     </button>
                   </div>
                 </div>

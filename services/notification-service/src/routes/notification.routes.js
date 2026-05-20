@@ -1,12 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const notificationController = require('../controllers/notification.controller');
+const internalNotificationAuth = require('../middlewares/internalNotificationAuth');
 
-// Tạo notification mới
-router.post('/', notificationController.createNotification.bind(notificationController));
+// Tạo notification mới (chỉ service nội bộ / webhook)
+router.post(
+  '/',
+  internalNotificationAuth,
+  notificationController.createNotification.bind(notificationController)
+);
 
 // Tạo nhiều notifications
-router.post('/bulk', notificationController.createBulkNotifications.bind(notificationController));
+router.post(
+  '/bulk',
+  internalNotificationAuth,
+  notificationController.createBulkNotifications.bind(notificationController)
+);
 
 // Lấy notifications của user
 router.get('/', notificationController.getUserNotifications.bind(notificationController));

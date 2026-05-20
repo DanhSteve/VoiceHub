@@ -1,0 +1,30 @@
+sequenceDiagram
+autonumber
+actor User as AccountOwner
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant UserCtrl as UserController
+participant UserSvc as UserService
+participant Redis as RedisProfileCache
+participant UserDb as MongoUserProfile
+User->>Client: Xem profile cua toi
+Client->>Gateway: GET /api/users/me
+Gateway->>UserCtrl: getCurrentUser
+UserCtrl->>UserSvc: resolve actor from context
+UserSvc->>Redis: GET user:<userId>
+alt Cache hit
+  UserSvc-->>Client: profile from cache
+else Cache miss
+  UserSvc->>UserDb: find profile
+  UserSvc->>Redis: SET cache
+  UserSvc-->>Client: profile from DB
+end
+User->>Client: Cap nhat profile
+Client->>Gateway: PUT/PATCH /api/users/:userId
+Gateway->>UserCtrl: updateUserProfile
+alt userId == actorId
+  UserSvc->>UserDb: update fields
+  UserSvc-->>Client: 200
+else Co gang sua profile nguoi khac
+  UserSvc-->>Client: 403 forbidden
+end

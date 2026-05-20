@@ -1,0 +1,23 @@
+sequenceDiagram
+autonumber
+actor Host as ChuTri
+actor Member as ThanhVien
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant VoiceSvc as VoiceService
+participant MeetDb as Mongo_Meeting
+participant SFU as Mediasoup
+
+Note over Host,SFU: Chặng 1 - Tạo và bắt đầu cuộc họp
+Host->>Client: Tạo meeting
+Client->>Gateway: POST /api/meetings
+Gateway->>VoiceSvc: Forward
+VoiceSvc->>MeetDb: Tạo meeting
+VoiceSvc-->>Client: 201
+Host->>Client: Bắt đầu meeting
+Client->>Gateway: POST /api/meetings/:id/start
+Gateway->>VoiceSvc: Forward
+VoiceSvc->>MeetDb: Set active
+VoiceSvc->>SFU: Init room transport
+VoiceSvc-->>Client: 200 active
+Member->>SFU: Join room voice

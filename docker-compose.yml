@@ -1,5 +1,6 @@
 # Entry mặc định: gộp infra (Mongo/Redis) + core (API + services).
 # Compose v2.24+ (include).
+# Biến môi trường chung: tạo/sửa file `.env` ở root repo (Compose tự đọc cho ${VAR} và env_file trong docker-compose.core.yml).
 #
 # Chạy full (prod-like, không nodemon):
 #   docker compose up -d --build
@@ -10,8 +11,8 @@
 # Chỉ infra:
 #   docker compose -f docker-compose.infra.yml up -d
 #
-# Chỉ core (cần Mongo/Redis đã chạy):
-#   docker compose -f docker-compose.core.yml up -d
+# Core + infra (core không chứa Mongo/Redis/RabbitMQ — không chạy riêng core.yml được):
+#   docker compose -f docker-compose.infra.yml -f docker-compose.core.yml up -d --build
 
 include:
   - docker-compose.infra.yml

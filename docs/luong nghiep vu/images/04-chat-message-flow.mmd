@@ -1,0 +1,28 @@
+sequenceDiagram
+autonumber
+actor Sender as SenderUser
+actor Receiver as ReceiverUser
+participant Client as WebClient
+participant Socket as SocketService
+participant Queue as RabbitMQ
+participant Consumer as ChatFriendDmConsumer
+participant MsgCtrl as MessageController
+participant MsgSvc as MessageService
+participant MsgDb as MongoMessage
+participant Realtime as RealtimeHub
+Sender->>Client: Gui DM/Room message
+Client->>Socket: emit friend:send / room:send
+Socket->>Queue: publish friend.dm.message
+Queue->>Consumer: consume job
+Consumer->>MsgCtrl: internal createMessage
+MsgCtrl->>MsgSvc: validate payload + business rule
+MsgSvc->>MsgDb: save message
+alt Save thanh cong
+  MsgSvc->>Realtime: publish friend:new_message
+  Realtime-->>Receiver: push realtime message
+  Realtime-->>Sender: ack sent
+else Loi validate/DB
+  MsgSvc-->>Socket: error payload
+  Socket-->>Sender: emit error
+end
+Note over MsgSvc,MsgDb: Nhanh bo sung edit/recall/delete/mark-read can authorize chat context

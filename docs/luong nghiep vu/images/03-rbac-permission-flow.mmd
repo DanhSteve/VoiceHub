@@ -1,0 +1,35 @@
+sequenceDiagram
+autonumber
+actor User as AuthenticatedUser
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant AuthMW as AuthMiddleware
+participant PermMW as PermissionMiddleware
+participant RoleApi as RolePermissionApi
+participant PermSvc as PermissionService
+participant RoleDb as MongoRoleUserRole
+participant Redis as RedisPermissionCache
+participant Domain as TargetDomainService
+User->>Client: Thuc hien thao tac private
+Client->>Gateway: HTTP request + JWT
+Gateway->>AuthMW: verifyAccessToken
+alt JWT sai/het han
+  AuthMW-->>Client: 401
+else JWT hop le
+  AuthMW-->>Gateway: req.user ok
+  Gateway->>PermMW: map action theo method+path
+  PermMW->>RoleApi: POST /api/permissions/check
+  RoleApi->>PermSvc: checkPermission(user,server,action)
+  PermSvc->>Redis: GET permissions:<user>:<server>
+  alt Cache miss
+    PermSvc->>RoleDb: Join UserRole + Role permissions
+    PermSvc->>Redis: SET cache
+  end
+  alt Allowed
+    PermMW-->>Gateway: pass
+    Gateway->>Domain: Proxy to target service
+    Domain-->>Client: 2xx success
+  else Denied/context thieu/role api loi
+    PermMW-->>Client: 403/400
+  end
+end

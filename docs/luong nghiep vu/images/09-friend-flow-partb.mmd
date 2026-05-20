@@ -1,0 +1,19 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDung
+participant Gateway as ApiGateway
+participant FriendSvc as FriendService
+participant FriendDb as Mongo_Friend
+
+Note over User,FriendDb: Chặng 2 - Lỗi nghiệp vụ thường gặp
+User->>Gateway: Gửi lời mời cho chính mình
+Gateway->>FriendSvc: Validate
+FriendSvc-->>User: 400 self-friend
+
+User->>Gateway: Gửi lời mời trùng quan hệ
+Gateway->>FriendSvc: Validate duplicate
+FriendSvc-->>User: 409 duplicate
+
+User->>Gateway: Accept request không tồn tại
+Gateway->>FriendSvc: Check relation
+FriendSvc-->>User: 404 not found

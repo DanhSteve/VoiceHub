@@ -5,12 +5,24 @@ const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = requir
 const { getRedisClient } = require('/shared');
 const emailService = require('../utils/email');
 const crypto = require('crypto');
-const mongoose = require('mongoose');
+const { mongoose } = require('/shared/config/mongo');
 const axios = require('axios');
+
+async function ensureMongoReady(scope = 'AUTH') {
+  const readyState = mongoose.connection.readyState;
+  console.log(
+    `[AuthService] [${scope}] MongoDB readyState:`,
+    readyState,
+    '(1=connected, 2=connecting, 0=disconnected)'
+  );
+  if (readyState === 1) return;
+  // Không reconnect trong request để tránh reset connection pool cạnh tranh với background reconnect.
+  throw new Error('Database temporarily unavailable. Please retry.');
+}
 
 class AuthService {
   // Đăng ký user mới
-  async register(userData) {
+  async register(userData, frontendUrl) {
     try {
       const { email, password, firstName, lastName, dateOfBirth } = userData;
 
@@ -28,46 +40,8 @@ class AuthService {
         throw new Error(dobCheck.message);
       }
 
-      // Kiểm tra MongoDB connection trước khi query
-      const readyState = mongoose.connection.readyState;
-      console.log('[AuthService] MongoDB readyState:', readyState, '(1=connected, 2=connecting, 0=disconnected)');
-      console.log('[AuthService] MongoDB host:', mongoose.connection.host);
-      console.log('[AuthService] MongoDB name:', mongoose.connection.name);
-      
-      // Nếu không connected, thử reconnect hoặc ping
-      if (readyState !== 1) {
-        console.warn('[AuthService] ⚠️ MongoDB readyState is not 1, attempting to reconnect...');
-        
-        // Nếu disconnected, thử reconnect
-        if (readyState === 0) {
-          console.warn('[AuthService] ⚠️ MongoDB disconnected, attempting to reconnect...');
-          try {
-            // Thử reconnect với mongoose
-            if (!mongoose.connection.readyState) {
-              await mongoose.connect(process.env.MONGODB_URI, {
-                serverSelectionTimeoutMS: 10000,
-              });
-              console.log('[AuthService] ✅ Reconnected to MongoDB');
-            }
-          } catch (reconnectError) {
-            console.error('[AuthService] ❌ Reconnection failed:', reconnectError.message);
-            throw new Error('Database connection lost and reconnection failed. Please try again.');
-          }
-        }
-        
-        // Verify với ping (nếu có connection object)
-        if (mongoose.connection.db) {
-          try {
-            await mongoose.connection.db.admin().ping();
-            console.log('[AuthService] ✅ MongoDB ping successful, connection is ready');
-          } catch (pingError) {
-            console.error('[AuthService] ❌ MongoDB ping failed:', pingError.message);
-            throw new Error('Database connection not ready. Please try again.');
-          }
-        } else {
-          throw new Error('Database connection object not available. Please try again.');
-        }
-      }
+      // Kiểm tra trạng thái kết nối theo fail-fast, không reconnect trong request.
+      await ensureMongoReady('REGISTER');
 
       // Kiểm tra email đã tồn tại chưa
       console.log('[AuthService] Checking if email exists:', email);
@@ -134,11 +108,11 @@ class AuthService {
       
       if (emailService.isAvailable()) {
         console.log('[AuthService] 📧 Email service is available, scheduling verification email to:', email);
-        console.log('[AuthService] Verification token:', emailVerificationToken.substring(0, 20) + '...');
+        console.log('[AuthService] Verification token: REDACTED');
         console.log('[AuthService] Email will be sent in background to avoid timeout');
         
         // Gửi email trong background - không await
-        const emailPromise = emailService.sendVerificationEmail(email, emailVerificationToken);
+        const emailPromise = emailService.sendVerificationEmail(email, emailVerificationToken, frontendUrl);
         console.log('[AuthService] Email promise created, waiting for result...');
         
         emailPromise
@@ -199,42 +173,8 @@ class AuthService {
   // Đăng nhập
   async login(email, password) {
     try {
-      // Kiểm tra MongoDB connection trước khi query (tránh lỗi buffering timeout)
-      const readyState = mongoose.connection.readyState;
-      console.log('[AuthService] [LOGIN] MongoDB readyState:', readyState, '(1=connected, 2=connecting, 0=disconnected)');
-      console.log('[AuthService] [LOGIN] MongoDB host:', mongoose.connection.host);
-      console.log('[AuthService] [LOGIN] MongoDB name:', mongoose.connection.name);
-
-      if (readyState !== 1) {
-        console.warn('[AuthService] [LOGIN] ⚠️ MongoDB readyState is not 1, attempting to reconnect...');
-
-        if (readyState === 0) {
-          console.warn('[AuthService] [LOGIN] ⚠️ MongoDB disconnected, attempting to reconnect...');
-          try {
-            if (!mongoose.connection.readyState) {
-              await mongoose.connect(process.env.MONGODB_URI, {
-                serverSelectionTimeoutMS: 10000,
-              });
-              console.log('[AuthService] [LOGIN] ✅ Reconnected to MongoDB');
-            }
-          } catch (reconnectError) {
-            console.error('[AuthService] [LOGIN] ❌ Reconnection failed:', reconnectError.message);
-            throw new Error('Database connection lost and reconnection failed. Please try again.');
-          }
-        }
-
-        if (mongoose.connection.db) {
-          try {
-            await mongoose.connection.db.admin().ping();
-            console.log('[AuthService] [LOGIN] ✅ MongoDB ping successful, connection is ready');
-          } catch (pingError) {
-            console.error('[AuthService] [LOGIN] ❌ MongoDB ping failed:', pingError.message);
-            throw new Error('Database connection not ready. Please try again.');
-          }
-        } else {
-          throw new Error('Database connection object not available. Please try again.');
-        }
-      }
+      // Kiểm tra trạng thái kết nối theo fail-fast, không reconnect trong request.
+      await ensureMongoReady('LOGIN');
 
       const userAuth = await UserAuth.findOne({ email })
         .maxTimeMS(15000)
@@ -342,38 +282,8 @@ class AuthService {
   // Đăng xuất
   async logout(userId) {
     try {
-      // Kiểm tra MongoDB connection trước khi query (tránh buffering timeout)
-      const readyState = mongoose.connection.readyState;
-      console.log('[AuthService] [LOGOUT] MongoDB readyState:', readyState, '(1=connected, 2=connecting, 0=disconnected)');
-
-      if (readyState !== 1) {
-        console.warn('[AuthService] [LOGOUT] ⚠️ MongoDB readyState is not 1, attempting to reconnect...');
-
-        if (readyState === 0) {
-          console.warn('[AuthService] [LOGOUT] ⚠️ MongoDB disconnected, attempting to reconnect...');
-          try {
-            if (!mongoose.connection.readyState) {
-              await mongoose.connect(process.env.MONGODB_URI, {
-                serverSelectionTimeoutMS: 10000,
-              });
-              console.log('[AuthService] [LOGOUT] ✅ Reconnected to MongoDB');
-            }
-          } catch (reconnectError) {
-            console.error('[AuthService] [LOGOUT] ❌ Reconnection failed:', reconnectError.message);
-            throw new Error('Database connection lost and reconnection failed. Please try again.');
-          }
-        }
-
-        if (mongoose.connection.db) {
-          try {
-            await mongoose.connection.db.admin().ping();
-            console.log('[AuthService] [LOGOUT] ✅ MongoDB ping successful, connection is ready');
-          } catch (pingError) {
-            console.error('[AuthService] [LOGOUT] ❌ MongoDB ping failed:', pingError.message);
-            throw new Error('Database is currently unavailable. Please try again later.');
-          }
-        }
-      }
+      // Kiểm tra trạng thái kết nối theo fail-fast, không reconnect trong request.
+      await ensureMongoReady('LOGOUT');
 
       const userAuth = await UserAuth.findOne({ userId }).maxTimeMS(5000);
       if (userAuth) {
@@ -429,7 +339,7 @@ class AuthService {
   }
 
   // Quên mật khẩu - tạo reset token
-  async forgotPassword(email) {
+  async forgotPassword(email, frontendUrl) {
     try {
       const userAuth = await UserAuth.findOne({ email });
       if (!userAuth) {
@@ -450,7 +360,7 @@ class AuthService {
 
       let emailScheduled = false;
       if (emailService.isAvailable()) {
-        const emailResult = await emailService.sendPasswordResetEmail(email, passwordResetToken);
+        const emailResult = await emailService.sendPasswordResetEmail(email, passwordResetToken, frontendUrl);
         emailScheduled = !!emailResult;
       }
 
@@ -461,8 +371,13 @@ class AuthService {
 
       // Dev fallback: trả token để test local khi SMTP chưa cấu hình
       if (!emailScheduled && process.env.NODE_ENV !== 'production') {
+        const baseNormalized = String(
+          (frontendUrl && String(frontendUrl).trim()) ||
+            process.env.FRONTEND_URL ||
+            'http://localhost:5173'
+        ).replace(/\/+$/, '');
         response.resetToken = passwordResetToken;
-        response.resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${passwordResetToken}`;
+        response.resetUrl = `${baseNormalized}/reset-password?token=${passwordResetToken}`;
       }
 
       return response;
@@ -472,7 +387,7 @@ class AuthService {
   }
 
   // Gửi lại email xác thực
-  async resendVerificationEmail(email) {
+  async resendVerificationEmail(email, frontendUrl) {
     try {
       const normalizedEmail = String(email || '').trim().toLowerCase();
       if (!normalizedEmail) {
@@ -506,7 +421,11 @@ class AuthService {
 
       let emailScheduled = false;
       if (emailService.isAvailable()) {
-        const emailResult = await emailService.sendVerificationEmail(userAuth.email, emailVerificationToken);
+        const emailResult = await emailService.sendVerificationEmail(
+          userAuth.email,
+          emailVerificationToken,
+          frontendUrl
+        );
         emailScheduled = !!emailResult;
       }
 
@@ -517,8 +436,13 @@ class AuthService {
 
       // Dev fallback: trả token để test local khi SMTP chưa cấu hình
       if (!emailScheduled && process.env.NODE_ENV !== 'production') {
+        const baseNormalized = String(
+          (frontendUrl && String(frontendUrl).trim()) ||
+            process.env.FRONTEND_URL ||
+            'http://localhost:5173'
+        ).replace(/\/+$/, '');
         response.verificationToken = emailVerificationToken;
-        response.verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${emailVerificationToken}`;
+        response.verificationUrl = `${baseNormalized}/verify-email?token=${emailVerificationToken}`;
       }
 
       return response;
@@ -597,25 +521,33 @@ class AuthService {
         const username = rawName || userAuth.email.split('@')[0];
         const displayName = rawName || username;
 
-        const response = await axios.post(
-          `${userServiceUrl}/api/users`,
-          {
-            userId: userId.toString(),
-            username,
-            email: userAuth.email,
-            displayName,
-            dateOfBirth: userAuth.dateOfBirth,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
+        const internalToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
+        if (!internalToken) {
+          console.error(
+            'USER_SERVICE_INTERNAL_TOKEN not set; cannot bootstrap UserProfile. Set in root .env / auth-service env.'
+          );
+        } else {
+          const response = await axios.post(
+            `${userServiceUrl}/api/users/internal/bootstrap`,
+            {
+              userId: userId.toString(),
+              username,
+              email: userAuth.email,
+              displayName,
+              dateOfBirth: userAuth.dateOfBirth,
             },
-            timeout: 5000,
-          }
-        );
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'x-internal-token': internalToken,
+              },
+              timeout: 5000,
+            }
+          );
 
-        if (response) {
-          console.log('UserProfile created successfully:', response.data);
+          if (response) {
+            console.log('UserProfile created successfully:', response.data);
+          }
         }
       } catch (error) {
         // Log lỗi nhưng không throw - user đã verify email thành công

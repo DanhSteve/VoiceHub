@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { isTrustedGatewayForward } = require('../../../../shared/middleware/gatewayTrust');
 
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth-service:3001';
 
@@ -7,7 +8,8 @@ const getHeader = (headers, key) => headers[key] || headers[key.toLowerCase()];
 exports.protect = async (req, res, next) => {
   try {
     const forwardedUserId = getHeader(req.headers, 'x-user-id');
-    if (forwardedUserId) {
+    // Chỉ tin x-user-id khi request đi qua API Gateway (x-gateway-internal-token hợp lệ)
+    if (forwardedUserId && isTrustedGatewayForward(req)) {
       req.user = {
         id: forwardedUserId,
         userId: forwardedUserId,
@@ -15,15 +17,18 @@ exports.protect = async (req, res, next) => {
       };
       return next();
     }
+    // Có x-user-id nhưng không tin cậy (thiếu/sai GATEWAY_INTERNAL_TOKEN ở service) — không chặn 401;
+    // tiếp tục xác thực bằng JWT để khớp với api-gateway đã verify token.
 
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) {
       return res.status(401).json({ status: 'fail', message: 'Not authenticated' });
     }
 
-    // Verify token with auth service
+    // Verify token with auth service (timeout tránh treo cả chuỗi search → chat-service 503)
     const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
+      timeout: Number(process.env.AUTH_HTTP_TIMEOUT_MS || 8000),
     });
 
     const user = response.data?.data?.user || response.data?.user || {};

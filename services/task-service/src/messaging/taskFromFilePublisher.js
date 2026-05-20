@@ -11,7 +11,12 @@ async function publishTaskFromFileJob(payload) {
   try {
     const ch = await conn.createChannel();
     await ch.assertQueue(QUEUE, { durable: true });
-    ch.sendToQueue(QUEUE, Buffer.from(JSON.stringify(payload)), { persistent: true });
+    const buf = Buffer.from(JSON.stringify(payload));
+    const opts = { persistent: true };
+    if (!ch.sendToQueue(QUEUE, buf, opts)) {
+      await new Promise((resolve) => ch.once('drain', resolve));
+      ch.sendToQueue(QUEUE, buf, opts);
+    }
     await ch.close();
   } finally {
     await conn.close();

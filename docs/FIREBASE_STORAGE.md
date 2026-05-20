@@ -26,6 +26,7 @@ gsutil cors set docs/firebase-storage-cors.json gs://voicehub-0305.firebasestora
 
 5. Kiểm tra: `gsutil cors get gs://YOUR_STORAGE_BUCKET` — hoặc liệt kê bucket: `gcloud storage buckets list --project=YOUR_PROJECT_ID`
 6. Dev Vite mặc định `http://localhost:5173` — origin phải khớp **chính xác** (kể cả `127.0.0.1` vs `localhost`).
+7. Nếu chạy LAN HTTPS qua Nginx/mkcert (ví dụ `https://voicehub.local`) thì thêm origin HTTPS đó vào `docs/firebase-storage-cors.json` trước khi `gsutil cors set`.
 
 ## Biến môi trường
 

@@ -1,18 +1,26 @@
 const jwt = require('jsonwebtoken');
 const { isPublicRoute } = require('../config/services');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const getJwtSecret = () => String(process.env.JWT_SECRET || '').trim();
 
 /**
  * Middleware xác thực JWT
  * Verify JWT token và gắn req.user
  */
 const authMiddleware = (req, res, next) => {
-  // Lấy path không có query string để check public route
+  // Lấy path không có query string để check public route (Express 5 / proxy: dùng thêm originalUrl)
   const pathWithoutQuery = req.path.split('?')[0];
-  
+  const fromOriginal = String(req.originalUrl || req.url || '')
+    .split('?')[0]
+    .replace(/\/+/g, '/');
+
   // Bỏ qua các route public
-  if (isPublicRoute(pathWithoutQuery)) {
+  if (
+    isPublicRoute(pathWithoutQuery) ||
+    isPublicRoute(fromOriginal) ||
+    pathWithoutQuery === '/api/health/gateway-trust' ||
+    fromOriginal.endsWith('/api/health/gateway-trust')
+  ) {
     console.log(`[API-Gateway] Public route detected: ${pathWithoutQuery}, skipping authentication`);
     return next();
   }
@@ -20,6 +28,14 @@ const authMiddleware = (req, res, next) => {
   console.log(`[API-Gateway] Protected route: ${req.path}, checking authentication...`);
 
   try {
+    const jwtSecret = getJwtSecret();
+    if (!jwtSecret) {
+      return res.status(500).json({
+        success: false,
+        message: 'Authentication service misconfigured',
+      });
+    }
+
     // Lấy token từ header
     const authHeader = req.headers.authorization;
 
@@ -42,7 +58,7 @@ const authMiddleware = (req, res, next) => {
 
     // Verify token
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, jwtSecret);
       
       // Gắn user info vào request
       req.user = {
@@ -70,10 +86,10 @@ const authMiddleware = (req, res, next) => {
       throw error;
     }
   } catch (error) {
+    console.error('[API-Gateway] authMiddleware:', error);
     return res.status(500).json({
       success: false,
       message: 'Authentication error',
-      error: error.message,
     });
   }
 };

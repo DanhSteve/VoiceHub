@@ -1,4 +1,6 @@
+const { mongoose } = require('/shared/config/mongo');
 const documentService = require('../services/document.service');
+const Document = require('../models/Document');
 const { logger } = require('/shared');
 
 class DocumentController {
@@ -55,12 +57,29 @@ class DocumentController {
   async getDocumentById(req, res) {
     try {
       const { documentId } = req.params;
+      const userId = req.user?.id || req.userContext?.userId;
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Unauthorized',
+        });
+      }
+
       const document = await documentService.getDocumentById(documentId);
 
       if (!document) {
         return res.status(404).json({
           success: false,
           message: 'Document not found',
+        });
+      }
+
+      const owner = String(document.uploadedBy || '') === String(userId);
+      const allowed = owner || document.isPublic === true;
+      if (!allowed) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden',
         });
       }
 
@@ -80,21 +99,34 @@ class DocumentController {
   // Lấy danh sách documents
   async getDocuments(req, res) {
     try {
-      const { organizationId, serverId, uploadedBy, tags, isPublic, page, limit, q: qParam } = req.query;
+      const userId = req.user?.id || req.userContext?.userId;
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Unauthorized',
+        });
+      }
+
+      const { organizationId, serverId, uploadedBy, tags, isPublic, page, limit } = req.query;
 
       const filter = { isActive: true };
 
       if (organizationId) filter.organizationId = organizationId;
       if (serverId) filter.serverId = serverId;
-      if (uploadedBy) filter.uploadedBy = uploadedBy;
+      if (uploadedBy) {
+        if (String(uploadedBy) !== String(userId)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Forbidden',
+          });
+        }
+        filter.uploadedBy = uploadedBy;
+      }
       if (tags) filter.tags = { $in: tags.split(',') };
       if (isPublic !== undefined) filter.isPublic = isPublic === 'true';
 
-      if (qParam != null && String(qParam).trim() !== '') {
-        const esc = String(qParam)
-          .trim()
-          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        filter.name = { $regex: esc, $options: 'i' };
+      if (!organizationId && !serverId && !uploadedBy) {
+        filter.uploadedBy = userId;
       }
 
       const result = await documentService.getDocuments(filter, {
@@ -204,6 +236,28 @@ class DocumentController {
         success: false,
         message: error.message,
       });
+    }
+  }
+
+  /** Gọi nội bộ — xóa mọi document thuộc tổ chức */
+  async purgeOrganizationDocuments(req, res) {
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({
+          success: false,
+          message: 'MongoDB is not ready in document-service',
+        });
+      }
+      const { organizationId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(String(organizationId))) {
+        return res.status(400).json({ success: false, message: 'Invalid organizationId' });
+      }
+      const oid = new mongoose.Types.ObjectId(String(organizationId));
+      const result = await Document.deleteMany({ organizationId: oid });
+      return res.json({ success: true, deletedCount: result.deletedCount });
+    } catch (error) {
+      logger.error('purgeOrganizationDocuments error:', error);
+      return res.status(500).json({ success: false, message: error.message });
     }
   }
 }

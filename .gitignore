@@ -3,14 +3,23 @@
 # ========================
 node_modules/
 */node_modules/
-package-lock.json
+# Giữ package-lock.json trong git — cài đặt tái lập được sau pull / npm ci trong Docker.
 yarn.lock
 pnpm-lock.yaml
 
 # ========================
 # Environment Variables
 # ========================
-
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+*.env
+client/.env
+client/.env.local
+services/**/.env
+services/**/.env.local
 
 # ========================
 # Build Outputs

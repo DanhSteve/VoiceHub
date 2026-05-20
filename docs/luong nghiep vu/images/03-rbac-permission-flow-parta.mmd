@@ -1,0 +1,21 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDungDaDangNhap
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant AuthMW as Middleware_XacThuc
+participant PermMW as Middleware_PhanQuyen
+participant RoleSvc as RolePermissionService
+participant Domain as DichVuDich
+
+Note over User,Domain: Chặng 1 - Luồng cho phép
+User->>Client: Thao tác API private
+Client->>Gateway: Request kèm JWT
+Gateway->>AuthMW: Verify token
+AuthMW-->>Gateway: Hợp lệ
+Gateway->>PermMW: Map action theo route
+PermMW->>RoleSvc: POST /api/permissions/check
+RoleSvc-->>PermMW: allowed=true
+PermMW-->>Gateway: pass
+Gateway->>Domain: Proxy request
+Domain-->>Client: 2xx thành công

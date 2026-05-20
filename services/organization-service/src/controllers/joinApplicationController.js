@@ -6,7 +6,33 @@ const { emitRealtimeEvent } = require('/shared');
 
 const NOTIFICATION_SERVICE_URL =
   process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3003';
+const NOTIFICATION_INTERNAL_TOKEN = String(process.env.NOTIFICATION_INTERNAL_TOKEN || '').trim();
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+
+function resolveFrontendUrl(req) {
+  // Ưu tiên origin của request để không bị dính localhost khi client mở từ IP LAN.
+  const origin = req?.headers?.origin;
+  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
+
+  const referer = req?.headers?.referer;
+  if (referer && String(referer).trim()) {
+    try {
+      return new URL(String(referer)).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return FRONTEND_URL;
+}
+
+function notificationServiceAxiosOpts() {
+  const opts = { timeout: 8000 };
+  if (NOTIFICATION_INTERNAL_TOKEN) {
+    opts.headers = { 'x-internal-notification-token': NOTIFICATION_INTERNAL_TOKEN };
+  }
+  return opts;
+}
 
 const MAX_FIELDS = 20;
 const MAX_SHORT = 500;
@@ -16,11 +42,18 @@ const FIELD_ID_RE = /^[a-z0-9_]{1,64}$/i;
 const CHOICE_TYPES = ['single_choice', 'radio', 'checkbox'];
 
 const getUserId = (req) => req.user?.id || req.user?.userId || req.user?._id;
+const getApplicantSnapshot = (req) => ({
+  userId: String(req.user?.id || req.user?.userId || req.user?._id || ''),
+  username: String(req.user?.username || '').trim(),
+  fullName: String(req.user?.fullName || req.user?.displayName || req.user?.name || '').trim(),
+  email: String(req.user?.email || '').trim(),
+  avatar: String(req.user?.avatar || '').trim(),
+});
 
 function normalizeJoinFormFromBody(body) {
   const enabled = Boolean(body?.enabled);
-  const defaultRoleOnApprove =
-    body?.defaultRoleOnApprove === 'admin' ? 'admin' : 'member';
+  // Luôn mặc định member khi duyệt đơn gia nhập thành công.
+  const defaultRoleOnApprove = 'member';
   const rawFields = Array.isArray(body?.fields) ? body.fields : [];
   const fields = rawFields.slice(0, MAX_FIELDS).map((f, idx) => {
     const id = String(f?.id || `field_${idx + 1}`).trim();
@@ -90,7 +123,7 @@ function validateAnswersAgainstForm(formFields, answers) {
   return errors;
 }
 
-async function notifyModeratorsNewApplication({ orgId, orgName, applicationId }) {
+async function notifyModeratorsNewApplication({ orgId, orgName, applicationId, frontendUrl }) {
   const admins = await Membership.find({
     organization: orgId,
     status: 'active',
@@ -112,11 +145,11 @@ async function notifyModeratorsNewApplication({ orgId, orgName, applicationId })
           organizationId: String(orgId),
           applicationId: String(applicationId),
         },
-        actionUrl: `${FRONTEND_URL}/organizations/${encodeURIComponent(
+        actionUrl: `${frontendUrl}/organizations/${encodeURIComponent(
           String(orgId)
         )}/settings?tab=join`,
       },
-      { timeout: 8000 }
+      notificationServiceAxiosOpts()
     );
   } catch (e) {
     console.warn('[joinApplication] notify moderators failed:', e.message);
@@ -135,7 +168,7 @@ async function notifyApplicant({ userId, title, content, data, actionUrl }) {
         data: data || {},
         actionUrl: actionUrl || null,
       },
-      { timeout: 8000 }
+      notificationServiceAxiosOpts()
     );
   } catch (e) {
     console.warn('[joinApplication] notify applicant failed:', e.message);
@@ -155,7 +188,7 @@ exports.getJoinApplicationForm = async (req, res, next) => {
       data: {
         enabled: Boolean(jf.enabled),
         formVersion: jf.formVersion || 1,
-        defaultRoleOnApprove: jf.defaultRoleOnApprove === 'admin' ? 'admin' : 'member',
+        defaultRoleOnApprove: 'member',
         fields: Array.isArray(jf.fields) ? jf.fields : [],
       },
     });
@@ -262,6 +295,7 @@ exports.submitJoinApplication = async (req, res, next) => {
   try {
     const orgId = req.params.orgId;
     const userId = getUserId(req);
+    const frontendUrl = resolveFrontendUrl(req);
     if (!userId) {
       return res.status(401).json({ status: 'fail', message: 'Not authenticated' });
     }
@@ -280,12 +314,6 @@ exports.submitJoinApplication = async (req, res, next) => {
     }
 
     const formFields = Array.isArray(jf.fields) ? jf.fields : [];
-    if (formFields.length === 0) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Chưa có trường nào trên form. Vui lòng liên hệ quản trị viên.',
-      });
-    }
 
     const existingMember = await Membership.findOne({
       user: userId,
@@ -311,10 +339,12 @@ exports.submitJoinApplication = async (req, res, next) => {
       });
     }
 
-    const answers = req.body?.answers;
-    const errs = validateAnswersAgainstForm(formFields, answers);
-    if (errs.length) {
-      return res.status(400).json({ status: 'fail', message: errs.join('; ') });
+    const answers = req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
+    if (formFields.length > 0) {
+      const errs = validateAnswersAgainstForm(formFields, answers);
+      if (errs.length) {
+        return res.status(400).json({ status: 'fail', message: errs.join('; ') });
+      }
     }
 
     const formVersion = jf.formVersion || 1;
@@ -332,6 +362,7 @@ exports.submitJoinApplication = async (req, res, next) => {
     const doc = await JoinApplication.create({
       organization: orgId,
       applicantUser: userId,
+      applicantSnapshot: getApplicantSnapshot(req),
       status: 'pending',
       formVersion,
       formSnapshot,
@@ -339,10 +370,17 @@ exports.submitJoinApplication = async (req, res, next) => {
       submittedAt: new Date(),
     });
 
+    await Membership.deleteMany({
+      organization: orgId,
+      user: userId,
+      status: 'pending',
+    });
+
     await notifyModeratorsNewApplication({
       orgId,
       orgName: org.name,
       applicationId: doc._id,
+      frontendUrl,
     });
 
     const modUserIds = await Membership.distinct('user', {
@@ -466,6 +504,7 @@ exports.listJoinApplicationsToReview = async (req, res, next) => {
         organizationName: o.name || 'Tổ chức',
         logo: o.logo || null,
         applicantUser: String(a.applicantUser),
+        applicantSnapshot: a.applicantSnapshot || {},
         answers: a.answers || {},
         formSnapshot: a.formSnapshot ?? null,
         submittedAt: a.submittedAt,
@@ -500,6 +539,7 @@ exports.listJoinApplications = async (req, res, next) => {
       data: rows.map((r) => ({
         ...r,
         applicantUser: String(r.applicantUser),
+        applicantSnapshot: r.applicantSnapshot || {},
         organization: String(r.organization),
         reviewedBy: r.reviewedBy ? String(r.reviewedBy) : null,
       })),
@@ -516,6 +556,7 @@ exports.reviewJoinApplication = async (req, res, next) => {
     const action = req.body?.action;
     const rejectionReason = String(req.body?.rejectionReason || '').slice(0, 2000);
     const reviewerId = getUserId(req);
+    const frontendUrl = resolveFrontendUrl(req);
 
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ status: 'fail', message: 'action phải là approve hoặc reject' });
@@ -538,9 +579,7 @@ exports.reviewJoinApplication = async (req, res, next) => {
     const applicantId = String(appDoc.applicantUser);
 
     if (action === 'approve') {
-      const jf = org.settings?.joinApplicationForm || {};
-      const role =
-        jf.defaultRoleOnApprove === 'admin' ? 'admin' : 'member';
+      const role = 'member';
 
       await Membership.findOneAndUpdate(
         { user: applicantId, organization: orgId },
@@ -565,7 +604,7 @@ exports.reviewJoinApplication = async (req, res, next) => {
         title: 'Đơn gia nhập được duyệt',
         content: `Bạn đã được chấp nhận vào "${org.name}".`,
         data: { organizationId: String(orgId), applicationId: String(appDoc._id), decision: 'approved' },
-        actionUrl: `${FRONTEND_URL}/organizations?orgId=${encodeURIComponent(String(orgId))}`,
+        actionUrl: `${frontendUrl}/organizations?orgId=${encodeURIComponent(String(orgId))}`,
       });
 
       await emitRealtimeEvent({

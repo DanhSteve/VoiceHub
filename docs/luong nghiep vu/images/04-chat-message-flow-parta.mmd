@@ -1,0 +1,19 @@
+sequenceDiagram
+autonumber
+actor NguoiGui as NguoiGui
+actor NguoiNhan as NguoiNhan
+participant Client as UngDungWeb
+participant Socket as SocketService
+participant Queue as RabbitMQ
+participant ChatSvc as ChatService
+participant MsgDb as Mongo_Message
+
+Note over NguoiGui,MsgDb: Chặng 1 - Gửi tin nhắn thành công
+NguoiGui->>Client: Nhập nội dung và bấm gửi
+Client->>Socket: emit friend:send / room:send
+Socket->>Queue: Publish job message
+Queue->>ChatSvc: Consume job
+ChatSvc->>MsgDb: Validate + lưu message
+ChatSvc-->>Socket: Ack
+Socket-->>NguoiNhan: Realtime tin nhắn mới
+Socket-->>NguoiGui: Xác nhận gửi thành công

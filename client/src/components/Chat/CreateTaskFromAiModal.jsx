@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Modal } from '../Shared';
 import aiTaskService from '../../services/aiTaskService';
 import { AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
+import { sanitizeMentionsForApi } from '../../utils/parseMessageMentions';
 
 const POLL_MS = 2000;
 const MAX_POLLS = 90;
@@ -16,6 +17,8 @@ export default function CreateTaskFromAiModal({
   organizationId,
   currentUserId,
   messagePreview = '',
+  mentions = [],
+  channelId = null,
   onConfirmed,
 }) {
   const [phase, setPhase] = useState('idle'); // idle | queued | ready | failed
@@ -62,6 +65,8 @@ export default function CreateTaskFromAiModal({
           {
             messageId: String(messageId),
             organizationId: String(organizationId),
+            mentions: sanitizeMentionsForApi(mentions),
+            channelId: channelId ? String(channelId) : undefined,
           },
           userHeaders
         );
@@ -100,14 +105,25 @@ export default function CreateTaskFromAiModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, messageId, organizationId, currentUserId, reset, userHeaders]);
+  }, [isOpen, messageId, organizationId, currentUserId, mentions, channelId, reset, userHeaders]);
+
+  const draft = extraction?.draft || {};
+  const assigneeId = draft.assigneeId ? String(draft.assigneeId) : '';
+
+  const resolvedAssigneeId = useMemo(() => {
+    if (assigneeId && /^[a-f0-9]{24}$/i.test(assigneeId)) return assigneeId;
+    const fromMention = sanitizeMentionsForApi(mentions)[0]?.userId;
+    return fromMention && /^[a-f0-9]{24}$/i.test(fromMention) ? fromMention : '';
+  }, [assigneeId, mentions]);
 
   const handleConfirm = async () => {
     if (!extractionId || confirming) return;
     setConfirming(true);
     setError('');
     try {
-      const res = await aiTaskService.confirm({ extractionId }, userHeaders);
+      const body = { extractionId };
+      if (resolvedAssigneeId) body.assigneeId = resolvedAssigneeId;
+      const res = await aiTaskService.confirm(body, userHeaders);
       const taskId = res?.data?.taskId || res?.data?.data?.taskId || res?.taskId;
       onConfirmed?.(taskId, extractionId);
       onClose();
@@ -118,10 +134,15 @@ export default function CreateTaskFromAiModal({
     }
   };
 
-  const draft = extraction?.draft || {};
   const title = draft.title || '(Chưa có tiêu đề)';
+  const summary = draft.summary || '';
   const description = draft.description || '';
   const priority = draft.priority || 'medium';
+  const assigneeName = draft.assigneeName || '';
+  const departmentName = draft.departmentName || '';
+  const dueLabel = draft.dueDate
+    ? new Date(draft.dueDate).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
+    : '';
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Tạo task bằng AI" size="lg">
@@ -148,12 +169,45 @@ export default function CreateTaskFromAiModal({
             <div className="mb-1 text-xs font-semibold uppercase text-slate-500">Tiêu đề gợi ý</div>
             <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white">{title}</div>
           </div>
+          {summary ? (
+            <div>
+              <div className="mb-1 text-xs font-semibold uppercase text-slate-500">Tóm tắt</div>
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200">
+                {summary}
+              </div>
+            </div>
+          ) : null}
           <div>
-            <div className="mb-1 text-xs font-semibold uppercase text-slate-500">Mô tả</div>
-            <div className="max-h-32 overflow-y-auto rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200">
+            <div className="mb-1 text-xs font-semibold uppercase text-slate-500">Mô tả chi tiết</div>
+            <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200">
               {description || '—'}
             </div>
           </div>
+          {mentions.length > 0 && !resolvedAssigneeId && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+              Đã @mention nhưng chưa xác định được người nhận — task có thể không hiện với người được giao.
+            </div>
+          )}
+          {(assigneeName || resolvedAssigneeId || departmentName || dueLabel) && (
+            <div className="grid gap-1 text-xs text-slate-400 sm:grid-cols-2">
+              {assigneeName || resolvedAssigneeId ? (
+                <div>
+                  Người nhận:{' '}
+                  <span className="text-slate-200">{assigneeName || 'Đã chọn từ @mention'}</span>
+                </div>
+              ) : null}
+              {departmentName ? (
+                <div>
+                  Phòng ban: <span className="text-slate-200">{departmentName}</span>
+                </div>
+              ) : null}
+              {dueLabel ? (
+                <div>
+                  Hạn: <span className="text-slate-200">{dueLabel}</span>
+                </div>
+              ) : null}
+            </div>
+          )}
           <div className="text-xs text-slate-400">
             Độ ưu tiên gợi ý: <span className="text-slate-200">{priority}</span>
             {extraction?.confidence != null && (

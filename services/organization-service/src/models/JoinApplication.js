@@ -13,6 +13,10 @@ const joinApplicationSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    applicantSnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     status: {
       type: String,
       enum: ['pending', 'approved', 'rejected'],

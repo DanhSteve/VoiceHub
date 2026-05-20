@@ -1,0 +1,23 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDung
+participant Gateway as ApiGateway
+participant DocSvc as DocumentService
+participant DocDb as Mongo_Document
+
+Note over User,DocDb: Chặng 2 - Quyền truy cập và lỗi thường gặp
+User->>Gateway: DELETE /api/documents/:id
+Gateway->>DocSvc: Check owner quyền xóa
+alt Không phải owner
+  DocSvc-->>User: 403
+else Owner hợp lệ
+  DocSvc->>DocDb: Soft delete isActive=false
+  DocSvc-->>User: 200
+end
+
+User->>Gateway: GET /api/documents/:id
+alt Không tồn tại
+  DocSvc-->>User: 404
+else Không đủ quyền đọc
+  DocSvc-->>User: 403
+end

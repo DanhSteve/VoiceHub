@@ -1,0 +1,48 @@
+sequenceDiagram
+autonumber
+actor Owner as OwnerAdmin
+actor Member as CandidateUser
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant OrgAuth as OrgProtectAuthorize
+participant OrgCtrl as OrganizationController
+participant MemberCtrl as MemberController
+participant JoinCtrl as JoinApplicationController
+participant OrgDb as MongoOrgMembership
+participant RoleSync as RolePermissionSync
+participant Notify as NotificationOrRealtime
+Note over Owner,OrgDb: Tao organization
+Owner->>Client: Tao to chuc moi
+Client->>Gateway: POST /api/organizations
+Gateway->>OrgAuth: Auth + route to org-service
+OrgAuth-->>Gateway: pass
+Gateway->>OrgCtrl: createOrganization
+OrgCtrl->>OrgDb: Insert Organization + Membership(owner)
+OrgCtrl->>OrgDb: Seed default Department/Channel
+OrgCtrl->>RoleSync: ensureDefaultOrgRoles + sync owner
+OrgCtrl->>Notify: emit org_created
+OrgCtrl-->>Client: 201 Created
+Note over Owner,Member: Moi thanh vien
+Owner->>Client: Moi thanh vien vao org
+Client->>Gateway: POST /api/organizations/:orgId/members
+Gateway->>MemberCtrl: inviteMember
+MemberCtrl->>OrgDb: Upsert membership pending
+alt Da la thanh vien active
+  MemberCtrl-->>Client: 409 conflict
+else Moi hop le
+  MemberCtrl->>Notify: emit invite event
+  MemberCtrl-->>Client: 200/201
+end
+Note over Member,JoinCtrl: Nop don tham gia
+Member->>Client: Gui don join application
+Client->>Gateway: POST /api/organizations/:orgId/join-applications
+Gateway->>JoinCtrl: submitApplication
+JoinCtrl->>OrgDb: Validate schema + save pending
+alt Reviewer approve
+  JoinCtrl->>OrgDb: Create/activate membership
+  JoinCtrl->>RoleSync: sync member role
+  JoinCtrl->>Notify: send approved notification
+  JoinCtrl-->>Client: 200 approved
+else Reject/invalid
+  JoinCtrl-->>Client: 400/403/409
+end

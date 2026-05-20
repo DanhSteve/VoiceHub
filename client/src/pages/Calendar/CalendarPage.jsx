@@ -1,12 +1,14 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../../context/ThemeContext';
 import { appShellBg } from '../../theme/shellTheme';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, GlassCard, GradientButton, Modal } from '../../components/Shared';
 import { useCalendarFeed } from '../../hooks/useCalendarFeed';
 import { useTaskDueAlerts } from '../../hooks/useTaskDueAlerts';
+import friendService from '../../services/friendService';
+import { organizationAPI } from '../../services/api/organizationAPI';
 import {
   getMeetingJoinState,
   getMonthGridCells,
@@ -14,9 +16,10 @@ import {
 } from '../../utils/calendarUtils';
 import { useAppStrings } from '../../locales/appStrings';
 import { useLocale } from '../../context/LocaleContext';
-import { PageSearchBar, SearchFilterChips } from '../../features/search';
+import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
+import { LOCAL_CUSTOM_KEY } from '../../utils/dmCalendarReminders';
 
-const LOCAL_CUSTOM_KEY = 'voicehub:calendar:localCustom';
+const CALENDAR_LOCAL_KEY = LOCAL_CUSTOM_KEY;
 
 function parseTimeInputToDisplay(hhmm, loc) {
   if (!hhmm || !String(hhmm).includes(':')) return '';
@@ -30,6 +33,9 @@ function parseTimeInputToDisplay(hhmm, loc) {
 
 function CalendarPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const organizationId = searchParams.get('organizationId') || '';
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
   const { locale } = useLocale();
@@ -39,6 +45,9 @@ function CalendarPage() {
   const [showCreateEventModal, setShowCreateEventModal] = useState(false);
   const [editingEventId, setEditingEventId] = useState(null);
   const [createType, setCreateType] = useState('meeting');
+  /** Gắn nhắc hẹn / sự kiện local với bạn DM (từ chat) */
+  const [dmPeerFriendId, setDmPeerFriendId] = useState('');
+  const [dmPeerFriendName, setDmPeerFriendName] = useState('');
   const [eventForm, setEventForm] = useState({
     title: '',
     date: '',
@@ -49,6 +58,8 @@ function CalendarPage() {
     attendeesText: '',
   });
   const [attendeeNames, setAttendeeNames] = useState([]);
+  const [attendeeSuggestions, setAttendeeSuggestions] = useState([]);
+  const [showAttendeeSuggestions, setShowAttendeeSuggestions] = useState(false);
   const [deleteConfirmEventId, setDeleteConfirmEventId] = useState(null);
   const [eventSearchQuery, setEventSearchQuery] = useState('');
   /** all | meeting | deadline | local */
@@ -62,7 +73,7 @@ function CalendarPage() {
     tasksForAlerts,
     reloadLocal,
     refetch,
-  } = useCalendarFeed(selectedDate);
+  } = useCalendarFeed(selectedDate, organizationId);
 
   useTaskDueAlerts(tasksForAlerts, {
     enabled: true,
@@ -126,6 +137,7 @@ function CalendarPage() {
     setEditingEventId(null);
     setCreateType('meeting');
     setAttendeeNames([]);
+    setShowAttendeeSuggestions(false);
     setEventForm({
       title: '',
       date: '',
@@ -137,10 +149,66 @@ function CalendarPage() {
     });
   };
 
-  const openCreateModal = () => {
+  const openCreateModal = (prefilledTitle = null) => {
     resetEventForm();
+    const dateStr = toDateKey(selectedDate);
+    const title = prefilledTitle || `${t('calendar.newEventDefault', { date: dateStr })}`;
+    setEventForm((prev) => ({
+      ...prev,
+      date: dateStr,
+      time: '09:00',
+      title: title,
+    }));
     setShowCreateEventModal(true);
   };
+
+  useEffect(() => {
+    const state = location.state;
+    if (!state || state.source !== 'friend-chat') return;
+    const prefillTitle = String(state.prefillTitle || '').trim();
+    const prefillAttendees = Array.isArray(state.prefillAttendees)
+      ? state.prefillAttendees.map((x) => String(x || '').trim()).filter(Boolean)
+      : [];
+    const prefillType = String(state.prefillType || '').trim();
+    const friendId = String(state.friendId || '').trim();
+    const friendName = String(state.friendName || '').trim();
+
+    if (prefillType === 'reminder' || prefillType === 'meeting' || prefillType === 'deadline') {
+      setCreateType(prefillType);
+    }
+    if (friendId) setDmPeerFriendId(friendId);
+    if (friendName) setDmPeerFriendName(friendName);
+    if (state.prefillDate) {
+      const d = String(state.prefillDate).trim();
+      if (d) setSelectedDate(new Date(`${d}T12:00:00`));
+    }
+
+    openCreateModal(prefillTitle || null);
+    if (prefillAttendees.length > 0) {
+      setAttendeeNames(Array.from(new Set(prefillAttendees)));
+    }
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
+
+  useEffect(() => {
+    const openCreate = searchParams.get('openCreate');
+    const friendId = String(searchParams.get('friendId') || '').trim();
+    const friendName = String(searchParams.get('friendName') || '').trim();
+    const type = String(searchParams.get('type') || '').trim();
+    if (openCreate !== '1' || !friendId) return;
+
+    if (type === 'reminder' || type === 'meeting' || type === 'deadline') {
+      setCreateType(type);
+    }
+    setDmPeerFriendId(friendId);
+    if (friendName) setDmPeerFriendName(friendName);
+    openCreateModal(
+      friendName
+        ? t('calendar.reminderWithFriend', { name: friendName })
+        : null
+    );
+    navigate(`${location.pathname}`, { replace: true });
+  }, [searchParams, navigate, location.pathname, t]);
 
   const openEditModal = (eventData) => {
     if (!eventData) return;
@@ -189,20 +257,81 @@ function CalendarPage() {
     toast.success(t('calendar.toastParticipantAdded'));
   };
 
+  const addAttendeeName = (name) => {
+    const clean = String(name || '').trim();
+    if (!clean) return;
+    setAttendeeNames((prev) => Array.from(new Set([...prev, clean])));
+    setEventForm((prev) => ({ ...prev, attendeesText: '' }));
+    setShowAttendeeSuggestions(false);
+  };
+
   const handleRemoveAttendee = (name) => {
     setAttendeeNames((prev) => prev.filter((item) => item !== name));
   };
 
+  const filteredAttendeeSuggestions = useMemo(() => {
+    const q = String(eventForm.attendeesText || '').trim().toLowerCase();
+    return attendeeSuggestions
+      .filter((item) => !attendeeNames.includes(item.label))
+      .filter((item) => {
+        if (!q) return true;
+        return `${item.label} ${item.sub || ''}`.toLowerCase().includes(q);
+      })
+      .slice(0, 8);
+  }, [attendeeSuggestions, attendeeNames, eventForm.attendeesText]);
+
+  const loadAttendeeSuggestions = useCallback(async () => {
+    try {
+      const [friendsRes, membersRes] = await Promise.all([
+        friendService.getFriends().catch(() => null),
+        organizationId ? organizationAPI.getMembers(organizationId).catch(() => null) : Promise.resolve(null),
+      ]);
+      const rawFriends = friendsRes?.data?.friends ?? friendsRes?.data?.data?.friends ?? friendsRes?.data ?? [];
+      const friendRows = (Array.isArray(rawFriends) ? rawFriends : [])
+        .map((item) => item?.friendId || item)
+        .filter(Boolean)
+        .map((u) => ({
+          id: String(u?._id || u?.id || u?.userId || ''),
+          label: String(u?.displayName || u?.fullName || u?.username || u?.email || '').trim(),
+          sub: String(u?.email || u?.phone || u?.phoneNumber || '').trim(),
+        }))
+        .filter((row) => row.id && row.label);
+
+      const rawMembers = membersRes?.data?.data ?? membersRes?.data ?? [];
+      const memberRows = (Array.isArray(rawMembers) ? rawMembers : [])
+        .map((item) => item?.user || item)
+        .filter(Boolean)
+        .map((u) => ({
+          id: String(u?._id || u?.id || u?.userId || ''),
+          label: String(u?.displayName || u?.fullName || u?.username || u?.email || '').trim(),
+          sub: String(u?.email || u?.phone || u?.phoneNumber || '').trim(),
+        }))
+        .filter((row) => row.id && row.label);
+
+      const merged = new Map();
+      [...memberRows, ...friendRows].forEach((row) => {
+        if (!merged.has(row.id)) merged.set(row.id, row);
+      });
+      setAttendeeSuggestions(Array.from(merged.values()));
+    } catch {
+      setAttendeeSuggestions([]);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    if (showCreateEventModal) loadAttendeeSuggestions();
+  }, [showCreateEventModal, loadAttendeeSuggestions]);
+
   const persistLocalList = useCallback((updater) => {
     try {
       let list = [];
-      const raw = localStorage.getItem(LOCAL_CUSTOM_KEY) || localStorage.getItem('calendar:events');
+      const raw = localStorage.getItem(CALENDAR_LOCAL_KEY) || localStorage.getItem('calendar:events');
       if (raw) {
         const p = JSON.parse(raw);
         if (Array.isArray(p)) list = p;
       }
       const next = typeof updater === 'function' ? updater(list) : updater;
-      localStorage.setItem(LOCAL_CUSTOM_KEY, JSON.stringify(next));
+      localStorage.setItem(CALENDAR_LOCAL_KEY, JSON.stringify(next));
       reloadLocal();
     } catch {
       toast.error(t('calendar.toastLocalSaveFail'));
@@ -234,6 +363,8 @@ function CalendarPage() {
       startAt = null;
     }
 
+    const peerId = String(dmPeerFriendId || '').trim();
+    const peerName = String(dmPeerFriendName || '').trim();
     const nextEvent = {
       id: editingEventId || `local:${Date.now()}`,
       kind: 'local',
@@ -251,6 +382,12 @@ function CalendarPage() {
       priority: createType === 'deadline' ? 'high' : undefined,
       color: colorByType[createType] || colorByType.reminder,
       startAt: startAt ? startAt.toISOString() : null,
+      ...(peerId
+        ? {
+            friendId: peerId,
+            friendName: peerName || undefined,
+          }
+        : {}),
     };
 
     if (editingEventId) {
@@ -265,6 +402,8 @@ function CalendarPage() {
 
     setShowCreateEventModal(false);
     resetEventForm();
+    setDmPeerFriendId('');
+    setDmPeerFriendName('');
   };
 
   const handleDeleteEvent = (eventId, source) => {
@@ -425,26 +564,7 @@ function CalendarPage() {
                 ))}
               </div>
             </div>
-            <div className="flex min-w-0 flex-shrink-0 flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-              <div className="flex min-w-0 w-full flex-col gap-2 sm:max-w-md">
-                <PageSearchBar
-                  className="w-full"
-                  value={eventSearchQuery}
-                  onChange={setEventSearchQuery}
-                  placeholder={t('calendar.searchEventsPlaceholder')}
-                  isDarkMode={isDarkMode}
-                  id="calendar-event-search"
-                  aria-label={t('calendar.searchEventsAria')}
-                />
-                <SearchFilterChips
-                  aria-label={t('calendar.kindFilterAria')}
-                  options={calendarKindOptions}
-                  value={calendarKindFilter}
-                  onChange={setCalendarKindFilter}
-                  isDarkMode={isDarkMode}
-                  size="sm"
-                />
-              </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
               <div className="flex gap-1">
                 {['day', 'week', 'month'].map((v) => (
                   <button
@@ -467,6 +587,24 @@ function CalendarPage() {
             </div>
           </div>
         </div>
+
+        <PageSearchToolbar
+          value={eventSearchQuery}
+          onChange={setEventSearchQuery}
+          placeholder={t('calendar.searchEventsPlaceholder')}
+          isDarkMode={isDarkMode}
+          id="calendar-event-search"
+          aria-label={t('calendar.searchEventsAria')}
+        >
+          <SearchFilterChips
+            aria-label={t('calendar.kindFilterAria')}
+            options={calendarKindOptions}
+            value={calendarKindFilter}
+            onChange={setCalendarKindFilter}
+            isDarkMode={isDarkMode}
+            size="sm"
+          />
+        </PageSearchToolbar>
 
         <div className="min-h-0 flex-1 grid grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-3 lg:gap-5 lg:p-5">
           {/* Calendar View — khung riêng, 2/3 chiều ngang trên desktop */}
@@ -517,8 +655,9 @@ function CalendarPage() {
                       title={t('calendar.ariaSettings')}
                       className={iconToolBtn}
                       onClick={() => {
-                        navigate('/settings');
-                        toast(t('calendar.toastOpenSettings'), { icon: 'ℹ️' });
+                        setCalendarKindFilter('all');
+                        setEventSearchQuery('');
+                        toast(t('calendar.toastRefreshed'), { icon: '⚙️' });
                       }}
                     >
                       ⚙️
@@ -585,6 +724,10 @@ function CalendarPage() {
                       tabIndex={0}
                       onClick={() => {
                         setSelectedDate(date);
+                        // When clicking a date cell, open create modal with pre-filled event name
+                        const dateStr = toDateKey(date);
+                        const eventTitle = `${t('calendar.newEventDefault', { date: dateStr })}`;
+                        openCreateModal(eventTitle);
                         if (dayEvents.length > 0) {
                           toast(
                             t('calendar.toastDayEvents', {
@@ -1012,12 +1155,22 @@ function CalendarPage() {
           <label className={formLabel}>
             {t('calendar.labelAttendees')}
           </label>
-          <div className="flex gap-2">
+          <div className="relative flex gap-2">
             <input 
               type="text"
               placeholder={t('calendar.phAttendees')}
               value={eventForm.attendeesText}
-              onChange={(e) => setEventForm((prev) => ({ ...prev, attendeesText: e.target.value }))}
+              onFocus={() => setShowAttendeeSuggestions(true)}
+              onChange={(e) => {
+                setEventForm((prev) => ({ ...prev, attendeesText: e.target.value }));
+                setShowAttendeeSuggestions(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && filteredAttendeeSuggestions.length > 0) {
+                  e.preventDefault();
+                  addAttendeeName(filteredAttendeeSuggestions[0].label);
+                }
+              }}
               className={`flex-1 ${formInput}`}
             />
             <button
@@ -1027,6 +1180,27 @@ function CalendarPage() {
             >
               {t('calendar.addAttendeeBtn')}
             </button>
+            {showAttendeeSuggestions && filteredAttendeeSuggestions.length > 0 && (
+              <div
+                className={`absolute left-0 right-[6.5rem] top-[calc(100%+0.35rem)] z-20 max-h-52 overflow-y-auto rounded-xl border p-1 ${
+                  isDarkMode ? 'border-slate-700 bg-[#0a1628]' : 'border-slate-200 bg-white'
+                }`}
+              >
+                {filteredAttendeeSuggestions.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => addAttendeeName(item.label)}
+                    className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm ${
+                      isDarkMode ? 'hover:bg-slate-800/80 text-slate-100' : 'hover:bg-slate-50 text-slate-800'
+                    }`}
+                  >
+                    <span className="truncate">{item.label}</span>
+                    <span className={`ml-2 truncate text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{item.sub || ''}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {attendeeNames.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">

@@ -67,30 +67,31 @@ export const roleAPI = {
 
   /* ----- ASSIGN ROLE TO USER -----
      Gán role cho user
-     POST: /roles/{roleId}/assign
-     Body: { userId, serverId }
+     POST: /roles/assign
+     Body: { roleId, userId, serverId }
      Return: { success: true, userRole: { ... } }
   */
   assignRoleToUser: (roleId, userId, serverId) => {
-    return apiClient.post(`/roles/${roleId}/assign`, { userId, serverId });
+    return apiClient.post('/roles/assign', { roleId, userId, serverId });
   },
 
   /* ----- REMOVE ROLE FROM USER -----
      Gỡ role khỏi user
-     DELETE: /roles/{roleId}/users/{userId}
+     POST: /roles/remove
+     Body: { roleId, userId, serverId }
      Return: { success: true }
   */
-  removeRoleFromUser: (roleId, userId) => {
-    return apiClient.delete(`/roles/${roleId}/users/${userId}`);
+  removeRoleFromUser: (roleId, userId, serverId) => {
+    return apiClient.post('/roles/remove', { roleId, userId, serverId });
   },
 
-  /* ----- GET ROLE MEMBERS -----
-     Lấy danh sách members có role này
-     GET: /roles/{roleId}/members
-     Return: [{ id, name, email, avatar, ... }]
+  /* ----- GET USER ROLES IN SERVER -----
+     Lấy danh sách role của 1 user trong server
+     GET: /roles/user/{userId}/server/{serverId}
+     Return: [{ roleId, ... }] hoặc [{ id/_id, ... }]
   */
-  getRoleMembers: (roleId) => {
-    return apiClient.get(`/roles/${roleId}/members`);
+  getUserRoles: (userId, serverId) => {
+    return apiClient.get(`/roles/user/${encodeURIComponent(userId)}/server/${encodeURIComponent(serverId)}`);
   }
 };
 

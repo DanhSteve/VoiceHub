@@ -1,0 +1,20 @@
+sequenceDiagram
+autonumber
+actor NguoiGui as NguoiGui
+participant Socket as SocketService
+participant Queue as RabbitMQ
+participant ChatSvc as ChatService
+participant MsgDb as Mongo_Message
+
+Note over NguoiGui,MsgDb: Chặng 2 - Luồng lỗi và ngoại lệ
+NguoiGui->>Socket: Gửi payload thiếu dữ liệu
+Socket->>Queue: Publish thử
+Queue->>ChatSvc: Consume
+ChatSvc->>MsgDb: Validate thất bại
+alt Payload sai
+  ChatSvc-->>Socket: error validation
+  Socket-->>NguoiGui: Thông báo lỗi dữ liệu
+else Lỗi DB
+  ChatSvc-->>Socket: error persistence
+  Socket-->>NguoiGui: Thông báo lỗi hệ thống
+end

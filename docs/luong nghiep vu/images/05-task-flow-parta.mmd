@@ -1,0 +1,16 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDung
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant TaskSvc as TaskService
+participant OrgSvc as OrganizationService
+participant TaskDb as Mongo_Task
+
+Note over User,TaskDb: Chặng 1 - Tạo task thường
+User->>Client: Tạo task mới
+Client->>Gateway: POST /api/tasks
+Gateway->>TaskSvc: Forward request
+TaskSvc->>OrgSvc: Verify organization/assignee
+TaskSvc->>TaskDb: Insert task
+TaskSvc-->>Client: 201 tạo thành công

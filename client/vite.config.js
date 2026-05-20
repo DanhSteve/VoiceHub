@@ -1,12 +1,43 @@
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import { visualizer } from 'rollup-plugin-visualizer';
 
 const analyze = process.env.ANALYZE === '1' || process.env.ANALYZE === 'true';
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // .env / .env.local chỉ có trong import.meta.env cho mã app; config cần loadEnv.
+  const env = loadEnv(mode, __dirname, '');
+  const defaultBackendOrigin = env.VITE_BACKEND_ORIGIN || 'http://127.0.0.1:3000';
+  const apiFromEnv = String(env.VITE_API_URL || '').trim();
+  const apiProxyTarget =
+    String(env.VITE_API_PROXY_TARGET || '').trim() ||
+    (apiFromEnv.startsWith('http://') || apiFromEnv.startsWith('https://')
+      ? apiFromEnv.replace(/\/api\/?$/, '')
+      : defaultBackendOrigin);
+  const socketProxyTarget = String(env.VITE_SOCKET_PROXY_TARGET || '').trim() || defaultBackendOrigin;
+  const devHost = String(env.VITE_HOST || '0.0.0.0').trim();
+  const fixedDevPort = 5173;
+  const rawAllowedHosts = String(env.VITE_ALLOWED_HOSTS || '').trim();
+  const allowedHosts = rawAllowedHosts
+    ? rawAllowedHosts.split(',').map((h) => String(h || '').trim()).filter(Boolean)
+    : true;
+  const hmrHost = String(env.VITE_HMR_HOST || '').trim();
+  const hmrProtocol = String(env.VITE_HMR_PROTOCOL || '').trim();
+  const hmrClientPort = Number(String(env.VITE_HMR_CLIENT_PORT || '').trim());
+  const hmrPort = Number(String(env.VITE_HMR_PORT || '').trim());
+  const hmr =
+    hmrHost || hmrProtocol || Number.isFinite(hmrClientPort) || Number.isFinite(hmrPort)
+      ? {
+          ...(hmrHost ? { host: hmrHost } : {}),
+          ...(hmrProtocol ? { protocol: hmrProtocol } : {}),
+          ...(Number.isFinite(hmrClientPort) ? { clientPort: hmrClientPort } : {}),
+          ...(Number.isFinite(hmrPort) ? { port: hmrPort } : {}),
+        }
+      : undefined;
+
+  return {
   plugins: [
     react({
       // Bật Fast Refresh với cấu hình tối ưu
@@ -39,19 +70,30 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173, // Vite dev server port (tránh conflict với API Gateway port 3000)
+    host: devHost,
+    port: fixedDevPort,
+    strictPort: true,
+    allowedHosts,
+    ...(hmr ? { hmr } : {}),
     proxy: {
       '/api': {
-        target: process.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3000',
+        target: apiProxyTarget,
         changeOrigin: true,
       },
-      // Dev: proxy /socket.io → socket-service trực tiếp (tránh 404 khi gateway chưa proxy /socket.io đúng).
-      // Override: VITE_SOCKET_PROXY_TARGET=http://localhost:3000 nếu cần test qua gateway.
+      // Dev: mặc định proxy /socket.io → socket-service :3017 (host phải publish port).
+      // Khi socket chỉ trong Docker: đặt VITE_SOCKET_PROXY_TARGET=http://localhost:3000 (api-gateway).
       '/socket.io': {
-        target: process.env.VITE_SOCKET_PROXY_TARGET || 'http://127.0.0.1:3017',
+        target: socketProxyTarget,
         changeOrigin: true,
         ws: true,
       },
+        // Dev: proxy signaling mediasoup (/voice-socket) qua API Gateway.
+        // Đây là đường mà client socket.io sẽ kết nối tới (xài option `path`).
+        [String(env.VITE_VOICE_SIGNAL_PATH || '/voice-socket').trim()]: {
+          target: apiProxyTarget,
+          changeOrigin: true,
+          ws: true,
+        },
     },
   },
   build: {
@@ -73,4 +115,5 @@ export default defineConfig({
       },
     },
   },
+};
 });

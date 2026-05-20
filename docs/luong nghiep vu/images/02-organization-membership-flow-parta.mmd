@@ -1,0 +1,24 @@
+sequenceDiagram
+autonumber
+actor ChuToChuc as ChuToChuc
+actor NguoiDung as NguoiDungMoi
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant OrgSvc as OrganizationService
+participant OrgDb as Mongo_Organization_Membership
+participant RoleSync as RolePermissionService
+
+Note over ChuToChuc,RoleSync: Chặng 1 - Tạo tổ chức và mời thành viên
+ChuToChuc->>Client: Tạo tổ chức mới
+Client->>Gateway: POST /api/organizations
+Gateway->>OrgSvc: Forward request
+OrgSvc->>OrgDb: Tạo Organization + Membership(owner)
+OrgSvc->>OrgDb: Seed phòng ban và kênh mặc định
+OrgSvc->>RoleSync: Đồng bộ role mặc định
+OrgSvc-->>Client: Trả về tổ chức đã tạo
+
+ChuToChuc->>Client: Mời thành viên
+Client->>Gateway: POST /api/organizations/:orgId/members
+Gateway->>OrgSvc: Forward request
+OrgSvc->>OrgDb: Upsert membership pending
+OrgSvc-->>Client: Kết quả mời

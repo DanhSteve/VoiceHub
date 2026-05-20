@@ -1,0 +1,8 @@
+{
+  "name": "voicehub",
+  "private": true,
+  "description": "Meta-package: script đồng bộ node_modules / lockfile cho mọi service sau khi pull",
+  "scripts": {
+    "deps": "node scripts/sync-node-deps.mjs"
+  }
+}

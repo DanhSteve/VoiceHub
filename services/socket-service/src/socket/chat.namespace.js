@@ -12,6 +12,16 @@ function getPresenceInternalToken() {
 }
 
 const onlineUserSockets = new Map();
+const pendingOfflineTimers = new Map();
+const OFFLINE_GRACE_MS = Math.max(0, Number(process.env.PRESENCE_OFFLINE_GRACE_MS || 12000));
+
+function cancelPendingOffline(userKey) {
+  const t = pendingOfflineTimers.get(userKey);
+  if (t) {
+    clearTimeout(t);
+    pendingOfflineTimers.delete(userKey);
+  }
+}
 
 /**
  * Đồng bộ presence lên user-service (online / offline).
@@ -80,6 +90,7 @@ module.exports = function registerChatNamespace(io) {
     // Join room theo userId để hỗ trợ DM
     if (userId) {
       const key = String(userId);
+      cancelPendingOffline(key);
       socket.join(`user:${key}`);
       const prevCount = onlineUserSockets.get(key) || 0;
       onlineUserSockets.set(key, prevCount + 1);
@@ -105,12 +116,19 @@ module.exports = function registerChatNamespace(io) {
           useQueue = false;
         }
 
+        const token = normalizeToken(
+          socket.handshake.auth?.token || socket.handshake.headers?.authorization
+        );
+        const authorization = token ? `Bearer ${token}` : null;
+
         if (useQueue && userId) {
           const pub = await publishFriendDm({
             senderId: userId,
             receiverId,
             content,
             messageType,
+            replyToMessageId,
+            authorization,
           });
           if (pub.ok) {
             redisPresence.refreshTtl(String(userId));
@@ -119,32 +137,42 @@ module.exports = function registerChatNamespace(io) {
           console.warn('[socket-service] friend:send queue publish failed, falling back to HTTP');
         }
 
-        const token = normalizeToken(
-          socket.handshake.auth?.token || socket.handshake.headers?.authorization
-        );
-
         const body = { receiverId, content, messageType };
         if (replyToMessageId) body.replyToMessageId = replyToMessageId;
 
-        const resp = await axios.post(
-          `${CHAT_SERVICE_URL}/api/messages`,
-          body,
-          token
-            ? { headers: { Authorization: `Bearer ${token}` } }
-            : undefined
-        );
-
-        const payload = resp?.data || resp;
-        const message = payload?.data || payload;
-
-        emitToUser(receiverId, 'friend:new_message', message);
-        socket.emit('friend:sent', message);
+        const resp = await axios.post(`${CHAT_SERVICE_URL}/api/messages`, body, {
+          headers: authorization ? { Authorization: authorization } : {},
+          timeout: 15000,
+          validateStatus: () => true,
+        });
+        if (resp.status >= 400) {
+          const data = resp.data || {};
+          return socket.emit('error', {
+            message: data.message || 'Gửi tin nhắn thất bại',
+            code: data.code,
+            blockerId: data.blockerId,
+          });
+        }
+        // chat-service đã emit friend:new_message / friend:sent qua emitRealtimeEvent
       } catch (err) {
         console.error('[socket-service] friend:send error', err.message);
+        const data = err.response?.data || {};
         socket.emit('error', {
-          message: err.response?.data?.message || err.message || 'Gửi tin nhắn thất bại'
+          message: data.message || err.message || 'Gửi tin nhắn thất bại',
+          code: data.code,
+          blockerId: data.blockerId,
         });
       }
+    });
+
+    socket.on('friend:typing_start', ({ receiverId }) => {
+      if (!receiverId || !userId) return;
+      emitToUser(receiverId, 'friend:typing_start', { senderId: String(userId) });
+    });
+
+    socket.on('friend:typing_stop', ({ receiverId }) => {
+      if (!receiverId || !userId) return;
+      emitToUser(receiverId, 'friend:typing_stop', { senderId: String(userId) });
     });
 
     socket.on('room:join', ({ roomId }) => {
@@ -174,9 +202,24 @@ module.exports = function registerChatNamespace(io) {
         const current = onlineUserSockets.get(key) || 0;
         if (current <= 1) {
           onlineUserSockets.delete(key);
-          io.emit('user:disconnected', key);
-          redisPresence.clear(key);
-          await syncPresenceUserStatus(key, 'offline');
+          const applyOffline = async () => {
+            // Nếu user đã reconnect trong thời gian grace thì bỏ qua offline.
+            const latest = onlineUserSockets.get(key) || 0;
+            if (latest > 0) return;
+            io.emit('user:disconnected', key);
+            redisPresence.clear(key);
+            await syncPresenceUserStatus(key, 'offline');
+          };
+          if (OFFLINE_GRACE_MS > 0) {
+            cancelPendingOffline(key);
+            const timer = setTimeout(() => {
+              pendingOfflineTimers.delete(key);
+              applyOffline().catch(() => null);
+            }, OFFLINE_GRACE_MS);
+            pendingOfflineTimers.set(key, timer);
+          } else {
+            await applyOffline();
+          }
         } else {
           onlineUserSockets.set(key, current - 1);
         }

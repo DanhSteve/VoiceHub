@@ -3,6 +3,13 @@ const { services } = require('../config/services');
 
 const ROLE_SERVICE_URL = services.rolePermission.url;
 
+function internalHeaders() {
+  const t = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
+  const h = { 'Content-Type': 'application/json' };
+  if (t) h['x-gateway-internal-token'] = t;
+  return h;
+}
+
 /**
  * Service client để gọi Role Service
  */
@@ -25,6 +32,7 @@ class RoleService {
         },
         {
           timeout: 5000, // 5 seconds timeout
+          headers: internalHeaders(),
         }
       );
 
@@ -57,6 +65,7 @@ class RoleService {
         `${ROLE_SERVICE_URL}/api/roles/user/${userId}/server/${serverId}`,
         {
           timeout: 5000,
+          headers: internalHeaders(),
         }
       );
 

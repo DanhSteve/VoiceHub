@@ -124,11 +124,17 @@ class NotificationService {
 
   async getUserNotifications(userId, options = {}) {
     try {
-      const { isRead, type, page = 1, limit = 50 } = options;
+      const { isRead, type, organizationId, page = 1, limit = 50 } = options;
 
       const filter = { userId };
       if (isRead !== undefined) filter.isRead = isRead;
       if (type) filter.type = type;
+      if (organizationId) {
+        filter.$or = [
+          { 'data.organizationId': String(organizationId) },
+          { 'data.workspaceId': String(organizationId) },
+        ];
+      }
 
       const notifications = await Notification.find(filter)
         .sort({ createdAt: -1 })
@@ -140,7 +146,8 @@ class NotificationService {
       }
 
       const total = await Notification.countDocuments(filter);
-      const unreadCount = await Notification.countDocuments({ userId, isRead: false });
+      const unreadFilter = { ...filter, isRead: false };
+      const unreadCount = await Notification.countDocuments(unreadFilter);
 
       return {
         notifications: notifications.map((n) => toClientNotification(n)),

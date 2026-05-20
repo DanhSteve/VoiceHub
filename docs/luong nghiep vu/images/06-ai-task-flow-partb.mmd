@@ -1,0 +1,20 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDung
+participant Client as UngDungWeb
+participant AiSvc as AiTaskService
+participant TaskSvc as TaskService
+participant AiDb as Mongo_AiTaskExtraction
+
+Note over User,AiDb: Chặng 2 - Confirm tạo task thật + lỗi
+User->>Client: Xác nhận tạo task
+Client->>AiSvc: POST /api/ai-tasks/confirm + Idempotency-Key
+AiSvc->>TaskSvc: Tạo task thật
+alt Thành công
+  AiSvc->>AiDb: Mark confirmed
+  AiSvc-->>Client: 201 created
+else Trùng idempotency
+  AiSvc-->>Client: 409 conflict
+else Task service lỗi
+  AiSvc-->>Client: 5xx
+end

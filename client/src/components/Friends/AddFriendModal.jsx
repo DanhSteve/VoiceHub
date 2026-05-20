@@ -100,9 +100,17 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
     }
   };
 
-  const acceptRequest = async (requestId) => {
+  const pendingRequesterId = (row) => {
+    const requester = row?.requester && typeof row.requester === 'object' ? row.requester : null;
+    return String(requester?.userId || requester?._id || row?.requester || '').trim();
+  };
+
+  const acceptRequest = async (row) => {
+    const requestId = row?._id || row?.id;
+    const friendId = pendingRequesterId(row);
     try {
-      await friendService.acceptRequest(requestId);
+      if (friendId) await friendService.acceptFriend(friendId);
+      else await friendService.acceptRequest(requestId);
       toast.success('Đã chấp nhận');
       onFriendlistChanged?.();
       await loadPending();
@@ -111,14 +119,33 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
     }
   };
 
-  const rejectRequest = async (requestId) => {
+  const rejectRequest = async (row) => {
+    const requestId = row?._id || row?.id;
+    const friendId = pendingRequesterId(row);
     try {
-      await friendService.rejectRequest(requestId);
+      if (friendId) await friendService.rejectFriend(friendId);
+      else await friendService.rejectRequest(requestId);
       toast.success('Đã từ chối');
       onFriendlistChanged?.();
       await loadPending();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Lỗi');
+    }
+  };
+
+  const blockRequestUser = async (row) => {
+    const friendId = pendingRequesterId(row);
+    if (!friendId) {
+      toast.error('KhÃ´ng xÃ¡c Ä‘á»‹nh Ä‘Æ°á»£c ngÆ°á»i dÃ¹ng');
+      return;
+    }
+    try {
+      await friendService.blockFriend(friendId);
+      toast.success('ÄÃ£ cháº·n ngÆ°á»i dÃ¹ng');
+      onFriendlistChanged?.();
+      await loadPending();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'KhÃ´ng cháº·n Ä‘Æ°á»£c ngÆ°á»i dÃ¹ng');
     }
   };
 
@@ -282,10 +309,10 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
                       req.name ||
                       req.username ||
                       (req.email ? String(req.email).split('@')[0] : 'Người dùng');
-                    const rid = row._id;
+                    const rid = row._id || row.id || pendingRequesterId(row);
                     return (
                       <GlassCard key={String(rid)} className={cardBorder}>
-                        <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                           <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 text-2xl">
                             {req.avatar || '👤'}
                           </div>
@@ -295,12 +322,32 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
                               Muốn kết bạn với bạn
                             </div>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <GradientButton variant="primary" type="button" onClick={() => acceptRequest(rid)}>
+                          <div className="grid w-full grid-cols-3 gap-2 sm:w-auto">
+                            <GradientButton
+                              variant="primary"
+                              type="button"
+                              className="justify-center px-3 py-2 text-sm"
+                              onClick={() => acceptRequest(row)}
+                            >
                               Chấp nhận
                             </GradientButton>
-                            <button type="button" onClick={() => rejectRequest(rid)} className={rejectBtn}>
+                            <button
+                              type="button"
+                              onClick={() => rejectRequest(row)}
+                              className={`${rejectBtn} px-3 py-2 text-sm`}
+                            >
                               Từ chối
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => blockRequestUser(row)}
+                              className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                                isDarkMode
+                                  ? 'border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20'
+                                  : 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                              }`}
+                            >
+                              Block
                             </button>
                           </div>
                         </div>

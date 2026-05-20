@@ -1,5 +1,6 @@
 const userService = require('../services/user.service');
 const { logger } = require('/shared');
+const { isTrustedGatewayForward } = require('/shared/middleware/gatewayTrust');
 
 /**
  * Middleware để gắn user context vào request
@@ -7,8 +8,9 @@ const { logger } = require('/shared');
  */
 const userContext = async (req, res, next) => {
   try {
-    // Lấy userId từ header (từ API Gateway)
-    const userId = req.headers['x-user-id'] || req.user?.id;
+    const fromHeader =
+      req.headers['x-user-id'] && isTrustedGatewayForward(req) ? req.headers['x-user-id'] : null;
+    const userId = req.user?.id || fromHeader;
 
     if (userId) {
       try {

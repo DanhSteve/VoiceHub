@@ -1,0 +1,23 @@
+sequenceDiagram
+autonumber
+actor Admin as ChuToChuc_Admin
+participant Gateway as ApiGateway
+participant OrgSvc as OrganizationService
+participant ChannelDb as Mongo_Channel
+
+Note over Admin,ChannelDb: Chặng 2 - Soft delete và lỗi quyền
+Admin->>Gateway: DELETE /api/.../channels/:id
+Gateway->>OrgSvc: Validate role owner/admin
+alt Có quyền
+  OrgSvc->>ChannelDb: Set isActive=false
+  OrgSvc-->>Admin: 200
+else Không có quyền
+  OrgSvc-->>Admin: 403
+end
+
+Admin->>Gateway: PUT /api/.../departments/:id
+alt Department không tồn tại
+  OrgSvc-->>Admin: 404
+else Cập nhật thành công
+  OrgSvc-->>Admin: 200
+end

@@ -1,8 +1,5 @@
 const Server = require('../models/Server');
-const { getRedisClient, organizationWebhook, logger } = require('/shared');
-const axios = require('axios');
-
-const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3004';
+const { getRedisClient, organizationWebhook, logger, fetchUserProfileByIdInternal } = require('/shared');
 
 class ServerService {
   // Tạo server mới
@@ -18,7 +15,7 @@ class ServerService {
 
       // Kiểm tra ownerId có tồn tại không
       try {
-        await axios.get(`${USER_SERVICE_URL}/api/users/${ownerId}`);
+        await fetchUserProfileByIdInternal(ownerId);
       } catch (error) {
         throw new Error('Owner user not found');
       }
@@ -135,7 +132,7 @@ class ServerService {
 
       // Kiểm tra userId có tồn tại không
       try {
-        await axios.get(`${USER_SERVICE_URL}/api/users/${userId}`);
+        await fetchUserProfileByIdInternal(userId);
       } catch (error) {
         throw new Error('User not found');
       }

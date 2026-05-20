@@ -1,0 +1,35 @@
+sequenceDiagram
+autonumber
+actor User as SearchUser
+participant UI as DashboardSearchModal
+participant Fetcher as DashboardSearchFetcher
+participant Gateway as ApiGateway
+participant Org as OrganizationApi
+participant Friend as FriendApi
+participant Chat as MessageApi
+participant Task as TaskMeetingApis
+participant NotifyDoc as NotificationDocumentApis
+User->>UI: Nhap tu khoa va chon tab
+UI->>Fetcher: fetchDashboardSearchResults(query,scope)
+Fetcher->>Fetcher: debounce + validate context(orgId/friendId)
+par Org data
+  Fetcher->>Gateway: GET /api/organizations/my
+  Gateway->>Org: proxy
+and Friend data
+  Fetcher->>Gateway: GET /api/friends
+  Gateway->>Friend: proxy
+and Chat data
+  Fetcher->>Gateway: GET /api/messages/search or DM search
+  Gateway->>Chat: proxy
+and Task/Meeting
+  Fetcher->>Gateway: GET /api/tasks + /api/meetings
+  Gateway->>Task: proxy
+and Notification/Document
+  Fetcher->>Gateway: GET /api/notifications + /api/documents
+  Gateway->>NotifyDoc: proxy
+end
+alt Du context va co data
+  Fetcher->>UI: merge + normalize + render cards
+else Thieu context/loi tung nhanh
+  Fetcher->>UI: render warning row theo nhom loi
+end

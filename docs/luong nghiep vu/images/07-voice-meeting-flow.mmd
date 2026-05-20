@@ -1,0 +1,38 @@
+﻿sequenceDiagram
+autonumber
+actor Host as HostUser
+actor ParticipantUser as MeetingMember
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant MeetingCtrl as MeetingController
+participant MeetingSvc as MeetingService
+participant MeetingDb as MongoMeeting
+participant VoiceNs as VoiceNamespace
+participant SFU as MediasoupRoomManager
+
+Host->>Client: Tao meeting
+Client->>Gateway: POST /api/meetings
+Gateway->>MeetingCtrl: createMeeting
+MeetingCtrl->>MeetingSvc: validate context
+MeetingSvc->>MeetingDb: insert meeting status scheduled
+MeetingSvc-->>Client: 201
+
+Host->>Client: Bat dau meeting
+Client->>Gateway: POST /api/meetings/:id/start
+Gateway->>MeetingCtrl: startMeeting
+MeetingSvc->>MeetingDb: set active
+MeetingSvc->>SFU: init room transport
+MeetingSvc-->>Client: 200
+
+ParticipantUser->>VoiceNs: join namespace voice
+VoiceNs->>SFU: allocate peer transport
+alt Meeting active and member valid
+  SFU-->>ParticipantUser: join success + media params
+else Meeting ended or forbidden
+  SFU-->>ParticipantUser: reject join
+end
+
+Host->>Gateway: POST /api/meetings/:id/end
+Gateway->>MeetingCtrl: endMeeting
+MeetingSvc->>MeetingDb: set ended
+MeetingSvc->>SFU: close room resources

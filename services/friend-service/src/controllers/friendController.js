@@ -3,6 +3,7 @@ const axios = require('axios');
 const friendService = require('../services/friend.service');
 
 const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3004';
+const USER_SERVICE_INTERNAL_TOKEN = process.env.USER_SERVICE_INTERNAL_TOKEN || '';
 
 exports.getFriends = async (req, res, next) => {
   try {
@@ -106,18 +107,11 @@ exports.removeFriend = async (req, res, next) => {
 exports.blockUser = async (req, res, next) => {
   try {
     const { userId } = req.body;
-
-    await Friendship.findOneAndUpdate(
-      {
-        $or: [
-          { requester: req.user._id, recipient: userId },
-          { requester: userId, recipient: req.user._id },
-        ],
-      },
-      { status: 'blocked', requester: req.user._id },
-      { upsert: true }
-    );
-
+    const currentUserId = req.user?.id || req.user?._id;
+    if (!userId || !currentUserId) {
+      return res.status(400).json({ status: 'fail', message: 'userId is required' });
+    }
+    await friendService.blockUser(String(currentUserId), String(userId));
     res.json({ status: 'success', message: 'User blocked' });
   } catch (error) {
     next(error);
@@ -126,12 +120,12 @@ exports.blockUser = async (req, res, next) => {
 
 exports.unblockUser = async (req, res, next) => {
   try {
-    await Friendship.findOneAndDelete({
-      requester: req.user._id,
-      recipient: req.params.userId,
-      status: 'blocked',
-    });
-
+    const currentUserId = req.user?.id || req.user?._id;
+    const friendId = req.params.userId;
+    if (!friendId || !currentUserId) {
+      return res.status(400).json({ status: 'fail', message: 'userId is required' });
+    }
+    await friendService.unblockUser(String(currentUserId), String(friendId));
     res.json({ status: 'success', message: 'User unblocked' });
   } catch (error) {
     next(error);
@@ -147,7 +141,17 @@ exports.searchByPhone = async (req, res, next) => {
       return res.status(400).json({ status: 'fail', message: 'Phone parameter is required' });
     }
 
-    const response = await axios.get(`${USER_SERVICE_URL}/api/users/phone/${encodeURIComponent(phone)}`);
+    const token = String(USER_SERVICE_INTERNAL_TOKEN || '').trim();
+    if (!token) {
+      return res.status(503).json({
+        status: 'fail',
+        message: 'User service internal lookup not configured',
+      });
+    }
+    const response = await axios.get(
+      `${USER_SERVICE_URL}/api/users/internal/phone/${encodeURIComponent(phone)}`,
+      { headers: { 'x-internal-token': token }, timeout: 10000 }
+    );
     const userData = response.data?.data;
     if (!userData) {
       return res.status(404).json({ status: 'fail', message: 'User not found' });

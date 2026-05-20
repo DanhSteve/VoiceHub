@@ -6,6 +6,16 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification-service:3003")
+NOTIFICATION_INTERNAL_TOKEN = (
+    os.getenv("NOTIFICATION_INTERNAL_TOKEN") or os.getenv("GATEWAY_INTERNAL_TOKEN") or ""
+).strip()
+
+
+def _internal_headers():
+    h = {"Content-Type": "application/json"}
+    if NOTIFICATION_INTERNAL_TOKEN:
+        h["x-internal-notification-token"] = NOTIFICATION_INTERNAL_TOKEN
+    return h
 
 
 async def send_notification(
@@ -28,7 +38,8 @@ async def send_notification(
                     "content": content,
                     "data": data or {},
                     "actionUrl": action_url
-                }
+                },
+                headers=_internal_headers(),
             )
             response.raise_for_status()
             logger.info(f"Notification sent to user {user_id}: {title}")
@@ -58,7 +69,8 @@ async def send_bulk_notifications(
                     "content": content,
                     "data": data or {},
                     "actionUrl": action_url
-                }
+                },
+                headers=_internal_headers(),
             )
             response.raise_for_status()
             logger.info(f"Bulk notifications sent to {len(user_ids)} users: {title}")

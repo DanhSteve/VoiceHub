@@ -24,13 +24,9 @@ const DepartmentBubbleRail = ({
   pendingJoinApplications = [],
   /** Map organizationId → số đơn cần duyệt (badge trên avatar tổ chức). */
   joinReviewCountByOrgId = {},
-  /** Tổng thông báo trên Trang chủ tổ chức (lời mời + đơn duyệt) — badge nút Home. */
-  homeNotificationBadgeCount = 0,
   selectedOrganizationId,
-  viewMode = 'home',
   onSelectOrganization,
   onOpenWorkspace,
-  onOpenHome,
   onEditOrganization,
   onInviteOrganization,
   onLeaveOrganization,
@@ -120,7 +116,7 @@ const DepartmentBubbleRail = ({
         onClick={(event) => handleAvatarClick(event, organization)}
         onContextMenu={(event) => handleAvatarContextMenu(event, organization)}
         className={`group relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition ${
-          isActive && viewMode === 'workspace'
+          isActive
             ? 'border-cyan-400/80 bg-cyan-500/20 shadow-[0_0_16px_rgba(34,211,238,0.28)]'
             : isDarkMode
               ? 'border-white/15 bg-white/5 hover:border-white/30 hover:bg-white/10'
@@ -268,22 +264,6 @@ const DepartmentBubbleRail = ({
       </div>
 
       <div className="scrollbar-overlay flex h-[calc(100%-1.75rem)] flex-col items-center gap-3 overflow-y-auto">
-        <button
-          type="button"
-          onClick={onOpenHome}
-          title={t('organizations.railTitleHome')}
-          className={`group relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition ${
-            viewMode === 'home'
-              ? 'border-cyan-400/80 bg-cyan-500/20 text-slate-900 shadow-[0_0_16px_rgba(34,211,238,0.28)] dark:text-white'
-              : isDarkMode
-                ? 'border-white/20 bg-white/5 text-white hover:border-white/35 hover:bg-white/10'
-                : 'border-slate-300 bg-white text-slate-800 shadow-sm hover:border-cyan-400/50 hover:bg-slate-50'
-          }`}
-        >
-          <span className="text-lg leading-none">⌂</span>
-          <CornerBadge count={homeNotificationBadgeCount} isDarkMode={isDarkMode} />
-        </button>
-
         <button
           type="button"
           onClick={onCreateOrganization}

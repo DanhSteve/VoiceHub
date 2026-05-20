@@ -3,10 +3,22 @@ const taskService = require('../services/task.service');
 const Task = require('../models/Task');
 const mongoose = require('../db');
 const { logger } = require('/shared');
+const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
 const { publishTaskFromFileJob } = require('../messaging/taskFromFilePublisher');
+const {
+  fetchTaskWorkspaceScope,
+  buildTaskVisibilityFilter,
+  canCreateTaskInScope,
+  canAssignUser,
+  userCanAccessTask,
+} = require('../services/taskWorkspaceScope');
 
 const CHAT_SERVICE_URL = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
+const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
+  /\/$/,
+  ''
+);
 
 class TaskController {
   // Tạo task mới
@@ -14,6 +26,7 @@ class TaskController {
     try {
       const {
         title,
+        summary,
         description,
         assigneeId,
         serverId,
@@ -21,6 +34,11 @@ class TaskController {
         priority,
         dueDate,
         tags,
+        departmentId,
+        teamId,
+        departmentName,
+        aiGenerated,
+        sourceMessageId,
       } = req.body;
       const createdBy = req.user?.id || req.userContext?.userId;
 
@@ -31,8 +49,32 @@ class TaskController {
         });
       }
 
+      let scope = null;
+      if (organizationId) {
+        scope = await fetchTaskWorkspaceScope(createdBy, organizationId);
+        if (!scope) {
+          return res.status(403).json({
+            success: false,
+            message: 'Không có quyền tạo task trong tổ chức này',
+          });
+        }
+        if (!canCreateTaskInScope(scope)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Chỉ trưởng phòng, team leader, quản trị viên hoặc chủ sở hữu mới được tạo task',
+          });
+        }
+        if (assigneeId && !canAssignUser(scope, assigneeId)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Không thể gán task cho thành viên ngoài phạm vi quản lý',
+          });
+        }
+      }
+
       const task = await taskService.createTask({
         title,
+        summary,
         description,
         assigneeId,
         createdBy,
@@ -41,6 +83,11 @@ class TaskController {
         priority,
         dueDate,
         tags,
+        departmentId: departmentId || scope?.departmentId || null,
+        teamId: teamId || scope?.teamId || null,
+        departmentName,
+        aiGenerated: Boolean(aiGenerated),
+        sourceMessageId: sourceMessageId || null,
       });
 
       res.status(201).json({
@@ -59,6 +106,14 @@ class TaskController {
   // Lấy task theo ID
   async getTaskById(req, res) {
     try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Unauthorized',
+        });
+      }
+
       const { taskId } = req.params;
       const task = await taskService.getTaskById(taskId);
 
@@ -69,9 +124,20 @@ class TaskController {
         });
       }
 
-      res.json({
-        success: true,
-        data: task,
+      let scope = null;
+      if (task.organizationId) {
+        scope = await fetchTaskWorkspaceScope(userId, task.organizationId);
+      }
+      if (userCanAccessTask(task, userId, scope)) {
+        return res.json({
+          success: true,
+          data: task,
+        });
+      }
+
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden',
       });
     } catch (error) {
       logger.error('Get task error:', error);
@@ -104,16 +170,17 @@ class TaskController {
         limit,
         dueFrom,
         dueTo,
-        q: qRaw,
-      } = q;
+      } = req.query;
       const assigneeId = first(assigneeIdRaw);
       const organizationId = first(organizationIdRaw);
       const serverId = first(serverIdRaw);
-      const rawUserId = req.user?.id || req.userContext?.userId || req.headers['x-user-id'];
-      const userId =
-        rawUserId != null && String(rawUserId).trim() !== '' ? String(rawUserId).trim() : '';
-
-      const filter = { isActive: true };
+      const userId = req.user?.id || req.userContext?.userId;
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Unauthorized',
+        });
+      }
 
       const parseOid = (raw, label) => {
         if (raw == null || raw === '') return null;
@@ -124,26 +191,44 @@ class TaskController {
         return { value: s };
       };
 
-      if (assigneeId) {
-        const p = parseOid(assigneeId, 'assigneeId');
-        if (p.error) {
-          return res.status(400).json({ success: false, message: p.error });
-        }
-        filter.assigneeId = p.value;
-      } else if (userId) {
-        const p = parseOid(userId, 'user');
-        if (p.error) {
-          return res.status(400).json({ success: false, message: p.error });
-        }
-        filter.$or = [{ assigneeId: p.value }, { createdBy: p.value }];
-      }
+      const filter = { isActive: true };
+      let workspaceScope = null;
 
       if (organizationId) {
         const p = parseOid(organizationId, 'organizationId');
         if (p.error) {
           return res.status(400).json({ success: false, message: p.error });
         }
+        workspaceScope = await fetchTaskWorkspaceScope(userId, p.value);
+        if (!workspaceScope) {
+          return res.status(403).json({
+            success: false,
+            message: 'Forbidden',
+          });
+        }
         filter.organizationId = p.value;
+        const visibilityFilter = buildTaskVisibilityFilter(workspaceScope, userId);
+        Object.assign(filter, visibilityFilter);
+        filter.isActive = true;
+      } else if (assigneeId && String(assigneeId) !== String(userId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden',
+        });
+      } else {
+        if (assigneeId) {
+          const p = parseOid(assigneeId, 'assigneeId');
+          if (p.error) {
+            return res.status(400).json({ success: false, message: p.error });
+          }
+          filter.assigneeId = p.value;
+        } else if (userId) {
+          const p = parseOid(userId, 'user');
+          if (p.error) {
+            return res.status(400).json({ success: false, message: p.error });
+          }
+          filter.$or = [{ assigneeId: p.value }, { createdBy: p.value }];
+        }
       }
       if (serverId) {
         const p = parseOid(serverId, 'serverId');
@@ -155,7 +240,7 @@ class TaskController {
       if (status) filter.status = status;
       if (priority) filter.priority = priority;
 
-      const searchQ = first(qRaw);
+      const searchQ = first(q.q);
       if (searchQ != null && String(searchQ).trim() !== '') {
         const esc = String(searchQ)
           .trim()
@@ -412,6 +497,14 @@ class TaskController {
         });
       }
 
+      const scope = await fetchTaskWorkspaceScope(userId, organizationId);
+      if (!scope || !canCreateTaskInScope(scope)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Chỉ trưởng phòng, team leader, quản trị viên hoặc chủ sở hữu mới được tạo task tự động',
+        });
+      }
+
       await publishTaskFromFileJob({
         messageId: String(messageId),
         userId: String(userId),
@@ -461,6 +554,22 @@ class TaskController {
         success: false,
         message: error.message,
       });
+    }
+  }
+
+  /** Gọi nội bộ — xóa mọi task thuộc tổ chức */
+  async purgeOrganizationTasks(req, res) {
+    try {
+      const { organizationId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(String(organizationId))) {
+        return res.status(400).json({ success: false, message: 'Invalid organizationId' });
+      }
+      const oid = new mongoose.Types.ObjectId(String(organizationId));
+      const result = await Task.deleteMany({ organizationId: oid });
+      return res.json({ success: true, deletedCount: result.deletedCount });
+    } catch (error) {
+      logger.error('purgeOrganizationTasks error:', error);
+      return res.status(500).json({ success: false, message: error.message });
     }
   }
 }

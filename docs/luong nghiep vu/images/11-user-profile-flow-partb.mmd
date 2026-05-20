@@ -1,0 +1,24 @@
+sequenceDiagram
+autonumber
+actor User as ChuTaiKhoan
+participant Gateway as ApiGateway
+participant UserSvc as UserService
+participant UserDb as Mongo_UserProfile
+
+Note over User,UserDb: Chặng 2 - Cập nhật và kiểm soát quyền
+User->>Gateway: PUT /api/users/:userId
+Gateway->>UserSvc: Validate actor
+alt userId khớp actor
+  UserSvc->>UserDb: Update profile
+  UserSvc-->>User: 200
+else Sửa hồ sơ người khác
+  UserSvc-->>User: 403
+end
+
+User->>Gateway: PATCH /api/users/me/status
+Gateway->>UserSvc: Validate status enum
+alt Status không hợp lệ
+  UserSvc-->>User: 400
+else Hợp lệ
+  UserSvc->>UserDb: Update status
+end

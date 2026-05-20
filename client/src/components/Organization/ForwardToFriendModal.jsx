@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import ForwardMessagePreview from '../Chat/ForwardMessagePreview';
 import { Modal } from '../Shared';
+import { useAppStrings } from '../../locales/appStrings';
+import { PageSearchBar } from '../../features/search';
 
 /**
  * Chuyển tiếp tin DM tới một hoặc nhiều bạn bè.
@@ -11,11 +14,14 @@ export default function ForwardToFriendModal({
   /** Ẩn bạn đang chat (tránh chuyển trùng cuộc hiện tại) */
   excludeFriendId = null,
   previewText = '',
+  /** Tin gốc — render xem trước ảnh/tệp thay vì URL thô */
+  previewMessage = null,
   loading = false,
   /** Chỉ khóa nút Gửi (không ẩn danh sách) */
   submitting = false,
   onConfirm,
 }) {
+  const { t } = useAppStrings();
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState({});
   const [note, setNote] = useState('');
@@ -55,20 +61,26 @@ export default function ForwardToFriendModal({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Chuyển tiếp tới bạn bè" size="md">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={t('friendChat.forwardModalTitle')}
+      size="md"
+      layerClassName="z-[320]"
+    >
       <p className="mb-3 text-sm text-gray-400">
         Chọn người nhận tin chuyển tiếp (có thể chọn nhiều người).
       </p>
 
-      <div className="relative mb-3">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">🔍</span>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Tìm kiếm bạn"
-          className="w-full rounded-xl border border-indigo-500/40 bg-[#040f2a] py-2.5 pl-10 pr-3 text-sm text-white outline-none placeholder:text-gray-500"
-        />
-      </div>
+      <PageSearchBar
+        className="mb-3"
+        value={search}
+        onChange={setSearch}
+        placeholder={t('friendChat.searchFriendsPlaceholder')}
+        isDarkMode
+        size="sm"
+        id="forward-friend-search"
+      />
 
       <div className="mb-3 max-h-52 overflow-y-auto rounded-xl border border-white/10 bg-black/20">
         {loading && (
@@ -78,11 +90,13 @@ export default function ForwardToFriendModal({
           <div className="p-4 text-center text-sm text-gray-500">Không có bạn phù hợp.</div>
         )}
         {!loading &&
-          filtered.map((f) => {
-            const id = String(f.id ?? f._id);
+          filtered.map((f, idx) => {
+            const rawId = f.id ?? f._id;
+            const idStr = rawId != null && rawId !== '' ? String(rawId) : '';
+            const rowKey = f.listKey ?? (idStr || `fwd-friend-${idx}`);
             return (
               <label
-                key={id}
+                key={rowKey}
                 className="flex cursor-pointer items-center gap-3 border-b border-white/5 px-3 py-2.5 last:border-0 hover:bg-white/5"
               >
                 <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white/10 text-lg">
@@ -93,9 +107,10 @@ export default function ForwardToFriendModal({
                 </div>
                 <input
                   type="checkbox"
-                  checked={!!selected[id]}
-                  onChange={() => toggle(id)}
-                  className="h-4 w-4 rounded border-gray-500"
+                  checked={idStr ? !!selected[idStr] : false}
+                  onChange={() => idStr && toggle(idStr)}
+                  disabled={!idStr}
+                  className="h-4 w-4 rounded border-gray-500 disabled:opacity-40"
                 />
               </label>
             );
@@ -104,7 +119,11 @@ export default function ForwardToFriendModal({
 
       <div className="mb-3 rounded-xl border border-dashed border-white/15 bg-white/5 p-3 text-sm text-gray-300">
         <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Xem trước</div>
-        <p className="line-clamp-4 whitespace-pre-wrap break-words">{previewText || '—'}</p>
+        {previewMessage ? (
+          <ForwardMessagePreview message={previewMessage} t={t} />
+        ) : (
+          <p className="line-clamp-4 whitespace-pre-wrap break-words">{previewText || '—'}</p>
+        )}
       </div>
 
       <div className="mb-4">

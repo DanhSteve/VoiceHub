@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const { socketAuth } = require('/shared/middleware/auth');
-const { connectRedis } = require('/shared');
+const { connectRedis, disconnectRedis } = require('/shared');
 const registerChatNamespace = require('./socket/chat.namespace');
 const { setChatNamespace, publishRealtimeEvent } = require('./socket/realtimeHub');
 
@@ -15,14 +15,22 @@ app.use(express.json({ limit: '1mb' }));
 const INTERNAL_REALTIME_TOKEN = process.env.REALTIME_INTERNAL_TOKEN || '';
 
 const isProd = process.env.NODE_ENV === 'production';
-const corsOrigin = process.env.CORS_ORIGIN || (isProd ? '' : 'http://localhost:5173,http://localhost:3000');
+// Dev: luôn cho phép mọi origin để FE truy cập được qua IP LAN và port bất kỳ.
+// Production: chỉ whitelist theo CORS_ORIGIN.
+const corsOriginRaw = String(process.env.CORS_ORIGIN || '').trim();
+const corsOrigin = corsOriginRaw || (isProd ? '' : '');
 const parsedOrigins = corsOrigin
   .split(',')
   .map((origin) => origin.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim())
   .filter(Boolean);
 
-const socketCorsOrigin =
-  parsedOrigins.length === 0 ? (isProd ? false : true) : parsedOrigins.length === 1 ? parsedOrigins[0] : parsedOrigins;
+const socketCorsOrigin = !isProd
+  ? true
+  : parsedOrigins.length === 0
+    ? false
+    : parsedOrigins.length === 1
+      ? parsedOrigins[0]
+      : parsedOrigins;
 
 app.use(
   cors({
@@ -37,7 +45,11 @@ app.get('/health', (req, res) => {
 
 app.post('/internal/realtime/publish', (req, res) => {
   const token = req.headers['x-realtime-token'];
-  if (INTERNAL_REALTIME_TOKEN && token !== INTERNAL_REALTIME_TOKEN) {
+  const expected = String(INTERNAL_REALTIME_TOKEN || '').trim();
+  if (!expected) {
+    return res.status(503).json({ ok: false, message: 'REALTIME_INTERNAL_TOKEN not configured' });
+  }
+  if (token !== expected) {
     return res.status(401).json({ ok: false, message: 'Unauthorized realtime publish' });
   }
 
@@ -49,6 +61,8 @@ app.post('/internal/realtime/publish', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3017;
+const SOCKET_PING_INTERVAL_MS = Math.max(10000, Number(process.env.SOCKET_PING_INTERVAL_MS || 25000));
+const SOCKET_PING_TIMEOUT_MS = Math.max(20000, Number(process.env.SOCKET_PING_TIMEOUT_MS || 60000));
 
 const server = http.createServer(app);
 
@@ -58,6 +72,8 @@ const io = new Server(server, {
     methods: ['GET', 'POST'],
     credentials: true,
   },
+  pingInterval: SOCKET_PING_INTERVAL_MS,
+  pingTimeout: SOCKET_PING_TIMEOUT_MS,
 });
 
 async function attachRedisAdapterIfEnabled() {
@@ -92,6 +108,9 @@ function startListen() {
           : String(socketCorsOrigin);
     console.log(`Socket Service đang chạy trên cổng ${PORT}`);
     console.log(`[socket-service] Allowed origins: ${originLabel}`);
+    console.log(
+      `[socket-service] pingInterval=${SOCKET_PING_INTERVAL_MS}ms pingTimeout=${SOCKET_PING_TIMEOUT_MS}ms offlineGrace=${Math.max(0, Number(process.env.PRESENCE_OFFLINE_GRACE_MS || 12000))}ms`
+    );
     const presenceToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
     console.log(
       `[socket-service] Presence → user-service: USER_SERVICE_URL=${process.env.USER_SERVICE_URL || 'http://user-service:3004'} ` +
@@ -115,4 +134,18 @@ function startListen() {
   registerChatNamespace(chatNamespace);
 
   startListen();
+
+  process.on('SIGTERM', () => {
+    console.log('[socket-service] SIGTERM: closing Socket.IO and HTTP');
+    io.close(() => {
+      server.close(async () => {
+        try {
+          await disconnectRedis();
+        } catch (e) {
+          /* ignore */
+        }
+        process.exit(0);
+      });
+    });
+  });
 })();

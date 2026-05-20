@@ -2,9 +2,9 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const http = require('http');
 const app = require('./app');
-const { connectDB, connectRedis } = require('/shared');
+const { connectDB, connectRedis, disconnectDB, disconnectRedis } = require('/shared');
 const initializeSocket = require('./socket/index');
-const { startFriendDmConsumer } = require('./workers/friendDmConsumer');
+const { startFriendDmConsumer, stopFriendDmConsumer } = require('./workers/friendDmConsumer');
 const { startStorageGcScheduler } = require('./jobs/storageGc');
 
 const PORT = process.env.PORT || 3006;
@@ -41,10 +41,21 @@ connectDB(mongoUri)
   });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('SIGTERM signal received: closing HTTP server');
-  server.close(() => {
+  try {
+    await stopFriendDmConsumer();
+  } catch (e) {
+    console.error('[chat-service] stopFriendDmConsumer', e.message);
+  }
+  server.close(async () => {
     console.log('HTTP server closed');
+    try {
+      await disconnectRedis();
+      await disconnectDB();
+    } catch (e) {
+      /* ignore */
+    }
     process.exit(0);
   });
 });

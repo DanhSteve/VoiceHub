@@ -1,0 +1,30 @@
+sequenceDiagram
+autonumber
+actor Admin as OrgOwnerAdmin
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant OrgAuth as OrgProtectAuthorize
+participant DeptCtrl as DepartmentController
+participant ChannelCtrl as ChannelControllerAlias
+participant OrgDb as MongoDepartmentChannelMembership
+participant ChatSvc as ChatService
+Admin->>Client: Tao department
+Client->>Gateway: POST /api/organizations/:orgId/departments
+Gateway->>OrgAuth: protect + authorize owner/admin
+OrgAuth-->>Gateway: pass
+Gateway->>DeptCtrl: createDepartment
+DeptCtrl->>OrgDb: insert Department
+DeptCtrl-->>Client: 201
+Admin->>Client: Tao channel trong department
+Client->>Gateway: POST /api/organizations/:orgId/departments/:deptId/channels
+Gateway->>ChannelCtrl: createChannel
+ChannelCtrl->>OrgDb: insert Channel
+ChannelCtrl-->>Client: 201
+Admin->>Client: Xoa channel
+Client->>Gateway: DELETE /api/.../channels/:id
+Gateway->>ChannelCtrl: deleteChannel
+ChannelCtrl->>OrgDb: set isActive=false
+ChannelCtrl-->>Client: 200
+ChatSvc->>Gateway: GET /api/organizations/:orgId/accessible-channel-ids
+Gateway->>DeptCtrl: getAccessibleChannelIds
+DeptCtrl->>OrgDb: compute by membership + channel members

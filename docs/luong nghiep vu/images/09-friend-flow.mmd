@@ -1,0 +1,29 @@
+sequenceDiagram
+autonumber
+actor UserA as RequestSender
+actor UserB as RequestReceiver
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant FriendCtrl as FriendController
+participant FriendSvc as FriendService
+participant FriendDb as MongoFriend
+participant Redis as RedisFriendCache
+participant Realtime as RealtimeHub
+UserA->>Client: Gui loi moi ket ban
+Client->>Gateway: POST /api/friends/request
+Gateway->>FriendCtrl: sendFriendRequest
+FriendCtrl->>FriendSvc: validate self/duplicate
+FriendSvc->>FriendDb: save status=pending
+FriendSvc->>Redis: invalidate friends:<userA>
+FriendSvc->>Realtime: emit friend_request_sent
+FriendSvc-->>Client: 201
+UserB->>Client: Chap nhan loi moi
+Client->>Gateway: POST /api/friends/:friendId/accept
+Gateway->>FriendCtrl: acceptFriendRequest
+FriendSvc->>FriendDb: update status=accepted
+alt Thanh cong
+  FriendSvc->>Realtime: emit friend_request_accepted
+  FriendSvc-->>Client: 200
+else Khong tim thay/khong hop le
+  FriendSvc-->>Client: 404/409
+end

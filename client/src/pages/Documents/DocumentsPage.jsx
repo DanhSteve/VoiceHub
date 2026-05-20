@@ -1,98 +1,22 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, Dropdown, GlassCard, GradientButton, Modal } from '../../components/Shared';
 import { useTheme } from '../../context/ThemeContext';
 import { threeFramePageHeader } from '../../theme/shellTheme';
 import { useAppStrings } from '../../locales/appStrings';
-import { PageSearchBar, SearchFilterChips } from '../../features/search';
+import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
+import api from '../../services/api';
 
-const DEMO_DOCS = [
-  {
-    id: 1,
-    name: 'Kế Hoạch Dự Án Q1.pdf',
-    size: '2.4 MB',
-    type: '📄',
-    color: 'from-red-500 to-orange-500',
-    category: 'Tài liệu',
-    owner: 'Sarah Chen',
-    modified: '2 giờ trước',
-    shared: true,
-    starred: true,
-  },
-  {
-    id: 2,
-    name: 'Hệ Thống Thiết Kế.fig',
-    size: '15.8 MB',
-    type: '🎨',
-    color: 'from-purple-600 to-pink-600',
-    category: 'Thiết kế',
-    owner: 'Emma Wilson',
-    modified: '1 ngày trước',
-    shared: true,
-    starred: false,
-  },
-  {
-    id: 3,
-    name: 'Biên Bản Họp.docx',
-    size: '124 KB',
-    type: '📝',
-    color: 'from-blue-500 to-cyan-500',
-    category: 'Văn bản',
-    owner: 'Mike Ross',
-    modified: '3 ngày trước',
-    shared: false,
-    starred: true,
-  },
-  {
-    id: 4,
-    name: 'Báo Cáo Phân Tích.xlsx',
-    size: '892 KB',
-    type: '📊',
-    color: 'from-green-500 to-emerald-500',
-    category: 'Bảng tính',
-    owner: 'David Kim',
-    modified: '1 tuần trước',
-    shared: true,
-    starred: false,
-  },
-  {
-    id: 5,
-    name: 'Presentation_Demo.pptx',
-    size: '5.2 MB',
-    type: '📽️',
-    color: 'from-orange-500 to-red-500',
-    category: 'Trình chiếu',
-    owner: 'Lisa Park',
-    modified: '2 tuần trước',
-    shared: true,
-    starred: false,
-  },
-  {
-    id: 6,
-    name: 'Code_Review_Notes.md',
-    size: '45 KB',
-    type: '💻',
-    color: 'from-cyan-500 to-blue-500',
-    category: 'Code',
-    owner: 'Tom Zhang',
-    modified: '4 ngày trước',
-    shared: false,
-    starred: true,
-  },
-];
-
-const DEMO_FOLDERS = [
-  { name: 'Dự Án', count: 12, icon: '📁', color: 'from-purple-600 to-pink-600' },
-  { name: 'Thiết Kế', count: 24, icon: '🎨', color: 'from-blue-500 to-cyan-500' },
-  { name: 'Tài Liệu', count: 8, icon: '📄', color: 'from-green-500 to-emerald-500' },
-  { name: 'Ảnh & Video', count: 45, icon: '🖼️', color: 'from-orange-500 to-red-500' },
-];
+const DEMO_DOCS = [];
+const DEMO_FOLDERS = [];
 
 function DocumentsPage() {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
+  const [searchParams] = useSearchParams();
+  const organizationId = searchParams.get('organizationId') || '';
   const headerStrip = threeFramePageHeader(isDarkMode);
 
   const [viewMode, setViewMode] = useState('grid');
@@ -108,6 +32,58 @@ function DocumentsPage() {
   const [showShareModal, setShowShareModal] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [deleteConfirmFileId, setDeleteConfirmFileId] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+
+  const formatSize = (bytes) => {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return '-';
+    if (n < 1024) return `${Math.round(n)} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const mapDocument = (doc) => ({
+    id: doc._id || doc.id,
+    name: doc.name || doc.title || 'Document',
+    type: String(doc.mimeType || '').includes('pdf') ? 'PDF' : '📄',
+    size: formatSize(doc.fileSize),
+    category: doc.organizationId ? 'Workspace' : 'Personal',
+    owner: doc.uploadedBy?.displayName || doc.uploadedBy?.username || 'VoiceHub',
+    modified: doc.updatedAt ? new Date(doc.updatedAt).toLocaleDateString('vi-VN') : '',
+    color: 'from-cyan-500 to-blue-600',
+    starred: false,
+    shared: Boolean(doc.isPublic || doc.organizationId),
+    raw: doc,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    setDocumentsLoading(true);
+    api
+      .get('/documents', {
+        params: {
+          ...(organizationId ? { organizationId } : {}),
+          limit: 100,
+        },
+      })
+      .then((response) => {
+        if (cancelled) return;
+        const body = response?.data ?? response;
+        const inner = body?.data ?? body;
+        const list = Array.isArray(inner?.documents) ? inner.documents : Array.isArray(inner) ? inner : [];
+        setDocuments(list.map(mapDocument));
+      })
+      .catch(() => {
+        if (!cancelled) setDocuments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setDocumentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
 
   const handleStarFile = (fileId) => {
     toast.success(t('documents.toastStar'));
@@ -161,7 +137,7 @@ function DocumentsPage() {
   };
 
   const filteredDocs = useMemo(() => {
-    let list = [...DEMO_DOCS];
+    let list = documents.length ? [...documents] : [...DEMO_DOCS];
     if (activeFolder === 'Thiết Kế') list = list.filter((d) => d.category === 'Thiết kế');
     else if (activeFolder === 'Tài Liệu') list = list.filter((d) => d.category === 'Tài liệu');
     else if (activeFolder === 'Ảnh & Video') list = [];
@@ -170,7 +146,7 @@ function DocumentsPage() {
     const dq = docNameQuery.trim().toLowerCase();
     if (dq) list = list.filter((d) => String(d.name || '').toLowerCase().includes(dq));
     return list;
-  }, [activeFolder, listFilter, docNameQuery]);
+  }, [activeFolder, documents, listFilter, docNameQuery]);
 
   return (
     <>
@@ -198,15 +174,15 @@ function DocumentsPage() {
                   </GradientButton>
                 </div>
               </div>
-              <div className="mb-4 max-w-xl space-y-2">
-                <PageSearchBar
-                  value={docNameQuery}
-                  onChange={setDocNameQuery}
-                  placeholder={t('documents.searchPlaceholder')}
-                  isDarkMode={isDarkMode}
-                  id="documents-name-search"
-                  aria-label={t('documents.searchAria')}
-                />
+              <PageSearchToolbar
+                className="-mx-6"
+                value={docNameQuery}
+                onChange={setDocNameQuery}
+                placeholder={t('documents.searchPlaceholder')}
+                isDarkMode={isDarkMode}
+                id="documents-name-search"
+                aria-label={t('documents.searchAria')}
+              >
                 <SearchFilterChips
                   aria-label={t('documents.listFilterAria')}
                   options={docListFilterOptions}
@@ -215,7 +191,7 @@ function DocumentsPage() {
                   isDarkMode={isDarkMode}
                   size="sm"
                 />
-              </div>
+              </PageSearchToolbar>
               {/* Storage Bar */}
               <GlassCard>
                 <div className="flex items-center justify-between mb-2">

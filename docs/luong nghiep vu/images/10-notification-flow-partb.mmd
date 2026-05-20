@@ -1,0 +1,21 @@
+sequenceDiagram
+autonumber
+actor Domain as DichVuNguon
+actor User as NguoiDung
+participant Gateway as ApiGateway
+participant NotiSvc as NotificationService
+participant NotiDb as Mongo_Notification
+
+Note over Domain,NotiDb: Chặng 2 - Lỗi token nội bộ và thao tác đọc
+Domain->>Gateway: POST /api/notifications
+Gateway->>NotiSvc: Validate internal token
+alt Token sai hoặc thiếu
+  NotiSvc-->>Domain: 401/403
+else Token đúng
+  NotiSvc->>NotiDb: Lưu thông báo
+end
+
+User->>Gateway: PATCH /api/notifications/read-all
+Gateway->>NotiSvc: Mark read
+NotiSvc->>NotiDb: Update isRead/readAt
+NotiSvc-->>User: 200

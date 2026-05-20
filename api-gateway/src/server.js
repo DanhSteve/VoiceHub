@@ -1,4 +1,17 @@
 require('dotenv').config();
+
+if (process.env.NODE_ENV === 'production') {
+  const jwt = String(process.env.JWT_SECRET || '').trim();
+  if (!jwt || jwt === 'your-secret-key' || jwt === 'your-secret-key-change-in-production') {
+    console.error('[API-Gateway] FATAL: set JWT_SECRET to a strong non-default value in production.');
+    process.exit(1);
+  }
+  if (!String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim()) {
+    console.error('[API-Gateway] FATAL: GATEWAY_INTERNAL_TOKEN is required in production.');
+    process.exit(1);
+  }
+}
+
 const http = require('http');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const app = require('./app');
@@ -65,6 +78,11 @@ server.on('upgrade', (req, socket, head) => {
 server.listen(PORT, () => {
   console.log(`API Gateway đang chạy trên cổng ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  if (!String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim()) {
+    console.warn(
+      '[API-Gateway] GATEWAY_INTERNAL_TOKEN chưa đặt — các service downstream có thể từ chối x-user-id. Thêm vào .env (trùng với user-service, task-service, …).'
+    );
+  }
   console.log(`Socket proxy upstream: ${services.socket.url}`);
   console.log(`Voice signaling proxy upstream: ${services.voice.url}`);
   console.log(`Voice signaling path: ${VOICE_SIGNAL_PATH}`);

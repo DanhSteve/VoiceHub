@@ -17,6 +17,16 @@ export function toDateKey(d) {
   return `${y}-${m}-${day}`;
 }
 
+/** YYYY-MM-DD (UTC) */
+export function toDateKeyUTC(d) {
+  const x = new Date(d);
+  const y = x.getUTCFullYear();
+  const m = String(x.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(x.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+
 export function formatTimeLabel(d) {
   return new Date(d).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 }
@@ -120,8 +130,11 @@ export function mapTaskToCalendarEvent(task) {
   if (Number.isNaN(due.getTime())) return null;
 
   const id = `task:${task._id}`;
-  const date = toDateKey(due);
+  // API date/time có thể đang ở UTC (vd: ISO ...Z).
+  // Lấy ngày theo UTC để tránh bị lệch sang ngày khác trong local.
+  const date = toDateKeyUTC(due);
   return {
+
     id,
     kind: 'task',
     source: 'api',
@@ -164,7 +177,9 @@ export function mapMeetingToCalendarEvent(meeting) {
   const durationMins = Math.max(1, Math.round((end - start) / 60000));
 
   const id = `meeting:${meeting._id}`;
-  const date = toDateKey(start);
+  // API date/time có thể đang ở UTC (vd: ISO ...Z).
+  // Lấy ngày theo UTC để tránh bị lệch sang ngày khác trong local.
+  const date = toDateKeyUTC(start);
   return {
     id,
     kind: 'meeting',

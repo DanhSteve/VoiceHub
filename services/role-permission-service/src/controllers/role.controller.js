@@ -194,6 +194,17 @@ class RoleController {
       });
     }
   }
+
+  async purgeByServerContext(req, res) {
+    try {
+      const { serverId } = req.params;
+      const data = await roleService.purgeByServerContext(serverId);
+      res.json({ success: true, data });
+    } catch (error) {
+      logger.error('purgeByServerContext error:', error);
+      res.status(400).json({ success: false, message: error.message });
+    }
+  }
 }
 
 module.exports = new RoleController();

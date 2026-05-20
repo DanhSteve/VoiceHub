@@ -2,12 +2,13 @@ const amqp = require('amqplib');
 const { getRedisClient } = require('/shared');
 const messageService = require('../services/message.service');
 const { emitRealtimeEvent } = require('/shared');
+const { assertDmCanSend } = require('../utils/verifyDmRelationship');
 
 const EXCHANGE = process.env.RABBITMQ_EXCHANGE || 'voicehub.topic';
 const QUEUE = process.env.RABBITMQ_FRIEND_DM_QUEUE || 'voicehub.friend.dm';
 const ROUTING_KEY = process.env.RABBITMQ_FRIEND_DM_ROUTING_KEY || 'friend.dm';
 
-let consumerTag = null;
+let dmConsumer = null;
 
 async function isDuplicate(correlationId) {
   if (!correlationId) return false;
@@ -25,6 +26,8 @@ async function processPayload(data) {
     receiverId,
     content,
     messageType = 'text',
+    replyToMessageId,
+    authorization,
   } = data;
 
   if (!senderId || !receiverId || !content) {
@@ -37,12 +40,33 @@ async function processPayload(data) {
     return;
   }
 
-  const message = await messageService.createMessage({
+  try {
+    await assertDmCanSend({
+      peerId: receiverId,
+      authorizationHeader: authorization,
+    });
+  } catch (dmErr) {
+    await emitRealtimeEvent({
+      event: 'friend:send_failed',
+      userId: String(senderId),
+      payload: {
+        receiverId: String(receiverId),
+        code: dmErr.code || 'dm_forbidden',
+        message: dmErr.message || 'Cannot send message',
+        ...(dmErr.blockerId ? { blockerId: String(dmErr.blockerId) } : {}),
+      },
+    });
+    return;
+  }
+
+  const messageData = {
     senderId,
     receiverId,
     content,
     messageType: messageType || 'text',
-  });
+  };
+  if (replyToMessageId) messageData.replyToMessageId = replyToMessageId;
+  const message = await messageService.createMessage(messageData);
 
   await emitRealtimeEvent({
     event: 'friend:new_message',
@@ -86,12 +110,32 @@ async function startFriendDmConsumer() {
     },
     { noAck: false }
   );
-  consumerTag = tag;
 
   conn.on('error', (err) => console.error('[friendDmConsumer] conn error', err.message));
   console.log(`[friendDmConsumer] listening on ${QUEUE}`);
 
-  return { conn, ch };
+  dmConsumer = { conn, ch, tag };
+  return dmConsumer;
 }
 
-module.exports = { startFriendDmConsumer };
+async function stopFriendDmConsumer() {
+  if (!dmConsumer) return;
+  try {
+    await dmConsumer.ch.cancel(dmConsumer.tag);
+  } catch (e) {
+    /* ignore */
+  }
+  try {
+    await dmConsumer.ch.close();
+  } catch (e) {
+    /* ignore */
+  }
+  try {
+    await dmConsumer.conn.close();
+  } catch (e) {
+    /* ignore */
+  }
+  dmConsumer = null;
+}
+
+module.exports = { startFriendDmConsumer, stopFriendDmConsumer };

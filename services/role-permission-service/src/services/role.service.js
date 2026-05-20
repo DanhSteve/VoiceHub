@@ -1,9 +1,39 @@
+const { mongoose } = require('/shared/config/mongo');
 const Role = require('../models/Role');
 const UserRole = require('../models/UserRole');
 const { getRedisClient, roleWebhook, logger } = require('/shared');
 const axios = require('axios');
 
-const ORGANIZATION_SERVICE_URL = process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013';
+const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
+  /\/$/,
+  ''
+);
+const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
+
+function isHierarchyRoleName(name) {
+  const lower = String(name || '').toLowerCase();
+  return /(?:^|\s)(div|dep|team)_[a-f0-9]{6}\b/.test(lower);
+}
+
+async function syncOrgMembershipPlacement(userId, organizationId) {
+  if (!GATEWAY_INTERNAL_TOKEN || !userId || !organizationId) return;
+  try {
+    await axios.post(
+      `${ORGANIZATION_SERVICE_URL}/api/organizations/internal/sync-membership-placement`,
+      { userId: String(userId), organizationId: String(organizationId) },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gateway-internal-token': GATEWAY_INTERNAL_TOKEN,
+        },
+        timeout: 15000,
+        validateStatus: () => true,
+      }
+    );
+  } catch (e) {
+    logger.warn('[role.service] syncOrgMembershipPlacement failed', e.message);
+  }
+}
 
 class RoleService {
   // Tạo role mới
@@ -82,7 +112,11 @@ class RoleService {
       // Kiểm tra đã có role chưa
       const existing = await UserRole.findOne({ userId, serverId, roleId });
       if (existing) {
-        throw new Error('User already has this role');
+        logger.info(`Role already assigned (idempotent): user ${userId}, role ${roleId}, server ${serverId}`);
+        if (isHierarchyRoleName(role.name)) {
+          void syncOrgMembershipPlacement(userId, serverId);
+        }
+        return existing;
       }
 
       const userRole = new UserRole({
@@ -102,6 +136,9 @@ class RoleService {
       }
 
       logger.info(`Role assigned: user ${userId}, role ${roleId}, server ${serverId}`);
+      if (isHierarchyRoleName(role.name)) {
+        void syncOrgMembershipPlacement(userId, serverId);
+      }
       return userRole;
     } catch (error) {
       logger.error('Error assigning role:', error);
@@ -129,9 +166,16 @@ class RoleService {
         await redis.del(cacheKey);
       }
 
+      let removedRole = null;
+      try {
+        removedRole = await Role.findById(roleId);
+      } catch {
+        /* ignore */
+      }
+
       // Gửi webhook
       try {
-        const role = await Role.findById(roleId);
+        const role = removedRole || (await Role.findById(roleId));
         const serverResponse = await axios.get(`${ORGANIZATION_SERVICE_URL}/api/servers/${serverId}`);
         const serverName = serverResponse.data?.data?.name || 'Server';
         
@@ -148,6 +192,9 @@ class RoleService {
       }
 
       logger.info(`Role removed: user ${userId}, role ${roleId}, server ${serverId}`);
+      if (removedRole && isHierarchyRoleName(removedRole.name)) {
+        void syncOrgMembershipPlacement(userId, serverId);
+      }
       return userRole;
     } catch (error) {
       logger.error('Error removing role:', error);
@@ -243,6 +290,30 @@ class RoleService {
     } catch (error) {
       logger.error('Error deleting role:', error);
       throw new Error(`Error deleting role: ${error.message}`);
+    }
+  }
+
+  /**
+   * Xóa toàn bộ UserRole + vô hiệu hóa Role theo ngữ cảnh server/org (serverId = organizationId).
+   * Gọi nội bộ khi owner xóa tổ chức.
+   */
+  async purgeByServerContext(serverId) {
+    try {
+      const sid = new mongoose.Types.ObjectId(String(serverId));
+      const userRolesResult = await UserRole.deleteMany({ serverId: sid });
+      const rolesResult = await Role.deleteMany({
+        $or: [{ serverId: sid }, { organizationId: sid }],
+      });
+      logger.info(
+        `purgeByServerContext: serverId=${serverId} rolesDeleted=${rolesResult.deletedCount} userRolesDeleted=${userRolesResult.deletedCount}`
+      );
+      return {
+        deletedRoles: rolesResult.deletedCount || 0,
+        deletedUserRoles: userRolesResult.deletedCount || 0,
+      };
+    } catch (error) {
+      logger.error('Error purgeByServerContext:', error);
+      throw new Error(`Error purgeByServerContext: ${error.message}`);
     }
   }
 }

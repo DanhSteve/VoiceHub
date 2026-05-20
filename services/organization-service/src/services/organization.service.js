@@ -1,9 +1,7 @@
 const Organization = require('../models/Organization');
-const Server = require('../models/Server');
-const { getRedisClient, organizationWebhook, logger } = require('/shared');
-const axios = require('axios');
-
-const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3004';
+const { getRedisClient, organizationWebhook, logger, fetchUserProfileByIdInternal } = require('/shared');
+const { ensureDefaultOrgRoles } = require('./rolePermissionOrgSync');
+const { purgeOrganizationEverywhere } = require('./organizationCascadePurge');
 
 class OrganizationService {
   // Tạo organization mới
@@ -13,7 +11,7 @@ class OrganizationService {
 
       // Kiểm tra ownerId có tồn tại không (gọi user-service)
       try {
-        await axios.get(`${USER_SERVICE_URL}/api/users/${ownerId}`);
+        await fetchUserProfileByIdInternal(ownerId);
       } catch (error) {
         throw new Error('Owner user not found');
       }
@@ -27,6 +25,8 @@ class OrganizationService {
       });
 
       await organization.save();
+
+      await ensureDefaultOrgRoles(organization._id);
 
       // Cache organization
       const redis = getRedisClient();
@@ -127,7 +127,7 @@ class OrganizationService {
     }
   }
 
-  // Xóa organization
+  // Xóa organization (toàn bộ dữ liệu liên quan — dùng khi API legacy gọi trực tiếp service)
   async deleteOrganization(organizationId, userId) {
     try {
       const organization = await Organization.findById(organizationId);
@@ -136,24 +136,14 @@ class OrganizationService {
         throw new Error('Organization not found');
       }
 
-      // Chỉ owner mới được xóa
       if (organization.ownerId.toString() !== userId.toString()) {
         throw new Error('Only owner can delete organization');
       }
 
-      // Soft delete
-      organization.isActive = false;
-      await organization.save();
+      await purgeOrganizationEverywhere(organizationId);
 
-      // Xóa cache
-      const redis = getRedisClient();
-      if (redis) {
-        const cacheKey = `organization:${organizationId}`;
-        await redis.del(cacheKey);
-      }
-
-      logger.info(`Organization deleted: ${organizationId}`);
-      return organization;
+      logger.info(`Organization and related data purged: ${organizationId}`);
+      return { _id: organizationId, deleted: true };
     } catch (error) {
       logger.error('Error deleting organization:', error);
       throw new Error(`Error deleting organization: ${error.message}`);

@@ -1,7 +1,12 @@
 const notificationService = require('../services/notification.service');
+const { publishDispatchJob } = require('../messaging/notificationDispatch.publisher');
 const { logger } = require('/shared');
 
 class NotificationController {
+  _asyncDispatchEnabled() {
+    return String(process.env.NOTIFICATION_ASYNC_DISPATCH || 'false').toLowerCase() === 'true';
+  }
+
   // Tạo notification mới
   async createNotification(req, res) {
     try {
@@ -14,6 +19,14 @@ class NotificationController {
         });
       }
 
+      if (this._asyncDispatchEnabled()) {
+        await publishDispatchJob({
+          kind: 'single',
+          userId,
+          notification: { type, title, content, data, actionUrl },
+        });
+        return res.status(202).json({ success: true, queued: true });
+      }
       const notification = await notificationService.createNotification({
         userId,
         type,
@@ -48,6 +61,14 @@ class NotificationController {
         });
       }
 
+      if (this._asyncDispatchEnabled()) {
+        await publishDispatchJob({
+          kind: 'bulk',
+          userIds,
+          notification: { type, title, content, data, actionUrl },
+        });
+        return res.status(202).json({ success: true, queued: true });
+      }
       const notifications = await notificationService.createBulkNotifications(userIds, {
         type,
         title,
@@ -72,9 +93,8 @@ class NotificationController {
   // Lấy notifications của user
   async getUserNotifications(req, res) {
     try {
-      const userId =
-        req.headers['x-user-id'] || req.user?.id || req.userContext?.userId || req.params.userId;
-      const { isRead, type, page, limit } = req.query;
+      const userId = req.user?.id || req.userContext?.userId || req.params.userId;
+      const { isRead, type, page, limit, organizationId } = req.query;
 
       if (!userId) {
         return res.status(400).json({
@@ -86,6 +106,7 @@ class NotificationController {
       const result = await notificationService.getUserNotifications(userId, {
         isRead: isRead === 'true' ? true : isRead === 'false' ? false : undefined,
         type,
+        organizationId,
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 50,
       });
@@ -106,8 +127,7 @@ class NotificationController {
   // Đánh dấu đã đọc mọi thông báo kết bạn liên quan tới một user (sau accept/reject)
   async markFriendRelatedRead(req, res) {
     try {
-      const userId =
-        req.headers['x-user-id'] || req.user?.id || req.userContext?.userId;
+      const userId = req.user?.id || req.userContext?.userId;
       const { counterpartyId } = req.body || {};
 
       if (!userId) {

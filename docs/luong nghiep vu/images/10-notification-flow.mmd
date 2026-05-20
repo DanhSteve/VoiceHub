@@ -1,0 +1,29 @@
+sequenceDiagram
+autonumber
+actor DomainSvc as UpstreamDomainService
+actor User as EndUser
+participant Gateway as ApiGateway
+participant NotifyCtrl as NotificationController
+participant NotifySvc as NotificationService
+participant NotifyDb as MongoNotification
+participant Realtime as RealtimeHub
+participant Client as WebClient
+DomainSvc->>Gateway: POST /api/notifications (internal token)
+Gateway->>NotifyCtrl: createNotification
+NotifyCtrl->>NotifySvc: validate internal auth + payload
+alt Internal token hop le
+  NotifySvc->>NotifyDb: insert notification
+  NotifySvc->>Realtime: emit notification:new
+  NotifySvc-->>DomainSvc: 201 created
+else Token sai/thieu
+  NotifySvc-->>DomainSvc: 401/403
+end
+User->>Client: Mo trang thong bao
+Client->>Gateway: GET /api/notifications
+Gateway->>NotifyCtrl: getUserNotifications
+NotifySvc->>NotifyDb: query by userId + paging
+NotifySvc-->>Client: list notifications
+User->>Client: Mark read all
+Client->>Gateway: PATCH /api/notifications/read-all
+NotifySvc->>NotifyDb: set isRead=true + readAt
+NotifySvc->>Realtime: emit notification:read_all

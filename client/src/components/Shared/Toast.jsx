@@ -5,16 +5,17 @@ import { useTheme } from '../../context/ThemeContext';
  */
 function Toast({ message, type = 'success', onClose }) {
   const { isDarkMode } = useTheme();
+  const isError = type === 'error' || type === 'fail';
 
   const dark =
-    type === 'error'
+    isError
       ? 'border-red-500/40 bg-red-950/95 text-red-50'
       : type === 'info'
         ? 'border-sky-500/40 bg-sky-950/95 text-sky-50'
         : 'border-emerald-500/40 bg-emerald-950/95 text-emerald-50';
 
   const light =
-    type === 'error'
+    isError
       ? 'border-red-200 bg-white text-red-900 shadow-red-100/50'
       : type === 'info'
         ? 'border-sky-200 bg-white text-sky-900 shadow-sky-100/50'

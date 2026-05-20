@@ -45,8 +45,9 @@ function loadLocalCustomEvents() {
 
 /**
  * Feed lịch: task + meeting (API) trong tháng của selectedDate, + sự kiện local (merge).
+ * Support lọc theo organizationId nếu cần.
  */
-export function useCalendarFeed(selectedDate) {
+export function useCalendarFeed(selectedDate, organizationId = '') {
   const [apiEvents, setApiEvents] = useState([]);
   const [localEvents, setLocalEvents] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -65,9 +66,12 @@ export function useCalendarFeed(selectedDate) {
   const fetchApi = useCallback(async () => {
     const dueFrom = range.from.toISOString();
     const dueTo = range.to.toISOString();
+    const filters = { dueFrom, dueTo };
+    if (organizationId) filters.organizationId = organizationId;
+    
     const [tRes, mRes] = await Promise.all([
-      taskAPI.getTasks({ dueFrom, dueTo }),
-      meetingAPI.getMeetings({ startFrom: dueFrom, startTo: dueTo }),
+      taskAPI.getTasks(filters),
+      meetingAPI.getMeetings({ startFrom: dueFrom, startTo: dueTo, ...(organizationId ? { organizationId } : {}) }),
     ]);
 
     const taskPayload = tRes.data?.data;
@@ -85,7 +89,7 @@ export function useCalendarFeed(selectedDate) {
       if (ev) mapped.push(ev);
     }
     return mergeAndSortCalendarEvents(mapped);
-  }, [range.from, range.to]);
+  }, [range.from, range.to, organizationId]);
 
   const refetch = useCallback(async () => {
     setLoading(true);

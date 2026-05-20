@@ -16,7 +16,13 @@
 // Import axios - HTTP client library
 import axios from 'axios';
 import { getToken, removeToken } from '../utils/tokenStorage';
-import { isLandingEmbedActive, isWriteHttpMethod } from '../utils/landingEmbedMode';
+import { mapAuthSessionMessageForLogout } from '../utils/authErrorMessages';
+import { isAutoLogoutDisabled } from '../utils/devAuth';
+import {
+  isLandingEmbedActive,
+  isLandingEmbedWriteGuardActive,
+  isWriteHttpMethod,
+} from '../utils/landingEmbedMode';
 
 // Import toast để show error notifications
 import toast from 'react-hot-toast';
@@ -24,7 +30,7 @@ import toast from 'react-hot-toast';
 /* ========================================
    API BASE URL
    - Production: lấy từ .env → VITE_API_URL
-   - Development: http://localhost:13000/api (API Gateway map host trong docker-compose)
+   - Development: http://localhost:3000/api (API Gateway port 3000)
    
    API Gateway sẽ route:
    /api/auth/* → auth-service (port 3001)
@@ -35,7 +41,8 @@ import toast from 'react-hot-toast';
    /api/friends/* → friend-service (port 3014)
 ======================================== */
 // Dev: dùng '/api' để request cùng origin → Vite proxy forward tới API Gateway (port 3000)
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+// Tránh hardcode http://localhost:3000 khi mở UI qua IP LAN.
+const API_URL = import.meta.env.DEV ? '/api' : import.meta.env.VITE_API_URL || '/api';
 
 /* ========================================
    TẠO AXIOS INSTANCE
@@ -56,6 +63,8 @@ const api = axios.create({
   headers: {
     // Content-Type: JSON (mọi request gửi JSON)
     'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
   },
 });
 
@@ -77,7 +86,7 @@ const api = axios.create({
 api.interceptors.request.use(
   // Success handler: modify config trước khi gửi
   (config) => {
-    if (isLandingEmbedActive() && isWriteHttpMethod(config.method)) {
+    if (isLandingEmbedWriteGuardActive() && isWriteHttpMethod(config.method)) {
       toast('Chế độ demo — không ghi dữ liệu lên server.', { icon: '🔒', duration: 2800 });
       const block = new Error('LANDING_EMBED_WRITE_BLOCKED');
       block.code = 'LANDING_EMBED_WRITE_BLOCKED';
@@ -85,6 +94,9 @@ api.interceptors.request.use(
       return Promise.reject(block);
     }
 
+    // Lấy token từ localStorage (được lưu khi login)
+    const token = getToken();
+    
     // Danh sách public routes không cần JWT token
     const publicRoutes = [
       '/auth/register',
@@ -95,19 +107,9 @@ api.interceptors.request.use(
       '/auth/reset-password',
       '/auth/verify-email', // Verify email chỉ dùng token trong query, KHÔNG dùng JWT
     ];
-
-    const isPublicRoute = publicRoutes.some((route) => config.url?.includes(route));
-
-    /** Demo landing: không gửi request bảo vệ tới gateway — chỉ giả lập UI */
-    if (isLandingEmbedActive() && !isPublicRoute) {
-      const block = new Error('LANDING_EMBED_API_BLOCKED');
-      block.code = 'LANDING_EMBED_API_BLOCKED';
-      block.isLandingEmbedBlock = true;
-      return Promise.reject(block);
-    }
-
-    // Lấy token từ localStorage (được lưu khi login)
-    const token = getToken();
+    
+    // Kiểm tra xem route có phải public route không
+    const isPublicRoute = publicRoutes.some(route => config.url?.includes(route));
     
     // Chỉ thêm JWT token nếu:
     // 1. Token tồn tại và không rỗng
@@ -158,20 +160,38 @@ api.interceptors.response.use(
   
   /* ----- ERROR HANDLER -----
      Response lỗi (status 400+, 500+, network error) */
-  (error) => {
+  async (error) => {
     if (error?.code === 'LANDING_EMBED_WRITE_BLOCKED' || error?.isLandingEmbedBlock) {
       return Promise.reject(error);
     }
 
-    /* Khung demo trên HomePage: không toast / không redirect — tránh "No token" khi có request lạc */
-    if (isLandingEmbedActive()) {
-      return Promise.reject({
-        message: error.response?.data?.message || error.message,
-        status: error.response?.status,
-        data: error.response?.data,
-        code: error.code,
-        isLandingEmbedSilent: true,
-      });
+
+    const config = error?.config;
+    const cacheMsg = String(error?.message || '').toLowerCase();
+    const likelyCacheFailure =
+      cacheMsg.includes('cache') || cacheMsg.includes('err_cache');
+    if (
+      config &&
+      !config.__cacheBustRetry &&
+      !error.response &&
+      (likelyCacheFailure || error.code === 'ERR_NETWORK')
+    ) {
+      const method = String(config.method || 'get').toLowerCase();
+      if (method === 'get' || method === 'head') {
+        config.__cacheBustRetry = true;
+        config.headers = {
+          ...config.headers,
+          'Cache-Control': 'no-store, no-cache',
+          Pragma: 'no-cache',
+        };
+        config.params = { ...(config.params || {}), _nc: Date.now() };
+        try {
+          return await api.request(config);
+        } catch (retryErr) {
+          error = retryErr;
+        }
+      }
+
     }
 
     console.error('[API] Request error:', {
@@ -251,9 +271,30 @@ api.interceptors.response.use(
         });
       }
 
+      // Request tùy chọn (vd: enrich profile sau khi đã xác thực bằng /auth/me) — không xóa token / redirect
+      if (error.config?.skipGlobalAuthFailure) {
+        return Promise.reject({
+          message,
+          status: error.response?.status,
+          data: error.response?.data,
+          code: error.code,
+        });
+      }
+
       // Hiển thị lỗi chi tiết từ server để debug (trước khi redirect)
       console.error('[API] 401 Unauthorized:', { message, url: error.config?.url, data: error.response?.data });
-      toast.error(message || 'Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.', { duration: 4000 });
+      const userFacing401 = mapAuthSessionMessageForLogout(message);
+      toast.error(userFacing401, { duration: 4000 });
+
+      if (isAutoLogoutDisabled()) {
+        console.warn('[API] VITE_DISABLE_AUTO_LOGOUT: bỏ qua xóa token và redirect /login (chỉ debug).');
+        return Promise.reject({
+          message,
+          status: error.response?.status,
+          data: error.response?.data,
+          code: error.code,
+        });
+      }
 
       // Trì hoãn redirect 2s để user đọc được toast và có thể mở console xem chi tiết
       setTimeout(() => {
@@ -268,28 +309,55 @@ api.interceptors.response.use(
         code: error.code,
       });
     }
-    // 403 Forbidden: Không có quyền
+    // 403 Forbidden: Không có quyền (caller có thể skip toast qua skipPermissionDeniedToast)
     else if (error.response?.status === 403) {
-      toast.error('Bạn không có quyền thực hiện hành động này');
+      if (!error.config?.skipPermissionDeniedToast) {
+        toast.error('Bạn không có quyền thực hiện hành động này');
+      }
     } 
     // 404 Not Found: Resource không tồn tại
     // Với /friends/search: không hiển thị toast ở đây, để trang Bạn bè tự hiển thị "Không tìm thấy người dùng"
     else if (error.response?.status === 404) {
       const isFriendSearch = requestUrl.includes('/friends/search');
-      if (!isFriendSearch) {
+      const silentOptional = error.config?.skipGlobalAuthFailure;
+      if (!isFriendSearch && !silentOptional) {
         toast.error(message || 'Không tìm thấy dữ liệu');
       }
     } 
     // 503 Service Unavailable: Auth/service tạm không dùng được (không thoát đăng nhập)
     else if (error.response?.status === 503) {
-      toast.error(message || 'Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau.');
+      const payload = error.response?.data || {};
+      const errCode = payload.code;
+      const isOrgSearchChannel =
+        requestUrl.includes('/messages/search') && errCode === 'CHANNEL_ACCESS_VERIFY_FAILED';
+      if (isOrgSearchChannel) {
+        toast.error(
+          'Tạm thời không kiểm tra được quyền kênh (organization-service). Kiểm tra service đang chạy, GATEWAY_INTERNAL_TOKEN đồng bộ, rồi thử lại.',
+          { duration: 6000 }
+        );
+      } else {
+        toast.error(message || 'Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau.');
+      }
     }
     // 504 Gateway Timeout: Backend không phản hồi trong thời gian cho phép
     else if (error.response?.status === 504) {
       toast.error('Backend đang xử lý quá lâu. Vui lòng thử lại sau hoặc kiểm tra logs backend.');
       console.error('[API] ❌ Gateway Timeout (504) - Backend may be slow or unresponsive');
     }
-    // 500+ Server Error: Lỗi server
+    // 502 Bad Gateway: thường là upstream (vd organization-service lỗi khi chat verify kênh)
+    else if (error.response?.status === 502) {
+      const payload = error.response?.data || {};
+      const errCode = payload.code;
+      if (requestUrl.includes('/messages/search') && errCode === 'CHANNEL_ACCESS_ORG_ERROR') {
+        toast.error(
+          'Organization-service lỗi khi xác minh kênh. Xem log organization-service / auth-service và thử lại.',
+          { duration: 5500 }
+        );
+      } else {
+        toast.error(message || 'Lỗi cổng dịch vụ (502). Vui lòng thử lại.');
+      }
+    }
+    // 500+ Server Error: Lỗi server (502 đã xử lý riêng)
     else if (error.response?.status >= 500) {
       toast.error(message || 'Lỗi server. Vui lòng thử lại sau.');
     }

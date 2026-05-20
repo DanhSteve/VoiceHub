@@ -1,0 +1,22 @@
+sequenceDiagram
+autonumber
+actor UserA as NguoiGuiLoiMoi
+actor UserB as NguoiNhanLoiMoi
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant FriendSvc as FriendService
+participant FriendDb as Mongo_Friend
+participant Realtime as SocketService
+
+Note over UserA,Realtime: Chặng 1 - Gửi và chấp nhận lời mời
+UserA->>Client: Gửi lời mời kết bạn
+Client->>Gateway: POST /api/friends/request
+Gateway->>FriendSvc: Forward
+FriendSvc->>FriendDb: Tạo relation pending
+FriendSvc->>Realtime: Emit friend_request_sent
+FriendSvc-->>Client: 201
+UserB->>Client: Chấp nhận lời mời
+Client->>Gateway: POST /api/friends/:friendId/accept
+Gateway->>FriendSvc: Forward
+FriendSvc->>FriendDb: Update accepted
+FriendSvc->>Realtime: Emit accepted

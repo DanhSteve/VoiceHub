@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const logger = require('../utils/logger');
+let connectionListenersBound = false;
 
 /**
  * Lưu ý: trong mỗi microservice, model/controller PHẢI dùng cùng `mongoose` với module này
@@ -16,7 +17,11 @@ const logger = require('../utils/logger');
  */
 const connectDB = async (mongoUri = null, options = {}) => {
   try {
+    const { exitOnFailure = true, ...mongooseOptions } = options || {};
     let uri = mongoUri || process.env.MONGODB_URI;
+    let reconnectTimer = null;
+    let reconnectDelayMs = 5000;
+    let manualReconnectInFlight = false;
 
     if (!uri) {
       throw new Error('MONGODB_URI is not defined');
@@ -48,7 +53,7 @@ const connectDB = async (mongoUri = null, options = {}) => {
       // Retry options cho Atlas
       retryWrites: true,
       retryReads: true,
-      ...options,
+      ...mongooseOptions,
     };
     
     if (isAtlas) {
@@ -78,37 +83,76 @@ const connectDB = async (mongoUri = null, options = {}) => {
     mongoose.set('bufferCommands', false);
     logger.info('Mongoose bufferCommands=false (fail-fast khi Mongo không connected)');
 
-    // Handle connection events
-    mongoose.connection.on('error', (err) => {
-      logger.error('MongoDB connection error:', err);
-      console.error('[MongoDB] Connection error:', err.message);
-    });
+    // Bind listeners đúng một lần để tránh leak khi service retry connect nhiều đợt.
+    if (!connectionListenersBound) {
+      mongoose.connection.on('error', (err) => {
+        logger.error('MongoDB connection error:', err);
+        console.error('[MongoDB] Connection error:', err.message);
+      });
 
-    mongoose.connection.on('disconnected', () => {
-      logger.warn('MongoDB disconnected');
-      console.warn('[MongoDB] ⚠️ Disconnected from MongoDB');
-      const reconnectUri = uri || process.env.MONGODB_URI;
-      if (reconnectUri) {
-        mongoose.connect(reconnectUri, defaultOptions).catch((err) => {
-          logger.error('MongoDB auto-reconnect failed:', err.message);
-        });
-      }
-    });
+      mongoose.connection.on('disconnected', () => {
+        logger.warn('MongoDB disconnected');
+        console.warn('[MongoDB] ⚠️ Disconnected from MongoDB');
 
-    mongoose.connection.on('reconnected', () => {
-      logger.info('MongoDB reconnected');
-      console.log('[MongoDB] ✅ Reconnected to MongoDB');
-    });
-    
-    mongoose.connection.on('connected', () => {
-      logger.info('MongoDB connected');
-      console.log('[MongoDB] ✅ Connected to MongoDB');
-    });
+        // MongoDB driver đã tự reconnect; chỉ fallback reconnect thủ công nếu bị disconnected kéo dài.
+        if (reconnectTimer) return;
+
+        reconnectTimer = setTimeout(async () => {
+          reconnectTimer = null;
+
+          // 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+          if (mongoose.connection.readyState !== 0 || manualReconnectInFlight) return;
+
+          const reconnectUri = uri || process.env.MONGODB_URI;
+          if (!reconnectUri) {
+            logger.error('MongoDB reconnect skipped: missing MONGODB_URI');
+            return;
+          }
+
+          manualReconnectInFlight = true;
+          try {
+            logger.warn(`MongoDB still disconnected after ${reconnectDelayMs}ms, trying manual reconnect...`);
+            await mongoose.connect(reconnectUri, defaultOptions);
+            reconnectDelayMs = 5000; // reset backoff sau khi reconnect thành công
+          } catch (err) {
+            const message = err?.message || String(err);
+            const isLikelyTransient =
+              /tlsv1 alert internal error|server selection|whitelist|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(message);
+
+            if (isLikelyTransient) {
+              logger.warn(`MongoDB manual reconnect transient failure: ${message}`);
+            } else {
+              logger.error(`MongoDB manual reconnect failed: ${message}`);
+            }
+
+            // exponential backoff, tối đa 30s
+            reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000);
+          } finally {
+            manualReconnectInFlight = false;
+          }
+        }, reconnectDelayMs);
+      });
+
+      mongoose.connection.on('reconnected', () => {
+        logger.info('MongoDB reconnected');
+        console.log('[MongoDB] ✅ Reconnected to MongoDB');
+      });
+      
+      mongoose.connection.on('connected', () => {
+        logger.info('MongoDB connected');
+        console.log('[MongoDB] ✅ Connected to MongoDB');
+      });
+
+      connectionListenersBound = true;
+    }
 
     return conn;
   } catch (error) {
     logger.error(`MongoDB connection error: ${error.message}`);
-    process.exit(1);
+    if (options?.exitOnFailure !== false) {
+      process.exit(1);
+    }
+    throw error;
   }
 };
 

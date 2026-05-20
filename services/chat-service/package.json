@@ -21,6 +21,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "backfill:dm-conversation": "node src/scripts/backfillDmConversationId.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

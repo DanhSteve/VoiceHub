@@ -1,0 +1,22 @@
+sequenceDiagram
+autonumber
+actor User as ChuSoHuuTaiLieu
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant DocSvc as DocumentService
+participant DocDb as Mongo_Document
+participant Webhook as WebhookService
+
+Note over User,Webhook: Chặng 1 - Tạo tài liệu và versioning
+User->>Client: Tạo metadata tài liệu
+Client->>Gateway: POST /api/documents
+Gateway->>DocSvc: Forward
+DocSvc->>DocDb: Insert document
+DocSvc->>Webhook: Publish document.created
+DocSvc-->>Client: 201
+
+User->>Client: Upload phiên bản mới
+Client->>Gateway: POST /api/documents/:id/versions
+Gateway->>DocSvc: Forward
+DocSvc->>DocDb: Push previousVersions + set currentVersion
+DocSvc-->>Client: 200

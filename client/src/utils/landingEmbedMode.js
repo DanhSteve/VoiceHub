@@ -14,6 +14,16 @@ export function isLandingEmbedActive() {
   return active;
 }
 
+/**
+ * Guard ghi dữ liệu chỉ áp dụng trong khung demo landing ở route "/".
+ * Tránh trường hợp cờ embed còn sót sau HMR làm block nhầm các màn hình thật.
+ */
+export function isLandingEmbedWriteGuardActive() {
+  if (!active) return false;
+  if (typeof window === 'undefined') return active;
+  return String(window.location?.pathname || '') === '/';
+}
+
 export function isWriteHttpMethod(method) {
   return WRITE_METHODS.has(String(method || 'get').toLowerCase());
 }

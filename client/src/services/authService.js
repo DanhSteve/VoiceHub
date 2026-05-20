@@ -17,12 +17,50 @@
 // api đã có sẵn: base URL, interceptors, auth headers
 import api from './api';
 
+/** Kiểm tra API Gateway đã đặt GATEWAY_INTERNAL_TOKEN (public GET, không cần JWT). */
+async function assertGatewayTrustConfigured() {
+  try {
+    const data = await api.get('/health/gateway-trust');
+    if (data?.gatewayTrustConfigured) return;
+    throw new Error(
+      data?.message ||
+        'API Gateway chưa cấu hình GATEWAY_INTERNAL_TOKEN. Thêm biến này vào api-gateway/.env và cùng giá trị với user-service, task-service, docker-compose (xem .env.example).'
+    );
+  } catch (e) {
+    if (e.message && !e.response && (e.code === 'ERR_NETWORK' || e.message === 'Network Error')) {
+      throw new Error(
+        'Không kết nối được API Gateway để kiểm tra cấu hình. Hãy chạy API Gateway và kiểm tra Vite proxy / VITE_API_URL.'
+      );
+    }
+    throw e;
+  }
+}
+
 /* ========================================
    AUTHSERVICE OBJECT
    Chứa tất cả authentication methods
    Mỗi method return Promise với response data
 ======================================== */
 const authService = {
+  /** Dùng cho trang Đăng nhập/Đăng ký: hiển thị cảnh báo sớm (không chặn nếu chỉ đọc UI). */
+  checkGatewayTrust: async () => {
+    try {
+      const data = await api.get('/health/gateway-trust');
+      return {
+        gatewayTrustConfigured: !!data?.gatewayTrustConfigured,
+        message: data?.message || '',
+      };
+    } catch (e) {
+      return {
+        gatewayTrustConfigured: false,
+        message:
+          e?.code === 'ERR_NETWORK' || e?.message === 'Network Error'
+            ? 'Không kết nối được API Gateway.'
+            : e?.message || 'Không kiểm tra được cấu hình gateway.',
+      };
+    }
+  },
+
   /* ----- REGISTER: Đăng ký user mới -----
      
      Gọi: POST /auth/register
@@ -32,6 +70,7 @@ const authService = {
      Được gọi từ: AuthContext.register()
      Component: RegisterPage.jsx */
   register: async (userData) => {
+    await assertGatewayTrustConfigured();
     // userData: { name, email, password, ... }
     // api.post tự động thêm token vào header (nếu có)
     const response = await api.post('/auth/register', userData);
@@ -50,6 +89,7 @@ const authService = {
      Token sẽ được lưu vào localStorage bởi AuthContext
      Được gọi từ: AuthContext.login() */
   login: async (email, password) => {
+    await assertGatewayTrustConfigured();
     // Gửi email và password lên server
     const response = await api.post('/auth/login', { email, password });
     
@@ -84,14 +124,14 @@ const authService = {
      - Cần refresh user info
      - Sau khi update profile */
   getCurrentUser: async () => {
-    // Ưu tiên lấy profile từ user-service (có displayName, avatar, status)
-    // Fallback về auth-service (chỉ có id/email) nếu user-service chưa cấu hình
+    // 1) Xác thực JWT trước qua auth-service — 401 thật thì interceptor vẫn logout đúng.
+    // 2) Sau đó thử user-service profile; lỗi /users/me không được xóa token toàn cục (skipGlobalAuthFailure).
+    const authRes = await api.get('/auth/me');
     try {
-      const response = await api.get('/users/me');
-      return response;
-    } catch (error) {
-      const response = await api.get('/auth/me');
-      return response;
+      const profileRes = await api.get('/users/me', { skipGlobalAuthFailure: true });
+      return profileRes;
+    } catch {
+      return authRes;
     }
   },
 

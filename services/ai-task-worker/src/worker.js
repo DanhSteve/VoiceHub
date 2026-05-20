@@ -3,12 +3,23 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const amqp = require('amqplib');
 const axios = require('axios');
-const { connectDB } = require('/shared');
+const { connectDB, disconnectDB } = require('/shared');
 const AiTaskExtraction = require('./models/AiTaskExtraction');
 const SyncSuggestion = require('./models/SyncSuggestion');
+const {
+  parseMentionLabelsFromText,
+  fetchAiTaskContext,
+  buildEnrichedPrompt,
+  pickAssigneeFromContext,
+  applyPlacementFromContext,
+  safeParseJsonFromOllama,
+} = require('./taskExtractEnrichment');
 
 const EXTRACT_QUEUE = process.env.RABBITMQ_TASK_AI_EXTRACT_QUEUE || 'task-ai.extract';
 const SYNC_QUEUE = process.env.RABBITMQ_TASK_AI_SYNC_QUEUE || 'task-ai.sync';
+const DLQ_QUEUE = process.env.RABBITMQ_TASK_AI_DLQ_QUEUE || 'task-ai.dlq';
+const MAX_AI_JOB_RETRIES = Math.max(0, parseInt(process.env.AI_TASK_JOB_MAX_RETRIES || '8', 10) || 8);
+const WORKER_MODE = String(process.env.AI_TASK_WORKER_MODE || 'both').toLowerCase();
 
 async function fetchChatMessage(messageId) {
   const chatUrl = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
@@ -64,7 +75,17 @@ async function runOcrByUrl(imageUrl) {
 
 async function callOllama(prompt) {
   if (String(process.env.LLM_PROVIDER || 'ollama').toLowerCase() === 'mock') {
-    return { response: JSON.stringify({ title: 'Mock task', description: prompt.slice(0, 200), priority: 'medium', dueDate: null }) };
+    return {
+      response: JSON.stringify({
+        title: 'Mock task',
+        summary: 'Tóm tắt mock',
+        description: prompt.slice(0, 400),
+        priority: 'medium',
+        dueDate: null,
+        tags: ['mock'],
+        assigneeUserId: null,
+      }),
+    };
   }
   const baseUrl = (process.env.OLLAMA_BASE_URL || 'http://ollama:11434').replace(/\/$/, '');
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:3b-instruct';
@@ -97,33 +118,14 @@ async function callOllama(prompt) {
   return res.data;
 }
 
-function buildHardcodedPrompt(messageText) {
-  return [
-    'Bạn là AI trích xuất task từ chat. Trả về DUY NHẤT JSON hợp lệ.',
-    'Schema JSON:',
-    '{ "title": string, "description": string, "priority": "low"|"medium"|"high"|"urgent", "dueDate": "YYYY-MM-DD"|null, "assigneeName": string|null, "tags": string[] }',
-    '',
-    'Chat:',
-    messageText || '',
-  ].join('\n');
-}
-
-function safeParseJsonFromOllama(data) {
-  // Ollama thường trả { response: "...", ... }
-  const text = typeof data?.response === 'string' ? data.response : JSON.stringify(data || {});
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) throw new Error('Model output has no JSON object');
-  const jsonText = text.slice(start, end + 1);
-  return JSON.parse(jsonText);
-}
-
 function computeConfidence(draft) {
-  let score = 0.2;
-  if (draft?.title && String(draft.title).trim().length >= 4) score += 0.35;
-  if (draft?.description && String(draft.description).trim().length >= 10) score += 0.2;
-  if (draft?.priority) score += 0.1;
-  if (draft?.dueDate) score += 0.15;
+  let score = 0.15;
+  if (draft?.title && String(draft.title).trim().length >= 4) score += 0.25;
+  if (draft?.summary && String(draft.summary).trim().length >= 8) score += 0.15;
+  if (draft?.description && String(draft.description).trim().length >= 20) score += 0.15;
+  if (draft?.priority) score += 0.05;
+  if (draft?.dueDate) score += 0.1;
+  if (draft?.assigneeId) score += 0.15;
   return Math.max(0, Math.min(1, score));
 }
 
@@ -139,8 +141,14 @@ async function resolveAssigneeId(assigneeName) {
   if (!q) return { assigneeId: null, note: '' };
 
   const userUrl = (process.env.USER_SERVICE_URL || 'http://user-service:3004').replace(/\/$/, '');
-  const res = await axios.get(`${userUrl}/api/users/search`, {
+  const internalToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
+  if (!internalToken) {
+    return { assigneeId: null, note: 'user_search_no_internal_token' };
+  }
+
+  const res = await axios.get(`${userUrl}/api/users/internal/search`, {
     params: { q, limit: 5 },
+    headers: { 'x-internal-token': internalToken },
     timeout: 10000,
     validateStatus: () => true,
   });
@@ -159,12 +167,94 @@ async function resolveAssigneeId(assigneeName) {
 function buildPatchFromDraft(nextDraft) {
   const patch = {};
   if (nextDraft.title) patch.title = nextDraft.title;
+  if (nextDraft.summary != null) patch.summary = nextDraft.summary;
   if (nextDraft.description != null) patch.description = nextDraft.description;
   if (nextDraft.priority) patch.priority = nextDraft.priority;
   if (nextDraft.dueDate !== undefined) patch.dueDate = nextDraft.dueDate;
   if (Array.isArray(nextDraft.tags)) patch.tags = nextDraft.tags;
   if (nextDraft.assigneeId) patch.assigneeId = nextDraft.assigneeId;
+  if (nextDraft.departmentId) patch.departmentId = nextDraft.departmentId;
+  if (nextDraft.teamId) patch.teamId = nextDraft.teamId;
+  if (nextDraft.departmentName) patch.departmentName = nextDraft.departmentName;
   return patch;
+}
+
+async function buildDraftFromMessage({ messageText, organizationId, generatedBy, payload, extraction }) {
+  const hintMentions = payload?.mentions?.length
+    ? payload.mentions
+    : extraction?.contextHints?.mentions || [];
+  const userIds = hintMentions.map((m) => String(m.userId || m.id)).filter((id) => /^[a-f0-9]{24}$/i.test(id));
+  const hintLabels = hintMentions.flatMap((m) => [m.displayName, m.mentionLabel].filter(Boolean));
+  const mentionLabels = [
+    ...new Set([...hintLabels, ...parseMentionLabelsFromText(messageText, hintLabels)]),
+  ];
+  const channelId =
+    payload?.channelId || extraction?.contextHints?.channelId || '';
+
+  const systemContext = await fetchAiTaskContext({
+    organizationId,
+    userIds,
+    mentionLabels,
+    channelId: channelId || undefined,
+  });
+
+  const nowIso = new Date().toISOString();
+  const prompt = buildEnrichedPrompt({
+    messageText,
+    systemContext: systemContext || {
+      organization: { id: String(organizationId), name: '' },
+      mentionedUsers: [],
+      channel: null,
+    },
+    nowIso,
+  });
+
+  const modelData = await callOllama(prompt);
+  const parsed = safeParseJsonFromOllama(modelData);
+
+  let draft = {
+    title: parsed.title || '',
+    summary: parsed.summary || '',
+    description: parsed.description || parsed.detailedDescription || '',
+    priority: parsed.priority || 'medium',
+    dueDate: parsed.dueDate ? new Date(parsed.dueDate) : null,
+    tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+  };
+
+  if (!draft.description && draft.summary) {
+    draft.description = draft.summary;
+  }
+
+  const assignee = pickAssigneeFromContext(systemContext, parsed.assigneeUserId, userIds);
+  draft = applyPlacementFromContext(draft, assignee, systemContext?.channel);
+
+  if (!draft.assigneeId && userIds.length) {
+    const primaryId = userIds[0];
+    draft.assigneeId = primaryId;
+    const hint = hintMentions.find((m) => String(m.userId || m.id) === String(primaryId));
+    if (hint?.displayName) draft.assigneeName = hint.displayName;
+    else {
+      const fromCtx = (systemContext?.mentionedUsers || []).find(
+        (u) => String(u.userId) === String(primaryId)
+      );
+      if (fromCtx) {
+        draft.assigneeName = fromCtx.displayName || fromCtx.username || '';
+        if (fromCtx.departmentId && !draft.departmentId) draft.departmentId = fromCtx.departmentId;
+        if (fromCtx.teamId && !draft.teamId) draft.teamId = fromCtx.teamId;
+        if (fromCtx.departmentName && !draft.departmentName) draft.departmentName = fromCtx.departmentName;
+      }
+    }
+  }
+
+  if (!draft.assigneeId && !userIds.length && parsed.assigneeName) {
+    const fallback = await resolveAssigneeId(parsed.assigneeName);
+    if (fallback.assigneeId) {
+      draft.assigneeId = fallback.assigneeId;
+      draft.assigneeName = parsed.assigneeName;
+    }
+  }
+
+  return { draft, modelData, systemContext };
 }
 
 async function createSyncSuggestion({ extraction, messageId, changeType, proposedPatch }) {
@@ -201,6 +291,7 @@ async function fetchTask(taskId, userId) {
 
 async function processExtractJob(payload) {
   const { extractionId } = payload || {};
+  // payload còn mentions, channelId từ queue
   if (!extractionId) throw new Error('Missing extractionId');
 
   const extraction = await AiTaskExtraction.findById(extractionId);
@@ -222,22 +313,16 @@ async function processExtractJob(payload) {
       ocrText = ocr.text ? `\nOCR:\n${ocr.text}` : '';
     }
 
-    const prompt = buildHardcodedPrompt(`${messageText}${attachmentHint}${ocrText}`);
-    const modelData = await callOllama(prompt);
-    const parsed = safeParseJsonFromOllama(modelData);
+    const { draft, modelData } = await buildDraftFromMessage({
+      messageText: `${messageText}${attachmentHint}${ocrText}`,
+      organizationId: extraction.organizationId,
+      generatedBy: extraction.generatedBy,
+      payload,
+      extraction,
+    });
 
-    const draft = {
-      title: parsed.title || extraction.draft?.title || '',
-      description: parsed.description || '',
-      priority: parsed.priority || 'medium',
-      dueDate: parsed.dueDate ? new Date(parsed.dueDate) : null,
-      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-      assigneeName: parsed.assigneeName || null,
-    };
-
-    const assignee = await resolveAssigneeId(draft.assigneeName);
-    if (assignee.assigneeId) {
-      draft.assigneeId = assignee.assigneeId;
+    if (!draft.title && extraction.draft?.title) {
+      draft.title = extraction.draft.title;
     }
 
     const validation = validateDraft(draft);
@@ -297,20 +382,16 @@ async function processSyncJob(payload) {
       ocrText = ocr.text ? `\nOCR:\n${ocr.text}` : '';
     }
 
-    const prompt = buildHardcodedPrompt(`${messageText}${attachmentHint}${ocrText}`);
-    const modelData = await callOllama(prompt);
-    const parsed = safeParseJsonFromOllama(modelData);
-
-    const draft = {
-      title: parsed.title || '',
-      description: parsed.description || '',
-      priority: parsed.priority || 'medium',
-      dueDate: parsed.dueDate ? new Date(parsed.dueDate) : null,
-      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-      assigneeName: parsed.assigneeName || null,
-    };
-    const assignee = await resolveAssigneeId(draft.assigneeName);
-    if (assignee.assigneeId) draft.assigneeId = assignee.assigneeId;
+    const { draft } = await buildDraftFromMessage({
+      messageText: `${messageText}${attachmentHint}${ocrText}`,
+      organizationId: extraction.organizationId,
+      generatedBy: extraction.generatedBy,
+      payload: {
+        mentions: extraction?.contextHints?.mentions,
+        channelId: extraction?.contextHints?.channelId,
+      },
+      extraction,
+    });
 
     const validation = validateDraft(draft);
     if (!validation.ok) continue;
@@ -318,6 +399,39 @@ async function processSyncJob(payload) {
     const patch = buildPatchFromDraft(draft);
     await createSyncSuggestion({ extraction, messageId, changeType, proposedPatch: patch });
   }
+}
+
+function getRetryCount(msg) {
+  const h = (msg && msg.properties && msg.properties.headers) || {};
+  const n = h['x-retry-count'];
+  if (n === undefined || n === null) return 0;
+  const parsed = parseInt(String(n), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function publishToDlq(ch, sourceQueue, msg, err) {
+  const original = msg.content.toString('utf8');
+  const body = {
+    sourceQueue,
+    error: String(err && err.message ? err.message : err),
+    transient: isTransientJobError(err),
+    original,
+  };
+  await ch.assertQueue(DLQ_QUEUE, { durable: true });
+  ch.sendToQueue(DLQ_QUEUE, Buffer.from(JSON.stringify(body)), {
+    persistent: true,
+    contentType: 'application/json',
+  });
+}
+
+function isTransientJobError(err) {
+  const code = err && err.code;
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED') return true;
+  const status = err && err.response && err.response.status;
+  if (status >= 500) return true;
+  const msg = String(err && err.message ? err.message : err);
+  if (/timeout|ETIMEDOUT|MongoNetworkError/i.test(msg)) return true;
+  return false;
 }
 
 async function start() {
@@ -331,44 +445,124 @@ async function start() {
   const ch = await conn.createChannel();
   await ch.assertQueue(EXTRACT_QUEUE, { durable: true });
   await ch.assertQueue(SYNC_QUEUE, { durable: true });
+  await ch.assertQueue(DLQ_QUEUE, { durable: true });
   await ch.prefetch(1);
 
-  console.log(`[ai-task-worker] listening queue=${EXTRACT_QUEUE}`);
+  let extractConsumerTag = null;
+  let syncConsumerTag = null;
 
-  await ch.consume(
-    EXTRACT_QUEUE,
-    async (msg) => {
-      if (!msg) return;
-      try {
-        const payload = JSON.parse(msg.content.toString('utf8'));
-        await processExtractJob(payload);
-        ch.ack(msg);
-      } catch (err) {
-        console.error('[ai-task-worker] job failed:', err.message);
-        // Ack để tránh loop vô hạn; trạng thái failed đã được lưu vào DB (nếu có extractionId).
-        ch.ack(msg);
-      }
-    },
-    { noAck: false }
-  );
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      if (extractConsumerTag) await ch.cancel(extractConsumerTag);
+    } catch (e) {
+      /* ignore */
+    }
+    try {
+      if (syncConsumerTag) await ch.cancel(syncConsumerTag);
+    } catch (e) {
+      /* ignore */
+    }
+    try {
+      await ch.close();
+    } catch (e) {
+      /* ignore */
+    }
+    try {
+      await conn.close();
+    } catch (e) {
+      /* ignore */
+    }
+    try {
+      await disconnectDB();
+    } catch (e) {
+      /* ignore */
+    }
+    process.exit(0);
+  };
 
-  console.log(`[ai-task-worker] listening queue=${SYNC_QUEUE}`);
+  const shouldConsumeExtract = WORKER_MODE === 'extract' || WORKER_MODE === 'both';
+  const shouldConsumeSync = WORKER_MODE === 'sync' || WORKER_MODE === 'both';
+  if (!shouldConsumeExtract && !shouldConsumeSync) {
+    throw new Error(`Invalid AI_TASK_WORKER_MODE=${WORKER_MODE}. Expected extract|sync|both`);
+  }
 
-  await ch.consume(
-    SYNC_QUEUE,
-    async (msg) => {
-      if (!msg) return;
-      try {
-        const payload = JSON.parse(msg.content.toString('utf8'));
-        await processSyncJob(payload);
-        ch.ack(msg);
-      } catch (err) {
-        console.error('[ai-task-worker] sync job failed:', err.message);
-        ch.ack(msg);
-      }
-    },
-    { noAck: false }
-  );
+  if (shouldConsumeExtract) {
+    console.log(`[ai-task-worker] listening queue=${EXTRACT_QUEUE} mode=${WORKER_MODE}`);
+    const extractConsume = await ch.consume(
+      EXTRACT_QUEUE,
+      async (msg) => {
+        if (!msg) return;
+        const retryCount = getRetryCount(msg);
+        try {
+          const payload = JSON.parse(msg.content.toString('utf8'));
+          await processExtractJob(payload);
+          ch.ack(msg);
+        } catch (err) {
+          console.error('[ai-task-worker] extract job failed:', err.message);
+          const transient = isTransientJobError(err);
+          if (transient && retryCount < MAX_AI_JOB_RETRIES) {
+            ch.sendToQueue(EXTRACT_QUEUE, msg.content, {
+              persistent: true,
+              contentType: 'application/json',
+              headers: { 'x-retry-count': retryCount + 1 },
+            });
+            ch.ack(msg);
+            return;
+          }
+          try {
+            await publishToDlq(ch, EXTRACT_QUEUE, msg, err);
+          } catch (dlqErr) {
+            console.error('[ai-task-worker] extract DLQ publish failed:', dlqErr.message);
+          }
+          ch.ack(msg);
+        }
+      },
+      { noAck: false }
+    );
+    extractConsumerTag = extractConsume.consumerTag;
+  }
+
+  if (shouldConsumeSync) {
+    console.log(`[ai-task-worker] listening queue=${SYNC_QUEUE} mode=${WORKER_MODE}`);
+    const syncConsume = await ch.consume(
+      SYNC_QUEUE,
+      async (msg) => {
+        if (!msg) return;
+        const retryCount = getRetryCount(msg);
+        try {
+          const payload = JSON.parse(msg.content.toString('utf8'));
+          await processSyncJob(payload);
+          ch.ack(msg);
+        } catch (err) {
+          console.error('[ai-task-worker] sync job failed:', err.message);
+          const transient = isTransientJobError(err);
+          if (transient && retryCount < MAX_AI_JOB_RETRIES) {
+            ch.sendToQueue(SYNC_QUEUE, msg.content, {
+              persistent: true,
+              contentType: 'application/json',
+              headers: { 'x-retry-count': retryCount + 1 },
+            });
+            ch.ack(msg);
+            return;
+          }
+          try {
+            await publishToDlq(ch, SYNC_QUEUE, msg, err);
+          } catch (dlqErr) {
+            console.error('[ai-task-worker] sync DLQ publish failed:', dlqErr.message);
+          }
+          ch.ack(msg);
+        }
+      },
+      { noAck: false }
+    );
+    syncConsumerTag = syncConsume.consumerTag;
+  }
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 
   conn.on('error', (err) => console.error('[ai-task-worker] conn error:', err.message));
   conn.on('close', () => console.error('[ai-task-worker] conn closed'));

@@ -1,0 +1,32 @@
+﻿sequenceDiagram
+autonumber
+actor User as User
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant AuthSvc as AuthService
+participant UserAuthDb as MongoUserAuth
+participant Redis as RedisRefreshStore
+
+Note over User,Redis: Luong 3 - Dang nhap va refresh token
+User->>Client: Dang nhap
+Client->>Gateway: POST /api/auth/login
+Gateway->>AuthSvc: Forward login
+AuthSvc->>UserAuthDb: Check password + lock state + verify state
+alt Login hop le
+  AuthSvc->>Redis: SET refresh_token:<userId>
+  AuthSvc-->>Gateway: 200 access + refresh
+  Gateway-->>Client: Tra token de su dung
+else Chua verify / bi lock / sai mat khau
+  AuthSvc-->>Gateway: 401/423
+  Gateway-->>Client: Tu choi dang nhap
+end
+
+User->>Client: Xin access token moi
+Client->>Gateway: POST /api/auth/refresh-token
+Gateway->>AuthSvc: Forward refresh token
+AuthSvc->>Redis: Validate refresh token
+alt Hop le
+  AuthSvc-->>Client: 200 access token moi
+else Khong hop le
+  AuthSvc-->>Client: 401
+end

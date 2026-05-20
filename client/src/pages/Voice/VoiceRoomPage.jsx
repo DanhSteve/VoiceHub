@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import toast from 'react-hot-toast';
 import {
@@ -38,12 +38,15 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import { appShellBg } from '../../theme/shellTheme';
+import { PageSearchBar } from '../../features/search';
 import { useLocale } from '../../context/LocaleContext';
 import {
   buildLayoutTiles,
   gridWrapperClass,
   tileItemClass,
 } from './voiceMeetingLayout';
+import VoiceAudioSettingsPanel from './VoiceAudioSettingsPanel';
+import { buildAudioConstraints, loadVoiceAudioPrefs, saveVoiceAudioPrefs } from './voiceAudioPrefs';
 
 /** Nút thanh họp: icon + (badge) + chevron + nhãn — tham chiếu layout Zoom/Teams (hình 1) */
 function VoiceToolbarControl({
@@ -86,11 +89,19 @@ function VoiceToolbarControl({
 const getSignalBaseUrl = () => {
   const explicit = import.meta.env.VITE_VOICE_SIGNAL_URL;
   if (explicit) return explicit;
+  // Dev: dùng cùng origin (Vite) để tránh hardcode gateway localhost:
+  // client sẽ proxy /voice-socket về API Gateway trong vite.config.js.
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
   return apiUrl.replace(/\/api\/?$/, '');
 };
 
 const getSignalPath = () => import.meta.env.VITE_VOICE_SIGNAL_PATH || '/voice-socket';
+const RECENT_VOICE_CALLS_KEY = 'vh.voice.recentCalls';
+
+const initialVoiceAudioPrefs = loadVoiceAudioPrefs();
 
 const normalizeToken = (rawToken) => {
   if (!rawToken) return null;
@@ -145,6 +156,7 @@ function deptMatchesMember(m, deptId) {
 
 function VoiceRoomPage({ landingDemo = false } = {}) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { roomId } = useParams();
   const [searchParams] = useSearchParams();
   const safeRoomId = roomId?.startsWith(':') ? roomId.slice(1) || '' : roomId || '';
@@ -185,6 +197,16 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const [inviteSearch, setInviteSearch] = useState('');
   const [inviteCandidates, setInviteCandidates] = useState([]);
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [selectedInviteIds, setSelectedInviteIds] = useState([]);
+  const [voiceFriends, setVoiceFriends] = useState([]);
+  const [recentCalls, setRecentCalls] = useState(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(RECENT_VOICE_CALLS_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
 
   const [roomMessages, setRoomMessages] = useState([]);
   const [roomChatInput, setRoomChatInput] = useState('');
@@ -207,8 +229,10 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const [audioInputs, setAudioInputs] = useState([]);
   const [audioOutputs, setAudioOutputs] = useState([]);
   const [videoInputs, setVideoInputs] = useState([]);
-  const [selectedMicId, setSelectedMicId] = useState('');
-  const [selectedSpeakerId, setSelectedSpeakerId] = useState('');
+  const [selectedMicId, setSelectedMicId] = useState(initialVoiceAudioPrefs.micDeviceId);
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState(initialVoiceAudioPrefs.speakerDeviceId);
+  const [micVolume, setMicVolume] = useState(initialVoiceAudioPrefs.micVolume);
+  const [speakerVolume, setSpeakerVolume] = useState(initialVoiceAudioPrefs.speakerVolume);
   const [selectedCamId, setSelectedCamId] = useState('');
   const [sendResolution, setSendResolution] = useState('auto');
   const [recvResolution, setRecvResolution] = useState('auto');
@@ -245,12 +269,58 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   }, [localDisplayName]);
 
   useEffect(() => {
+    if (landingDemo) {
+      setVoiceFriends([
+        { id: 'demo-friend-1', label: 'Lan Anh', subtitle: 'online' },
+        { id: 'demo-friend-2', label: 'Minh Tuan', subtitle: 'offline' },
+      ]);
+      return;
+    }
+    let cancelled = false;
+    friendService
+      .getFriends()
+      .then((resp) => {
+        if (cancelled) return;
+        const payload = resp?.data || resp;
+        const result = payload?.data || payload;
+        const list = result?.friends || result;
+        const rows = Array.isArray(list) ? list : [];
+        setVoiceFriends(
+          rows.slice(0, 8).map((f) => {
+            const u = f.friendId || f;
+            const id = String(u?._id || u?.userId || u?.id || f.id || '');
+            return {
+              id,
+              label: u?.displayName || u?.fullName || u?.username || u?.email?.split('@')?.[0] || id.slice(-6),
+              subtitle: u?.email || '',
+              avatar: u?.avatar || null,
+            };
+          })
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setVoiceFriends([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [landingDemo]);
+
+  useEffect(() => {
     const kind = searchParams.get('kind');
     if (kind === 'org' || kind === 'free') setRoomKind(kind);
     const oid = searchParams.get('orgId');
     if (oid) setSelectedOrgId(oid);
     const did = searchParams.get('deptId');
     if (did) setSelectedDeptId(did);
+  }, [searchParams]);
+
+  /** Cuộc gọi bạn bè: gọi thoại → tắt video ở prejoin */
+  useEffect(() => {
+    const m = searchParams.get('friendCallMedia');
+    if (m === 'audio') {
+      setPrejoinVideoEnabled(false);
+    }
   }, [searchParams]);
 
   useEffect(() => {
@@ -442,8 +512,16 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   }, []);
 
   useEffect(() => {
-    if (settingsOpen && viewStage === 'inRoom') refreshMediaDevices();
-  }, [settingsOpen, viewStage, refreshMediaDevices]);
+    if (settingsOpen) refreshMediaDevices();
+  }, [settingsOpen, refreshMediaDevices]);
+
+  useEffect(() => {
+    if (typeof HTMLMediaElement === 'undefined') return;
+    const vol = Math.min(1, Math.max(0, speakerVolume / 100));
+    document.querySelectorAll('video, audio').forEach((el) => {
+      if ('volume' in el) el.volume = vol;
+    });
+  }, [speakerVolume, pipOpen, participants.length]);
 
   const toggleMeetingFullscreen = useCallback(async () => {
     const el = meetingRootRef.current;
@@ -464,7 +542,34 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
     async (deviceId) => {
       if (!deviceId) return;
       setSelectedMicId(deviceId);
+      saveVoiceAudioPrefs({ micDeviceId: deviceId });
+
       const { localStream, audioProducer } = mediasoupRef.current;
+      const previewStream = prejoinStreamRef.current;
+      const targetStream = localStream || previewStream;
+      if (!targetStream) return;
+
+      if (!audioProducer) {
+        try {
+          const ns = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { ideal: deviceId } },
+            video: false,
+          });
+          const nt = ns.getAudioTracks()[0];
+          if (!nt) return;
+          targetStream.getAudioTracks().forEach((tr) => {
+            targetStream.removeTrack(tr);
+            tr.stop();
+          });
+          targetStream.addTrack(nt);
+          return;
+        } catch (e) {
+          console.error(e);
+          toast.error(t('voiceRoom.micFail'));
+          return;
+        }
+      }
+
       if (!localStream || !audioProducer) return;
       try {
         const ns = await navigator.mediaDevices.getUserMedia({
@@ -690,7 +795,10 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
 
     if (audioEnabled) {
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const micDeviceId = selectedMicId || loadVoiceAudioPrefs().micDeviceId;
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: buildAudioConstraints(micDeviceId),
+        });
         const audioTrack = audioStream.getAudioTracks()[0];
         if (audioTrack) {
           mergedStream.addTrack(audioTrack);
@@ -862,8 +970,19 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   }, [inviteModalOpen, loadInviteCandidates]);
 
   useEffect(() => {
-    if (!inviteModalOpen) setInviteSearch('');
+    if (!inviteModalOpen) {
+      setInviteSearch('');
+      setSelectedInviteIds([]);
+    }
   }, [inviteModalOpen]);
+
+  useEffect(() => {
+    if (!location.state?.openInviteModal) return;
+    const sourceId = String(location.state?.sourceFriendId || '').trim();
+    setInviteModalOpen(true);
+    if (sourceId) setSelectedInviteIds([sourceId]);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
 
   const initVoiceRoom = async ({
     targetRoomId,
@@ -879,13 +998,16 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       currentRoomRef.current = roomTarget;
       setActiveRoomId(roomTarget);
 
-      await api.get(`/voice/rooms/${encodeURIComponent(roomTarget)}/bootstrap`);
+      await api.get(`/voice/rooms/${encodeURIComponent(roomTarget)}/bootstrap`, {
+        skipGlobalErrorHandling: true,
+      }).catch(() => null);
 
       let localStream = prejoinStreamRef.current;
       if (!localStream) {
         if (audioEnabled || videoEnabled) {
+          const micDeviceId = selectedMicId || loadVoiceAudioPrefs().micDeviceId;
           localStream = await navigator.mediaDevices.getUserMedia({
-            audio: Boolean(audioEnabled),
+            audio: audioEnabled ? buildAudioConstraints(micDeviceId) : false,
             video: Boolean(videoEnabled),
           });
         } else {
@@ -903,7 +1025,8 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       const token = normalizeToken(localStorage.getItem('token'));
       const socket = io(`${getSignalBaseUrl()}/voice`, {
         path: getSignalPath(),
-        transports: ['websocket', 'polling'],
+        // Qua reverse proxy HTTPS, ưu tiên polling trước để giảm lỗi WS handshake sớm.
+        transports: ['polling', 'websocket'],
         auth: token ? { token } : {},
       });
       mediasoupRef.current.socket = socket;
@@ -1022,6 +1145,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       setIsMuted(!audioTrack);
       setIsCameraOff(!videoTrack);
       setViewStage('inRoom');
+      pushRecentCall(roomTarget);
       stopPrejoinPreview({ keepStreamForRoom: true });
 
       const qs = new URLSearchParams();
@@ -1030,6 +1154,10 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
         if (selectedOrgId) qs.set('orgId', selectedOrgId);
         if (selectedDeptId) qs.set('deptId', selectedDeptId);
       }
+      const cid = searchParams.get('callId');
+      if (cid) qs.set('callId', cid);
+      const fcm = searchParams.get('friendCallMedia');
+      if (fcm) qs.set('friendCallMedia', fcm);
       navigate(`/voice/${encodeURIComponent(roomTarget)}?${qs.toString()}`, { replace: true });
     } catch (initError) {
       console.error(initError);
@@ -1043,6 +1171,15 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
 
   const leaveRoom = async () => {
     try {
+      const friendCallId = searchParams.get('callId');
+      if (friendCallId && !landingDemo) {
+        try {
+          await api.post(`/voice/calls/${encodeURIComponent(friendCallId)}/end`);
+        } catch {
+          /* ignore — vẫn rời phòng */
+        }
+      }
+
       const { socket, audioProducer, videoProducer, sendTransport, recvTransport, consumers, localStream } =
         mediasoupRef.current;
 
@@ -1102,6 +1239,31 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       navigate('/voice');
     }
   };
+
+  const pushRecentCall = useCallback(
+    (roomTarget) => {
+      const entry = {
+        roomId: String(roomTarget || ''),
+        roomKind,
+        label:
+          String(roomTarget || '') ||
+          (roomKind === 'org'
+            ? `${t('voiceRoom.roomTypeOrg')} ${selectedOrgId ? `#${selectedOrgId}` : ''}`.trim()
+            : t('voiceRoom.roomTypeFree')),
+        joinedAt: new Date().toISOString(),
+      };
+      setRecentCalls((prev) => {
+        const next = [entry, ...prev.filter((item) => String(item.roomId) !== entry.roomId)].slice(0, 8);
+        try {
+          localStorage.setItem(RECENT_VOICE_CALLS_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+    },
+    [roomKind, selectedOrgId, t]
+  );
 
   const toggleMute = async () => {
     const producer = mediasoupRef.current.audioProducer;
@@ -1324,22 +1486,31 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
         id: 'schedule',
         label: t('voiceRoom.schedule'),
         icon: Calendar,
-        onClick: () => toast(t('voiceRoom.scheduleSoon'), { icon: '📅' }),
+        onClick: () => navigate('/calendar'),
       },
       {
         id: 'share',
         label: t('voiceRoom.screenShare'),
         icon: Monitor,
-        onClick: () => toast(t('voiceRoom.screenShareSoon'), { icon: '🖥️' }),
+        onClick: () => setInviteModalOpen(true),
       },
       {
         id: 'notes',
         label: t('voiceRoom.notes'),
         icon: FileText,
-        onClick: () => toast(t('voiceRoom.notesSoon'), { icon: '📝' }),
+        onClick: () => navigate('/documents'),
+      },
+      {
+        id: 'settings',
+        label: t('voiceRoom.settingsTitle'),
+        icon: Settings,
+        onClick: () => {
+          setSettingsTab('audio');
+          setSettingsOpen(true);
+        },
       },
     ],
-    [t]
+    [navigate, t]
   );
 
   /** Khung lobby: sáng = cùng tông shell app; tối = nền đen (trước khi vào phòng) */
@@ -1456,8 +1627,9 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
             >
               {voiceNav.map((item) => {
                 const active =
-                  (item.id === 'new' && viewStage === 'home') ||
-                  (item.id === 'join' && viewStage === 'prejoin');
+                  (item.id === 'new' && viewStage === 'home' && !settingsOpen) ||
+                  (item.id === 'join' && viewStage === 'prejoin') ||
+                  (item.id === 'settings' && settingsOpen);
                 const Icon = item.icon;
                 return (
                   <button
@@ -1479,6 +1651,80 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                   </button>
                 );
               })}
+              <div className={`mt-6 border-t pt-4 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+                <div className={`mb-2 px-2 text-[11px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+                  Ban be
+                </div>
+                <div className="space-y-1.5">
+                  {voiceFriends.length === 0 ? (
+                    <div className={`rounded-xl px-3 py-2 text-xs ${isDarkMode ? 'bg-white/[0.04] text-gray-500' : 'bg-slate-100 text-slate-500'}`}>
+                      Chua co ban be de goi nhanh
+                    </div>
+                  ) : (
+                    voiceFriends.map((friend) => (
+                      <button
+                        key={friend.id}
+                        type="button"
+                        onClick={() => {
+                          setRoomKind('free');
+                          setViewStage('prejoin');
+                          setInviteModalOpen(true);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition ${
+                          isDarkMode ? 'hover:bg-white/[0.06]' : 'hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-xs font-bold text-white">
+                          {friend.avatar && String(friend.avatar).startsWith('http') ? (
+                            <img src={friend.avatar} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            String(friend.label || '?').slice(0, 1).toUpperCase()
+                          )}
+                        </span>
+                        <span className="min-w-0">
+                          <span className={`block truncate text-xs font-semibold ${isDarkMode ? 'text-gray-200' : 'text-slate-800'}`}>
+                            {friend.label}
+                          </span>
+                          <span className={`block truncate text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+                            {friend.subtitle || 'Friend'}
+                          </span>
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div className={`mt-4 border-t pt-4 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+                <div className={`mb-2 px-2 text-[11px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+                  Lich su cuoc goi
+                </div>
+                <div className="space-y-1.5">
+                  {recentCalls.length === 0 ? (
+                    <div className={`rounded-xl px-3 py-2 text-xs ${isDarkMode ? 'bg-white/[0.04] text-gray-500' : 'bg-slate-100 text-slate-500'}`}>
+                      Chua co cuoc goi gan day
+                    </div>
+                  ) : (
+                    recentCalls.map((item) => (
+                      <button
+                        key={`${item.roomId}-${item.joinedAt}`}
+                        type="button"
+                        onClick={() => {
+                          setMeetingCode(String(item.roomId || ''));
+                          setViewStage('prejoin');
+                        }}
+                        className={`flex w-full items-center justify-between gap-2 rounded-xl px-2 py-2 text-left transition ${isDarkMode ? 'hover:bg-white/[0.06]' : 'hover:bg-slate-100'}`}
+                      >
+                        <span className={`min-w-0 truncate text-xs font-semibold ${isDarkMode ? 'text-gray-200' : 'text-slate-800'}`}>
+                          {item.label || item.roomId || 'Voice room'}
+                        </span>
+                        <span className={`shrink-0 text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+                          {item.joinedAt ? new Date(item.joinedAt).toLocaleDateString('vi-VN') : ''}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
             </aside>
 
             <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-6 md:px-8">
@@ -2033,7 +2279,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                   <VoiceToolbarControl
                     label={t('voiceRoom.toolbarShare')}
                     icon={Share2}
-                    onClick={() => toast(t('voiceRoom.screenShareSoon'), { icon: '🖥️' })}
+                    onClick={() => setInviteModalOpen(true)}
                     chevron
                   />
                   <div className="relative" ref={moreMenuWrapRef}>
@@ -2354,15 +2600,14 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                     </button>
                   </div>
                   <div className="border-b border-white/5 px-4 py-2">
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
-                      <input
-                        value={inviteSearch}
-                        onChange={(e) => setInviteSearch(e.target.value)}
-                        placeholder={t('voiceRoom.invitePh')}
-                        className="w-full rounded-xl border border-white/10 bg-black/40 py-2.5 pl-9 pr-3 text-sm text-white placeholder:text-gray-600 focus:border-violet-500/40 focus:outline-none"
-                      />
-                    </div>
+                    <PageSearchBar
+                      value={inviteSearch}
+                      onChange={setInviteSearch}
+                      placeholder={t('voiceRoom.invitePh')}
+                      isDarkMode
+                      size="sm"
+                      id="voice-invite-search"
+                    />
                   </div>
                   <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
                     <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-wide text-gray-500">
@@ -2381,6 +2626,13 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                           <li
                             key={row.id}
                             className="flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-white/5"
+                            onClick={() =>
+                              setSelectedInviteIds((prev) =>
+                                prev.includes(String(row.id))
+                                  ? prev.filter((id) => id !== String(row.id))
+                                  : [...prev, String(row.id)]
+                              )
+                            }
                           >
                             <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-700 text-xs font-semibold text-white">
                               {row.avatar && String(row.avatar).startsWith('http') ? (
@@ -2395,7 +2647,12 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                                 <div className="truncate text-xs text-gray-500">{row.subtitle}</div>
                               ) : null}
                             </div>
-                            <input type="checkbox" className="h-4 w-4 rounded border-white/20" readOnly />
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-white/20"
+                              checked={selectedInviteIds.includes(String(row.id))}
+                              readOnly
+                            />
                           </li>
                         ))}
                       </ul>
@@ -2492,15 +2749,17 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
               </div>
             )}
 
+          </div>
+        )}
             {settingsOpen &&
               createPortal(
                 <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
                   <div
                     role="dialog"
                     aria-modal="true"
-                    className="flex max-h-[min(92vh,720px)] w-full max-w-3xl overflow-hidden rounded-2xl bg-white text-gray-900 shadow-2xl"
+                    className={`flex max-h-[min(92vh,720px)] w-full max-w-3xl overflow-hidden rounded-2xl shadow-2xl ${isDarkMode ? 'bg-[#141414] text-gray-100' : 'bg-white text-gray-900'}`}
                   >
-                    <aside className="w-52 shrink-0 border-r border-gray-200 bg-gray-50 py-4">
+                    <aside className={`w-52 shrink-0 border-r py-4 ${isDarkMode ? 'border-white/10 bg-[#0d0d0d]' : 'border-gray-200 bg-gray-50'}`}>
                       <button
                         type="button"
                         className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium ${
@@ -2525,7 +2784,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                       </button>
                     </aside>
                     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                      <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+                      <div className={`flex items-center justify-between border-b px-6 py-4 ${isDarkMode ? 'border-white/10' : 'border-gray-200'}`}>
                         <h2 className="text-lg font-semibold">{t('voiceRoom.settingsTitle')}</h2>
                         <button
                           type="button"
@@ -2538,50 +2797,20 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                       </div>
                       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                         {settingsTab === 'audio' && (
-                          <div className="space-y-6">
-                            <div>
-                              <label className="mb-2 block text-sm font-medium text-blue-700">{t('voiceRoom.micLabel')}</label>
-                              <select
-                                value={selectedMicId}
-                                onChange={(e) => applyMicrophoneDevice(e.target.value)}
-                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm"
-                              >
-                                {audioInputs.length === 0 ? (
-                                  <option value="">{t('voiceRoom.loadingDevices')}</option>
-                                ) : (
-                                  audioInputs.map((d) => (
-                                    <option key={d.deviceId || d.label} value={d.deviceId}>
-                                      {d.label || t('voiceRoom.micFallback', { suffix: d.deviceId?.slice(-6) || '' })}
-                                    </option>
-                                  ))
-                                )}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="mb-2 block text-sm font-medium text-blue-700">{t('voiceRoom.speakerLabel')}</label>
-                              <select
-                                value={selectedSpeakerId}
-                                onChange={(e) => setSelectedSpeakerId(e.target.value)}
-                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm"
-                              >
-                                {audioOutputs.length === 0 ? (
-                                  <option value="">{t('voiceRoom.systemDefault')}</option>
-                                ) : (
-                                  <>
-                                    <option value="">{t('voiceRoom.defaultOpt')}</option>
-                                    {audioOutputs.map((d) => (
-                                      <option key={d.deviceId || d.label} value={d.deviceId}>
-                                        {d.label || t('voiceRoom.speakerFallback', { suffix: d.deviceId?.slice(-6) || '' })}
-                                      </option>
-                                    ))}
-                                  </>
-                                )}
-                              </select>
-                              <p className="mt-1 text-xs text-gray-500">
-                                {t('voiceRoom.speakerHint')}
-                              </p>
-                            </div>
-                          </div>
+                          <VoiceAudioSettingsPanel
+                            t={t}
+                            isDarkMode={isDarkMode}
+                            micId={selectedMicId}
+                            speakerId={selectedSpeakerId}
+                            micVolume={micVolume}
+                            speakerVolume={speakerVolume}
+                            onMicIdChange={setSelectedMicId}
+                            onSpeakerIdChange={setSelectedSpeakerId}
+                            onMicVolumeChange={setMicVolume}
+                            onSpeakerVolumeChange={setSpeakerVolume}
+                            onApplyMic={applyMicrophoneDevice}
+                            active={settingsOpen && settingsTab === 'audio'}
+                          />
                         )}
                         {settingsTab === 'video' && (
                           <div className="space-y-5">
@@ -2671,8 +2900,6 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                 </div>,
                 document.body
               )}
-          </div>
-        )}
       </div>
     </div>
   );

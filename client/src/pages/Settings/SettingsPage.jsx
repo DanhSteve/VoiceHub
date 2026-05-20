@@ -4,6 +4,7 @@ import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, GlassCard, GradientButton } from '../../components/Shared';
 import roleAPI from '../../services/api/roleAPI';
 import { organizationAPI } from '../../services/api/organizationAPI';
+import userService from '../../services/userService';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
@@ -184,7 +185,7 @@ function SettingsPage() {
     if (!user) return;
     setUserProfileForm({
       fullName: user?.displayName || user?.fullName || user?.name || t('settingsPage.userFallback'),
-      phone: user?.phone || '',
+      phone: user?.phone || user?.phoneNumber || user?.mobile || '',
     });
   }, [user, t]);
 
@@ -223,10 +224,19 @@ function SettingsPage() {
     toast.success(t('settingsPage.toastSaveOrg'));
   };
 
-  const handleSaveUserProfile = () => {
-    updateUser({ displayName: userProfileForm.fullName, phone: userProfileForm.phone });
-    localStorage.setItem('settings:userProfile', JSON.stringify(userProfileForm));
-    toast.success(t('settingsPage.toastSaveProfile'));
+  const handleSaveUserProfile = async () => {
+    const payload = {
+      displayName: String(userProfileForm.fullName || '').trim(),
+      phone: String(userProfileForm.phone || '').trim(),
+    };
+    try {
+      await userService.updateProfile(payload);
+      updateUser(payload);
+      localStorage.setItem('settings:userProfile', JSON.stringify(userProfileForm));
+      toast.success(t('settingsPage.toastSaveProfile'));
+    } catch (error) {
+      toast.error(error?.response?.data?.message || t('settingsPage.toastRoleErr'));
+    }
   };
 
   const handleCopyApiKey = async (keyValue) => {

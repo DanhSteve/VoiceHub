@@ -1,0 +1,53 @@
+sequenceDiagram
+autonumber
+actor User as EndUser
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant AuthMW as GatewayAuthMiddleware
+participant PermMW as GatewayPermissionMiddleware
+participant AuthSvc as AuthService
+participant UserAuthDb as MongoUserAuth
+participant Redis as RedisRefreshStore
+participant UserSvc as UserServiceBootstrap
+Note over User,Client: Luong 1 - Dang ky va kich hoat
+User->>Client: Nhap form dang ky
+Client->>Gateway: POST /api/auth/register
+Gateway->>AuthMW: Verify request format/public route
+AuthMW-->>Gateway: pass
+Gateway->>PermMW: Bypass permission (public auth route)
+PermMW-->>Gateway: pass
+Gateway->>AuthSvc: Forward register payload
+AuthSvc->>UserAuthDb: Validate + tao UserAuth (inactive, unverified)
+alt Du lieu hop le
+  AuthSvc-->>Gateway: 201 + verify instruction
+  Gateway-->>Client: Register success
+else Email trung/Password yeu/DOB sai
+  AuthSvc-->>Gateway: 400/409
+  Gateway-->>Client: Hien thi loi nghiep vu
+end
+Note over User,UserSvc: Luong 2 - Verify email
+User->>Client: Mo link verify
+Client->>Gateway: GET /api/auth/verify-email?token=...
+Gateway->>AuthSvc: Forward verify token
+AuthSvc->>UserAuthDb: Check token + set isActive/isEmailVerified
+alt Token hop le
+  AuthSvc->>UserSvc: Internal bootstrap profile
+  AuthSvc-->>Gateway: 200 verified
+  Gateway-->>Client: Tai khoan san sang dang nhap
+else Token het han/sai
+  AuthSvc-->>Gateway: 400/410
+  Gateway-->>Client: Verify that bai
+end
+Note over User,Redis: Luong 3 - Dang nhap va refresh
+User->>Client: Dang nhap
+Client->>Gateway: POST /api/auth/login
+Gateway->>AuthSvc: Forward login
+AuthSvc->>UserAuthDb: Check password + lock state
+alt Login hop le
+  AuthSvc->>Redis: SET refresh_token:<userId>
+  AuthSvc-->>Gateway: 200 access+refresh
+  Gateway-->>Client: Tra token
+else Chua verify/bi lock/sai mat khau
+  AuthSvc-->>Gateway: 401/423
+  Gateway-->>Client: Tu choi dang nhap
+end

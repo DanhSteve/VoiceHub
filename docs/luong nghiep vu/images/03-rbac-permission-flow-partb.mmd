@@ -1,0 +1,23 @@
+sequenceDiagram
+autonumber
+actor User as NguoiDung
+participant Gateway as ApiGateway
+participant AuthMW as Middleware_XacThuc
+participant PermMW as Middleware_PhanQuyen
+participant RoleSvc as RolePermissionService
+
+Note over User,RoleSvc: Chặng 2 - Luồng từ chối
+User->>Gateway: Request private
+Gateway->>AuthMW: Verify token
+alt Token sai hoặc hết hạn
+  AuthMW-->>User: 401 Unauthorized
+else Token hợp lệ
+  Gateway->>PermMW: Kiểm tra quyền
+  PermMW->>RoleSvc: check permission
+  alt Thiếu context hoặc không đủ quyền
+    RoleSvc-->>PermMW: allowed=false
+    PermMW-->>User: 403 Forbidden
+  else Lỗi role service
+    PermMW-->>User: 403 fail-closed
+  end
+end

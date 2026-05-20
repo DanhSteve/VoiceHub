@@ -94,16 +94,29 @@ function ProfileModal({ isOpen, onClose }) {
     });
   }, [t]);
 
+  const unwrapProfilePayload = (payload) => {
+    const body = payload?.data ?? payload;
+    return body?.data ?? body;
+  };
+
   const fetchProfile = useCallback(async () => {
     try {
       setLoading(true);
       const res = await api.get('/users/me');
-      const data = res?.data ?? res;
+      const data = unwrapProfilePayload(res);
       setProfile(data);
+      const phoneValue =
+        data?.phone ??
+        data?.profile?.phone ??
+        data?.phoneNumber ??
+        data?.profile?.phoneNumber ??
+        data?.mobile ??
+        data?.profile?.mobile ??
+        '';
       setForm({
         displayName: data?.displayName ?? data?.username ?? '',
         bio: data?.bio ?? '',
-        phone: data?.phone ?? '',
+        phone: phoneValue,
         status: data?.status ?? 'online',
         isInvisible: data?.isInvisible ?? false,
       });
@@ -131,7 +144,7 @@ function ProfileModal({ isOpen, onClose }) {
         status: form.status,
         isInvisible: form.isInvisible,
       });
-      const updated = res?.data ?? res;
+      const updated = unwrapProfilePayload(res);
       setProfile(updated);
       showNotice(t('profileModal.saveOk'), 'success');
       if (onClose) onClose();

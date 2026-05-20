@@ -1,0 +1,29 @@
+sequenceDiagram
+autonumber
+actor User as DocumentOwner
+participant Client as WebClient
+participant Gateway as ApiGateway
+participant DocCtrl as DocumentController
+participant DocSvc as DocumentService
+participant DocDb as MongoDocument
+participant Webhook as WebhookService
+User->>Client: Tao document metadata
+Client->>Gateway: POST /api/documents
+Gateway->>DocCtrl: createDocument
+DocCtrl->>DocSvc: validate owner + payload
+DocSvc->>DocDb: insert document currentVersion
+DocSvc->>Webhook: send document.created
+DocSvc-->>Client: 201
+User->>Client: Upload version moi
+Client->>Gateway: POST /api/documents/:id/versions
+Gateway->>DocCtrl: uploadNewVersion
+DocSvc->>DocDb: push current -> previousVersions
+DocSvc->>DocDb: set new currentVersion
+alt Owner hop le
+  DocSvc-->>Client: 200 updated
+else Forbidden/Not found
+  DocSvc-->>Client: 403/404
+end
+User->>Client: Xoa document
+Client->>Gateway: DELETE /api/documents/:id
+DocSvc->>DocDb: set isActive=false

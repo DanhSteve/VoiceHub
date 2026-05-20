@@ -14,8 +14,8 @@ import api from './api';
 const friendService = {
   // Lấy danh sách bạn bè - GET /friends
   // Return: [{ id, name, avatar, status, ... }]
-  getFriends: async () => {
-    return await api.get('/friends');
+  getFriends: async (params = {}) => {
+    return await api.get('/friends', { params });
   },
 
   // Gửi lời mời kết bạn - POST /friends/request
@@ -30,9 +30,19 @@ const friendService = {
     return await api.post(`/friends/accept/${requestId}`);
   },
 
+  // Chấp nhận theo userId người gửi lời mời - POST /friends/:friendId/accept
+  acceptFriend: async (friendId) => {
+    return await api.post(`/friends/${friendId}/accept`);
+  },
+
   // Từ chối lời mời - DELETE /friends/reject/:requestId
   rejectRequest: async (requestId) => {
     return await api.delete(`/friends/reject/${requestId}`);
+  },
+
+  // Từ chối theo userId người gửi lời mời - POST /friends/:friendId/reject
+  rejectFriend: async (friendId) => {
+    return await api.post(`/friends/${friendId}/reject`);
   },
 
   // Xóa bạn - DELETE /friends/:friendId
@@ -43,8 +53,8 @@ const friendService = {
 
   // Lấy các lời mời chờ duyệt - GET /friends/pending
   // Return: [{ id, from: {...}, createdAt, ... }]
-  getPendingRequests: async () => {
-    return await api.get('/friends/pending');
+  getPendingRequests: async (config = {}) => {
+    return await api.get('/friends/pending', config);
   },
 
   // Chặn user - POST /friends/block
@@ -56,6 +66,15 @@ const friendService = {
   // Bỏ chặn - DELETE /friends/unblock/:userId
   unblockUser: async (userId) => {
     return await api.delete(`/friends/unblock/${userId}`);
+  },
+
+  // Alias: chặn/bỏ chặn qua route legacy đang chạy ổn định
+  blockFriend: async (friendId) => {
+    return await api.post('/friends/block', { userId: friendId });
+  },
+
+  unblockFriend: async (friendId) => {
+    return await api.delete(`/friends/unblock/${friendId}`);
   },
 
   // Tìm bạn theo số điện thoại

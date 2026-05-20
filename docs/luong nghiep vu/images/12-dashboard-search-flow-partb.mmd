@@ -1,0 +1,15 @@
+sequenceDiagram
+autonumber
+actor User as NguoiTimKiem
+participant Fetcher as DashboardSearchFetcher
+participant UI as DashboardSearchModal
+
+Note over User,UI: Chặng 2 - Lỗi context và lỗi từng nhánh
+User->>Fetcher: Tìm kiếm chat org nhưng thiếu orgId
+Fetcher-->>UI: Hiển thị cảnh báo thiếu context
+
+User->>Fetcher: Tìm kiếm DM nhưng thiếu friendId
+Fetcher-->>UI: Cảnh báo needFriendContext
+
+User->>Fetcher: Một API con bị lỗi
+Fetcher-->>UI: Hiển thị partial result + thông báo nhánh lỗi

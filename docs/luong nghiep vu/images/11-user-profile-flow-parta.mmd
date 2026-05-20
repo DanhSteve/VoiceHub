@@ -1,0 +1,21 @@
+sequenceDiagram
+autonumber
+actor User as ChuTaiKhoan
+participant Client as UngDungWeb
+participant Gateway as ApiGateway
+participant UserSvc as UserService
+participant Redis as Redis_ProfileCache
+participant UserDb as Mongo_UserProfile
+
+Note over User,UserDb: Chặng 1 - Xem hồ sơ và cache
+User->>Client: Mở trang hồ sơ
+Client->>Gateway: GET /api/users/me
+Gateway->>UserSvc: Forward
+UserSvc->>Redis: GET user:<userId>
+alt Cache hit
+  UserSvc-->>Client: Trả hồ sơ từ cache
+else Cache miss
+  UserSvc->>UserDb: Query profile
+  UserSvc->>Redis: SET cache
+  UserSvc-->>Client: Trả hồ sơ từ DB
+end

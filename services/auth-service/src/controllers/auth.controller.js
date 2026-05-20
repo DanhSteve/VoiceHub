@@ -1,5 +1,22 @@
 const authService = require('../services/auth.service');
 
+function resolveFrontendUrl(req) {
+  // Ưu tiên origin của request (browser gọi từ http://<ip>:5173).
+  const origin = req?.headers?.origin;
+  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
+
+  const referer = req?.headers?.referer;
+  if (referer && String(referer).trim()) {
+    try {
+      return new URL(String(referer)).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return String(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+}
+
 class AuthController {
   // Đăng ký
   async register(req, res) {
@@ -47,13 +64,17 @@ class AuthController {
       console.log('[AuthController] Calling authService.register()...');
       const startTime = Date.now();
       
-      const result = await authService.register({
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.register(
+        {
         email,
         password,
         firstName,
         lastName,
         dateOfBirth,
-      });
+        },
+        frontendUrl
+      );
 
       const duration = Date.now() - startTime;
       console.log(`[AuthController] ✅ Registration service completed in ${duration}ms`);
@@ -252,7 +273,8 @@ class AuthController {
         });
       }
 
-      const result = await authService.forgotPassword(email);
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.forgotPassword(email, frontendUrl);
 
       res.json({
         success: true,
@@ -283,7 +305,8 @@ class AuthController {
         });
       }
 
-      const result = await authService.resendVerificationEmail(email);
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.resendVerificationEmail(email, frontendUrl);
 
       res.json({
         success: true,
@@ -333,18 +356,13 @@ class AuthController {
   // Xác thực email
   async verifyEmail(req, res) {
     try {
-      console.log('[AuthController] ========== VERIFY EMAIL REQUEST ==========');
-      console.log('[AuthController] Request method:', req.method);
-      console.log('[AuthController] Request path:', req.path);
-      console.log('[AuthController] Request body:', req.body);
-      console.log('[AuthController] Request query:', req.query);
-      console.log('[AuthController] Request headers:', JSON.stringify(req.headers, null, 2));
+      console.log('[AuthController] verifyEmail:', req.method, req.path);
 
       // GET request: token chỉ có trong query string, KHÔNG có body
       // Lấy token từ query string (ưu tiên) hoặc body (nếu là POST)
       const verificationToken = req.query.token || req.body?.verificationToken || req.body?.token;
 
-      console.log('[AuthController] Extracted token:', verificationToken ? `${verificationToken.substring(0, 20)}...` : 'NOT FOUND');
+      console.log('[AuthController] Extracted token:', verificationToken ? 'REDACTED' : 'NOT FOUND');
 
       if (!verificationToken) {
         console.error('[AuthController] ❌ No verification token provided');

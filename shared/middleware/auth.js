@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const getJwtSecret = () => String(process.env.JWT_SECRET || '').trim();
 
 const normalizeToken = (rawToken) => {
   if (!rawToken) return null;
@@ -36,6 +36,15 @@ const normalizeToken = (rawToken) => {
  */
 const authenticate = (req, res, next) => {
   try {
+    const jwtSecret = getJwtSecret();
+    if (!jwtSecret) {
+      logger.error('JWT_SECRET is not configured');
+      return res.status(500).json({
+        success: false,
+        message: 'Authentication service misconfigured',
+      });
+    }
+
     // Lấy token từ header
     const authHeader = req.headers.authorization;
 
@@ -58,7 +67,7 @@ const authenticate = (req, res, next) => {
 
     // Verify token
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, jwtSecret);
       
       // Gắn user info vào request
       req.user = {
@@ -93,7 +102,6 @@ const authenticate = (req, res, next) => {
     return res.status(500).json({
       success: false,
       message: 'Authentication error',
-      error: error.message,
     });
   }
 };
@@ -105,6 +113,12 @@ const authenticate = (req, res, next) => {
  */
 const socketAuth = (socket, next) => {
   try {
+    const jwtSecret = getJwtSecret();
+    if (!jwtSecret) {
+      logger.error('JWT_SECRET is not configured');
+      return next(new Error('Authentication service misconfigured'));
+    }
+
     const authHeader = socket.handshake.headers?.authorization;
     const tokenFromHeader = authHeader?.split?.(' ')?.[1];
     const rawToken =
@@ -115,7 +129,7 @@ const socketAuth = (socket, next) => {
       return next(new Error('Authentication error: No token provided'));
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, jwtSecret);
     const normalizedUser = {
       ...decoded,
       id: decoded.id || decoded.userId || decoded._id,
@@ -154,6 +168,11 @@ const socketAuth = (socket, next) => {
  */
 const optionalAuth = (req, res, next) => {
   try {
+    const jwtSecret = getJwtSecret();
+    if (!jwtSecret) {
+      return next();
+    }
+
     const authHeader = req.headers.authorization;
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -163,7 +182,7 @@ const optionalAuth = (req, res, next) => {
       }
       
       try {
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, jwtSecret);
         req.user = {
           id: decoded.id,
           email: decoded.email,

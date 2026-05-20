@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const authenticateOrInternal = require('../middleware/authenticateOrInternal');
 const roleController = require('../controllers/role.controller');
+
+router.use(authenticateOrInternal);
 
 // Tạo role mới
 router.post('/', roleController.createRole.bind(roleController));
