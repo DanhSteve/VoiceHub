@@ -1,22 +1,73 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, GlassCard, GradientButton, NotificationBellBadge } from '../../components/Shared';
 import { useSocket } from '../../context/SocketContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useWorkspace } from '../../context/WorkspaceContext';
 import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
 import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
 import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 
+function parseNotificationDataField(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  if (typeof raw !== 'string') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function rawNotificationHasOrgScope(item) {
+  const data = parseNotificationDataField(item?.data);
+  const orgId = data?.organizationId || data?.workspaceId || '';
+  return Boolean(String(orgId).trim());
+}
+
+const ORG_NOTIFICATIONS_PATH = '/notifications/organization';
+
 function NotificationsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
-  const organizationIdFilter = String(searchParams.get('organizationId') || searchParams.get('orgId') || '').trim();
+  const { activeWorkspace } = useWorkspace();
+  const isOrgNotificationsPage = location.pathname.startsWith(ORG_NOTIFICATIONS_PATH);
+  const notificationScope = isOrgNotificationsPage ? 'organization' : 'personal';
+  const organizationIdFilter = useMemo(() => {
+    const fromQuery = String(searchParams.get('organizationId') || searchParams.get('orgId') || '').trim();
+    if (fromQuery) return fromQuery;
+    if (!isOrgNotificationsPage) return '';
+    return (
+      activeWorkspace?._id ||
+      activeWorkspace?.id ||
+      activeWorkspace?.organizationId ||
+      ''
+    );
+  }, [
+    searchParams,
+    isOrgNotificationsPage,
+    activeWorkspace?._id,
+    activeWorkspace?.id,
+    activeWorkspace?.organizationId,
+  ]);
+
+  /** URL cũ ?scope=organization → trang org riêng */
+  useEffect(() => {
+    const legacyScope = String(searchParams.get('scope') || '').trim().toLowerCase();
+    if (location.pathname !== '/notifications' || legacyScope !== 'organization') return;
+    const params = new URLSearchParams(searchParams);
+    params.delete('scope');
+    const qs = params.toString();
+    navigate(`${ORG_NOTIFICATIONS_PATH}${qs ? `?${qs}` : ''}`, { replace: true });
+  }, [location.pathname, navigate, searchParams]);
   const [filter, setFilter] = useState('all');
   const [notifSearch, setNotifSearch] = useState('');
   const [notifications, setNotifications] = useState([]);
@@ -37,18 +88,7 @@ function NotificationsPage() {
     return t('time.daysAgo', { n: diffDays });
   };
 
-  const parseNotificationData = (item) => {
-    const raw = item?.data;
-    if (!raw) return {};
-    if (typeof raw === 'object') return raw;
-    if (typeof raw !== 'string') return {};
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
+  const parseNotificationData = (item) => parseNotificationDataField(item?.data);
 
   const iconByType = {
     task: '✅',
@@ -144,7 +184,10 @@ function NotificationsPage() {
       const response = await api.get('/notifications', {
         params: {
           limit: 100,
-          ...(organizationIdFilter ? { organizationId: organizationIdFilter } : {}),
+          scope: notificationScope,
+          ...(notificationScope === 'organization' && organizationIdFilter
+            ? { organizationId: organizationIdFilter }
+            : {}),
         },
       });
       const payload = response?.data || response;
@@ -157,7 +200,7 @@ function NotificationsPage() {
     } finally {
       setNotificationsLoading(false);
     }
-  }, [organizationIdFilter, t]);
+  }, [organizationIdFilter, notificationScope, t]);
 
   useEffect(() => {
     loadNotifications();
@@ -174,6 +217,14 @@ function NotificationsPage() {
     if (!on || !off) return;
 
     const upsertNotification = (raw) => {
+      const inOrg = rawNotificationHasOrgScope(raw);
+      if (notificationScope === 'organization' && !inOrg) return;
+      if (notificationScope === 'personal' && inOrg) return;
+      if (notificationScope === 'organization' && organizationIdFilter) {
+        const data = parseNotificationDataField(raw?.data);
+        const oid = String(data?.organizationId || data?.workspaceId || '').trim();
+        if (oid && oid !== organizationIdFilter) return;
+      }
       const item = toViewNotification(raw);
       setNotifications((prev) => {
         if (!item?.id) return prev;
@@ -240,7 +291,7 @@ function NotificationsPage() {
       off('notification:deleted', handleDeleted);
       off('notification:deleted_read_all', handleDeletedReadAll);
     };
-  }, [on, off]);
+  }, [on, off, notificationScope, organizationIdFilter]);
 
   const handleMarkAsRead = async (id) => {
     if (!id) return;
@@ -334,7 +385,7 @@ function NotificationsPage() {
           : filter === 'friend'
             ? notifications.filter((n) => n.type === 'friend')
             : notifications.filter((n) => n.type === filter);
-    if (organizationIdFilter) {
+    if (notificationScope === 'organization' && organizationIdFilter) {
       list = list.filter((n) => String(n.organizationId || '').trim() === organizationIdFilter);
     }
     const q = notifSearch.trim().toLowerCase();
@@ -343,22 +394,24 @@ function NotificationsPage() {
       const hay = `${n.title || ''} ${n.message || ''} ${n.action || ''} ${n.type || ''}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [notifications, filter, notifSearch, organizationIdFilter]);
+  }, [notifications, filter, notifSearch, organizationIdFilter, notificationScope]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
-  const notifFilterOptions = useMemo(
-    () => [
+  const notifFilterOptions = useMemo(() => {
+    const base = [
       { id: 'all', label: t('notifications.filterAll'), icon: '📋' },
       { id: 'unread', label: t('notifications.filterUnread'), icon: '⭐' },
       { id: 'task', label: t('notifications.filterTasks'), icon: '✅' },
       { id: 'mention', label: t('common.mentions'), icon: '💬' },
       { id: 'deadline', label: t('notifications.filterDeadline'), icon: '⏰' },
       { id: 'meeting', label: t('notifications.filterMeetings'), icon: '📅' },
-      { id: 'friend', label: t('notifications.filterFriend'), icon: '🔔' },
-    ],
-    [t]
-  );
+    ];
+    if (!isOrgNotificationsPage) {
+      base.push({ id: 'friend', label: t('notifications.filterFriend'), icon: '🔔' });
+    }
+    return base;
+  }, [t, isOrgNotificationsPage]);
 
   const shell = `${appShellBg(isDarkMode)} ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`;
   const gc = isDarkMode ? 'border border-slate-800 bg-slate-900/60' : 'border border-slate-200 bg-white shadow-sm';
@@ -375,9 +428,15 @@ function NotificationsPage() {
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
             <h1 className={`mb-1 text-3xl font-extrabold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-              {t('notifications.title')}
+              {isOrgNotificationsPage
+                ? t('notifications.titleOrganization')
+                : t('notifications.title')}
             </h1>
-            <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>{t('notifications.subtitle')}</p>
+            <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
+              {isOrgNotificationsPage
+                ? t('notifications.scopeOrganizationHint')
+                : t('notifications.scopePersonalHint')}
+            </p>
           </div>
           <div className="flex shrink-0 flex-wrap gap-3">
             <button 

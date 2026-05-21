@@ -1094,7 +1094,11 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     setLoadingWorkspaceNotifications(true);
     try {
       const response = await api.get('/notifications', {
-        params: { organizationId: selectedOrganizationId, limit: 50 },
+        params: {
+          scope: 'organization',
+          organizationId: selectedOrganizationId,
+          limit: 50,
+        },
       });
       const body = response?.data ?? response;
       const inner = body?.data ?? body;

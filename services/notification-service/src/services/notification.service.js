@@ -50,6 +50,37 @@ async function maybeMigrateNotification(doc) {
   }
 }
 
+function buildScopeMongoFilter(scope) {
+  const normalized = String(scope || '').trim().toLowerCase();
+  if (normalized !== 'personal' && normalized !== 'organization') return null;
+
+  const noOrgId = {
+    $or: [
+      { 'data.organizationId': { $exists: false } },
+      { 'data.organizationId': null },
+      { 'data.organizationId': '' },
+    ],
+  };
+  const noWorkspaceId = {
+    $or: [
+      { 'data.workspaceId': { $exists: false } },
+      { 'data.workspaceId': null },
+      { 'data.workspaceId': '' },
+    ],
+  };
+  const hasOrgId = {
+    'data.organizationId': { $exists: true, $nin: [null, ''] },
+  };
+  const hasWorkspaceId = {
+    'data.workspaceId': { $exists: true, $nin: [null, ''] },
+  };
+
+  if (normalized === 'personal') {
+    return { $and: [noOrgId, noWorkspaceId] };
+  }
+  return { $or: [hasOrgId, hasWorkspaceId] };
+}
+
 class NotificationService {
   async createNotification(notificationData) {
     try {
@@ -124,16 +155,29 @@ class NotificationService {
 
   async getUserNotifications(userId, options = {}) {
     try {
-      const { isRead, type, organizationId, page = 1, limit = 50 } = options;
+      const { isRead, type, organizationId, scope, page = 1, limit = 50 } = options;
 
       const filter = { userId };
       if (isRead !== undefined) filter.isRead = isRead;
       if (type) filter.type = type;
-      if (organizationId) {
-        filter.$or = [
-          { 'data.organizationId': String(organizationId) },
-          { 'data.workspaceId': String(organizationId) },
-        ];
+
+      const scopeFilter = buildScopeMongoFilter(scope);
+      const orgIdFilter = organizationId
+        ? {
+            $or: [
+              { 'data.organizationId': String(organizationId) },
+              { 'data.workspaceId': String(organizationId) },
+            ],
+          }
+        : null;
+
+      const andParts = [];
+      if (scopeFilter) andParts.push(scopeFilter);
+      if (orgIdFilter) andParts.push(orgIdFilter);
+      if (andParts.length === 1) {
+        Object.assign(filter, andParts[0]);
+      } else if (andParts.length > 1) {
+        filter.$and = andParts;
       }
 
       const notifications = await Notification.find(filter)

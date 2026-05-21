@@ -1,28 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
+import OrganizationDocumentsView from '../../features/orgDocuments/OrganizationDocumentsView';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, Dropdown, GlassCard, GradientButton, Modal } from '../../components/Shared';
 import { useTheme } from '../../context/ThemeContext';
-import { threeFramePageHeader } from '../../theme/shellTheme';
+import { appShellBg } from '../../theme/shellTheme';
 import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 import api from '../../services/api';
-
-const DEMO_DOCS = [];
-const DEMO_FOLDERS = [];
 
 function DocumentsPage() {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
   const [searchParams] = useSearchParams();
-  const organizationId = searchParams.get('organizationId') || '';
-  const headerStrip = threeFramePageHeader(isDarkMode);
+  const organizationId = String(
+    searchParams.get('organizationId') || searchParams.get('orgId') || ''
+  ).trim();
+  const isOrgDocuments = Boolean(organizationId);
+
+  const shell = `${appShellBg(isDarkMode)} ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`;
+  const gc = isDarkMode ? 'border border-slate-800 bg-slate-900/60' : 'border border-slate-200 bg-white shadow-sm';
 
   const [viewMode, setViewMode] = useState('grid');
-  const [currentFolder, setCurrentFolder] = useState('root');
-  /** Lọc thư mục nhanh (minh họa) */
-  const [activeFolder, setActiveFolder] = useState(null);
   /** Từ khóa tìm theo tên (minh họa — API GET /documents hỗ trợ q khi nối dữ liệu thật) */
   const [docNameQuery, setDocNameQuery] = useState('');
   /** all | starred | shared */
@@ -58,14 +58,12 @@ function DocumentsPage() {
   });
 
   useEffect(() => {
+    if (isOrgDocuments) return undefined;
     let cancelled = false;
     setDocumentsLoading(true);
     api
       .get('/documents', {
-        params: {
-          ...(organizationId ? { organizationId } : {}),
-          limit: 100,
-        },
+        params: { limit: 100 },
       })
       .then((response) => {
         if (cancelled) return;
@@ -74,8 +72,11 @@ function DocumentsPage() {
         const list = Array.isArray(inner?.documents) ? inner.documents : Array.isArray(inner) ? inner : [];
         setDocuments(list.map(mapDocument));
       })
-      .catch(() => {
-        if (!cancelled) setDocuments([]);
+      .catch((err) => {
+        if (!cancelled) {
+          setDocuments([]);
+          toast.error(err?.message || t('documents.loadFail'));
+        }
       })
       .finally(() => {
         if (!cancelled) setDocumentsLoading(false);
@@ -83,13 +84,18 @@ function DocumentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [organizationId]);
+  }, [isOrgDocuments, t]);
 
   const handleStarFile = (fileId) => {
     toast.success(t('documents.toastStar'));
   };
 
   const handleDownloadFile = (file) => {
+    const url = file?.raw?.fileUrl || file?.raw?.url;
+    if (url) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
     toast(t('documents.toastDownloading', { name: file.name }), { icon: '⬇️' });
   };
 
@@ -119,10 +125,6 @@ function DocumentsPage() {
     }, 200);
   };
 
-  const storageUsed = 45.8; // GB
-  const storageTotal = 100; // GB
-  const storagePercent = (storageUsed / storageTotal) * 100;
-
   const docListFilterOptions = useMemo(
     () => [
       { id: 'all', label: t('documents.listFilterAll'), icon: '📋' },
@@ -137,30 +139,31 @@ function DocumentsPage() {
   };
 
   const filteredDocs = useMemo(() => {
-    let list = documents.length ? [...documents] : [...DEMO_DOCS];
-    if (activeFolder === 'Thiết Kế') list = list.filter((d) => d.category === 'Thiết kế');
-    else if (activeFolder === 'Tài Liệu') list = list.filter((d) => d.category === 'Tài liệu');
-    else if (activeFolder === 'Ảnh & Video') list = [];
+    let list = [...documents];
     if (listFilter === 'starred') list = list.filter((d) => d.starred);
     if (listFilter === 'shared') list = list.filter((d) => d.shared);
     const dq = docNameQuery.trim().toLowerCase();
     if (dq) list = list.filter((d) => String(d.name || '').toLowerCase().includes(dq));
     return list;
-  }, [activeFolder, documents, listFilter, docNameQuery]);
+  }, [documents, listFilter, docNameQuery]);
+
+  if (isOrgDocuments) {
+    return <OrganizationDocumentsView organizationId={organizationId} />;
+  }
+
+  const muted = isDarkMode ? 'text-slate-400' : 'text-slate-600';
+  const titleCls = isDarkMode ? 'text-white' : 'text-slate-900';
 
   return (
     <>
       <ThreeFrameLayout
         center={
-          <div className="flex h-full min-h-0 flex-col">
-            {/* Header */}
-            <div className={`p-6 ${headerStrip}`}>
-              <div className="flex items-center justify-between mb-6">
+          <div className={`flex h-full min-h-0 flex-col p-5 lg:p-6 ${shell}`}>
+            <div className="mb-6">
+              <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h1 className="text-4xl font-black text-gradient mb-2">{t('documents.title')}</h1>
-                  <p className={`text-base leading-relaxed ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
-                    {t('documents.subtitle')}
-                  </p>
+                  <h1 className={`mb-1 text-3xl font-extrabold ${titleCls}`}>{t('documents.title')}</h1>
+                  <p className={`text-sm ${muted}`}>{t('documents.subtitlePersonal')}</p>
                 </div>
                 <div className="flex gap-3">
                   <button 
@@ -192,73 +195,14 @@ function DocumentsPage() {
                   size="sm"
                 />
               </PageSearchToolbar>
-              {/* Storage Bar */}
-              <GlassCard>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-gray-400">{t('documents.storageUsed')}</span>
-                  <span className="text-sm font-bold text-white">{storageUsed} GB / {storageTotal} GB</span>
-                </div>
-                <div className="w-full h-2 glass-strong rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-gradient-to-r from-purple-600 to-pink-600 transition-all"
-                    style={{ width: `${storagePercent}%` }}
-                  ></div>
-                </div>
-              </GlassCard>
-            </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto p-6">
-              {/* Quick Access Folders */}
-              <div className="mb-8">
-                <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">{t('documents.foldersTitle')}</h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {DEMO_FOLDERS.map((folder, idx) => (
-                    <GlassCard
-                      key={idx}
-                      hover
-                      onClick={() => {
-                        setActiveFolder(folder.name);
-                        setCurrentFolder(folder.name);
-                        toast(t('documents.toastFiltered', { name: folder.name }), { icon: '📁' });
-                      }}
-                      className="cursor-pointer group animate-slideUp"
-                      style={{ animationDelay: `${idx * 0.05}s` }}
-                    >
-                      <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${folder.color} flex items-center justify-center text-2xl mb-3`}>
-                        {folder.icon}
-                      </div>
-                      <h3 className="font-bold text-white mb-1 group-hover:text-gradient transition-colors">{folder.name}</h3>
-                      <p className="text-gray-400 text-sm">
-                        {folder.count} {t('documents.filesSuffix')}
-                      </p>
-                    </GlassCard>
-                  ))}
-                </div>
-                {activeFolder && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveFolder(null);
-                      setCurrentFolder('root');
-                      toast(t('documents.toastFilterClear'), { icon: '✓' });
-                    }}
-                    className="mt-3 text-sm text-cyan-400/90 underline-offset-2 hover:underline"
-                  >
-                    {t('documents.clearFolderFilter')}
-                  </button>
-                )}
-              </div>
+              <div className="mt-6">
+                <h2 className={`mb-4 text-lg font-bold ${titleCls}`}>{t('documents.recentTitle')}</h2>
 
-              {/* Recent Files */}
-              <div>
-                <div className="mb-4">
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">{t('documents.recentTitle')}</h2>
-                </div>
-
-                {filteredDocs.length === 0 ? (
-                  <p className="py-12 text-center text-gray-400">
-                    {t('documents.filterEmpty')}
-                  </p>
+                {documentsLoading ? (
+                  <p className={`py-12 text-center text-sm ${muted}`}>{t('documents.orgLoading')}</p>
+                ) : filteredDocs.length === 0 ? (
+                  <p className={`py-12 text-center text-sm ${muted}`}>{t('documents.personalEmpty')}</p>
                 ) : viewMode === 'grid' ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-visible">
                     {filteredDocs.map((doc, idx) => (

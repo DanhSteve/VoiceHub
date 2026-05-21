@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import toast from 'react-hot-toast';
-import { Archive, Ban, Bell, BellOff, Calendar, Phone, Pin, PinOff, Search, Video } from 'lucide-react';
+import { Archive, Ban, Bell, BellOff, Calendar, ChevronsDown, Phone, Pin, Search, Video } from 'lucide-react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import NavigationSidebar from '../../components/Layout/NavigationSidebar';
 import UnifiedChatComposer from '../../components/Chat/UnifiedChatComposer';
@@ -31,6 +31,7 @@ import organizationService from '../../services/organizationService';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getAiTaskEligibility, AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
 import ConfirmDialog from '../../components/Shared/ConfirmDialog';
+import Modal from '../../components/Shared/Modal';
 import Toast from '../../components/Shared/Toast';
 import friendService from '../../services/friendService';
 import api from '../../services/api';
@@ -46,6 +47,7 @@ import { useFriendCallSession } from '../../context/FriendCallSessionContext';
 import friendCallService from '../../services/friendCallService';
 import { useTheme } from '../../context/ThemeContext';
 import { appShellBg } from '../../theme/shellTheme';
+import { entShell } from '../../theme/enterpriseWorkspace';
 import { useAppStrings } from '../../locales/appStrings';
 import { useLocale } from '../../context/LocaleContext';
 import {
@@ -66,6 +68,7 @@ function messageDayKey(iso) {
 
 const DM_MUTE_STORAGE_KEY = 'voicehub:dm-muted';
 const DM_PIN_STORAGE_KEY = 'voicehub:dm-pinned';
+const DM_PINNED_MESSAGES_STORAGE_KEY = 'voicehub:dm-pinned-messages';
 const DM_ARCHIVE_STORAGE_KEY = 'voicehub:dm-archived';
 const DM_DRAFT_PREFIX = 'voicehub:dm-draft:';
 const DM_PAGE_SIZE = dmMessageService.pageSize;
@@ -83,6 +86,27 @@ function loadIdList(storageKey) {
 function saveIdList(storageKey, ids) {
   try {
     localStorage.setItem(storageKey, JSON.stringify([...new Set(ids.map(String).filter(Boolean))]));
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadIdMap(storageKey) {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).map(([k, v]) => [String(k), Array.isArray(v) ? v.map(String).filter(Boolean) : []])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveIdMap(storageKey, value) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(value || {}));
   } catch {
     /* ignore */
   }
@@ -138,6 +162,9 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const [inlineToast, setInlineToast] = useState(null);
   const [mutedFriendIds, setMutedFriendIds] = useState(() => loadIdList(DM_MUTE_STORAGE_KEY));
   const [pinnedFriendIds, setPinnedFriendIds] = useState(() => loadIdList(DM_PIN_STORAGE_KEY));
+  const [pinnedMessageIdsByFriend, setPinnedMessageIdsByFriend] = useState(() =>
+    loadIdMap(DM_PINNED_MESSAGES_STORAGE_KEY)
+  );
   const [archivedFriendIds, setArchivedFriendIds] = useState(() => loadIdList(DM_ARCHIVE_STORAGE_KEY));
   const [unreadByPeer, setUnreadByPeer] = useState({});
   const [peerTyping, setPeerTyping] = useState(false);
@@ -146,11 +173,15 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const pendingSendsRef = useRef(new Map());
   const messagesEndRef = useRef(null);
+  const chatScrollRef = useRef(null);
+  const isNearBottomRef = useRef(true);
+  const [showJumpToDmLatest, setShowJumpToDmLatest] = useState(false);
   const [uploadPreview, setUploadPreview] = useState(null);
   const [failedUpload, setFailedUpload] = useState(null);
   const [dmServerSearchResults, setDmServerSearchResults] = useState(null);
   const [dmServerSearching, setDmServerSearching] = useState(false);
   const [showArchivedRail, setShowArchivedRail] = useState(false);
+  const [pinnedMessagesModalOpen, setPinnedMessagesModalOpen] = useState(false);
   const [blockedByPeer, setBlockedByPeer] = useState(false);
   const { user } = useAuth();
   const { openFriendCall } = useFriendCallSession();
@@ -201,6 +232,9 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const currentFriendKey = selectedFriendId ? String(selectedFriendId) : '';
   const isCurrentFriendMuted = currentFriendKey ? mutedFriendIds.includes(currentFriendKey) : false;
   const isCurrentFriendPinned = currentFriendKey ? pinnedFriendIds.includes(currentFriendKey) : false;
+  const pinnedMessageIdsCurrentFriend = currentFriendKey
+    ? pinnedMessageIdsByFriend[currentFriendKey] || []
+    : [];
 
   const showToast = (message, type = 'success') => {
     setInlineToast({ message, type });
@@ -234,11 +268,24 @@ function FriendChatPage({ landingDemo = false } = {}) {
     toast.success(isCurrentFriendPinned ? t('friendChat.pinOff') : t('friendChat.pinOn'));
   }, [currentFriendKey, isCurrentFriendPinned, pinnedFriendIds]);
 
-  const createGroupFromDm = useCallback(() => {
-    if (!currentFriendKey) return;
-    navigate('/voice', { state: { openInviteModal: true, sourceFriendId: currentFriendKey } });
-    toast.success(t('friendChat.openVoiceGroup'));
-  }, [currentFriendKey, navigate]);
+  const togglePinMessage = useCallback(
+    (msg) => {
+      if (!currentFriendKey || !msg) return;
+      const messageId = msg._id || msg.id;
+      if (messageId == null) return;
+      const idKey = String(messageId);
+      const prevIds = Array.isArray(pinnedMessageIdsByFriend[currentFriendKey])
+        ? pinnedMessageIdsByFriend[currentFriendKey]
+        : [];
+      const hasPinned = prevIds.includes(idKey);
+      const nextIds = hasPinned ? prevIds.filter((id) => id !== idKey) : [...prevIds, idKey];
+      const nextMap = { ...pinnedMessageIdsByFriend, [currentFriendKey]: nextIds };
+      setPinnedMessageIdsByFriend(nextMap);
+      saveIdMap(DM_PINNED_MESSAGES_STORAGE_KEY, nextMap);
+      toast.success(hasPinned ? 'Đã bỏ ghim tin nhắn' : 'Đã ghim tin nhắn');
+    },
+    [currentFriendKey, pinnedMessageIdsByFriend]
+  );
 
   const openMutualOrganization = useCallback(
     (org) => {
@@ -409,10 +456,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
           : typeof u?.headline === 'string'
             ? u.headline.trim()
             : '';
-      const subtitle =
-        title ||
-        (uname ? `@${uname}` : '') ||
-        t('friendChat.dmSubtitle');
+      const subtitle = title || t('friendChat.dmSubtitle');
       const id = u?._id || u?.userId || u?.id || f.id;
       const isBlockedByMe = String(f.relationshipStatus || '') === 'blocked';
       /** Luôn unique để tránh cảnh báo key khi thiếu user (id trùng undefined). */
@@ -883,6 +927,10 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const openCalendarForFriend = useCallback(
     (opts = {}) => {
       if (!currentFriend?.id) return;
+      if (isCurrentFriendBlocked) {
+        toast.error('Đã chặn người dùng, không thể đặt lịch.');
+        return;
+      }
       navigate('/calendar', {
         state: {
           source: 'friend-chat',
@@ -896,7 +944,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
         },
       });
     },
-    [currentFriend, navigate, t]
+    [currentFriend, isCurrentFriendBlocked, navigate, t]
   );
 
   const composerMentionItems = useMemo(
@@ -976,9 +1024,9 @@ function FriendChatPage({ landingDemo = false } = {}) {
       return;
     }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('ring-2', 'ring-cyan-500/70', 'rounded-2xl');
+    el.classList.add('ring-2', 'ring-cyan-500/70', 'rounded-md');
     window.setTimeout(() => {
-      el.classList.remove('ring-2', 'ring-cyan-500/70', 'rounded-2xl');
+      el.classList.remove('ring-2', 'ring-cyan-500/70', 'rounded-md');
     }, 2200);
   }, [t]);
 
@@ -1117,6 +1165,21 @@ function FriendChatPage({ landingDemo = false } = {}) {
     });
   }, [messages]);
 
+  const pinnedMessagesForCurrentFriend = useMemo(() => {
+    if (!pinnedMessageIdsCurrentFriend.length) return [];
+    const pinnedSet = new Set(pinnedMessageIdsCurrentFriend.map(String));
+    return sortedChatMessages
+      .filter((m) => {
+        const mid = m?._id || m?.id;
+        return mid != null && pinnedSet.has(String(mid));
+      })
+      .sort((a, b) => {
+        const ta = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return tb - ta;
+      });
+  }, [pinnedMessageIdsCurrentFriend, sortedChatMessages]);
+
   const lastOutgoingForReceipt = useMemo(() => {
     if (!currentUserId) return null;
     for (let i = sortedChatMessages.length - 1; i >= 0; i--) {
@@ -1237,6 +1300,74 @@ function FriendChatPage({ landingDemo = false } = {}) {
   };
 
   const visibleChatMessages = sortedChatMessages;
+
+  const CHAT_NEAR_BOTTOM_PX = 64;
+
+  const updateDmNearBottomState = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) {
+      isNearBottomRef.current = true;
+      setShowJumpToDmLatest(false);
+      return;
+    }
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    if (maxScroll <= 4) {
+      isNearBottomRef.current = true;
+      setShowJumpToDmLatest(false);
+      return;
+    }
+    const distFromBottom = maxScroll - el.scrollTop;
+    const near = distFromBottom <= CHAT_NEAR_BOTTOM_PX;
+    isNearBottomRef.current = near;
+    setShowJumpToDmLatest(!near);
+  }, []);
+
+  const handleDmChatScroll = useCallback(() => {
+    updateDmNearBottomState();
+  }, [updateDmNearBottomState]);
+
+  const scrollDmChatToLatest = useCallback(
+    (behavior = 'auto') => {
+      const el = chatScrollRef.current;
+      if (!el) return;
+      const apply = () => {
+        const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+        if (maxScroll > 0) {
+          if (behavior === 'smooth') {
+            el.scrollTo({ top: maxScroll, behavior: 'smooth' });
+          } else {
+            el.scrollTop = maxScroll;
+          }
+        } else {
+          messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+        }
+        isNearBottomRef.current = true;
+        setShowJumpToDmLatest(false);
+      };
+      requestAnimationFrame(() => {
+        apply();
+        requestAnimationFrame(updateDmNearBottomState);
+      });
+    },
+    [updateDmNearBottomState]
+  );
+
+  useEffect(() => {
+    if (!selectedFriendId) return;
+    isNearBottomRef.current = true;
+    setShowJumpToDmLatest(false);
+  }, [selectedFriendId]);
+
+  useEffect(() => {
+    if (!selectedFriendId || loadingMessages) return;
+    scrollDmChatToLatest('auto');
+  }, [selectedFriendId, loadingMessages, scrollDmChatToLatest]);
+
+  useEffect(() => {
+    if (!selectedFriendId || loadingMessages) return;
+    if (!isNearBottomRef.current) return;
+    scrollDmChatToLatest(sortedChatMessages.length > 0 ? 'smooth' : 'auto');
+  }, [selectedFriendId, sortedChatMessages, loadingMessages, scrollDmChatToLatest]);
 
   const matchesDmMessage = useCallback(
     (m) => {
@@ -1473,51 +1604,39 @@ function FriendChatPage({ landingDemo = false } = {}) {
     return currentFriend?.name || t('friendChat.friendDefault');
   };
 
+  const workspace = useMemo(() => {
+    const ent = entShell(isDarkMode);
+    return {
+      ...ent,
+      composerBar: isDarkMode
+        ? 'relative mt-auto shrink-0 rounded-b-xl border-t border-white/[0.06] bg-[#11141C]/98 px-4 pb-3 pt-2.5'
+        : 'relative mt-auto shrink-0 rounded-b-xl border-t border-slate-200/80 bg-white px-4 pb-3 pt-2.5',
+      composerWrap: 'shrink-0 bg-transparent p-0',
+    };
+  }, [isDarkMode]);
+
   const chatShell = isDarkMode
-    ? 'h-screen flex overflow-hidden bg-[#0b0e14] text-slate-100'
-    : `h-screen flex overflow-hidden ${appShellBg(false)} text-slate-900`;
-  const friendRail = isDarkMode
-    ? 'flex h-full min-h-0 w-[min(280px,92vw)] shrink-0 flex-col border-r border-white/[0.06] bg-[#0c0f15] sm:w-[260px]'
-    : 'flex h-full min-h-0 w-[min(280px,92vw)] shrink-0 flex-col border-r border-slate-200 bg-white sm:w-[260px]';
+    ? 'flex h-screen overflow-hidden bg-[#0F1117] text-slate-100'
+    : `flex h-screen overflow-hidden ${appShellBg(false)} text-slate-900`;
+  const friendRailAside = `${workspace.sidebar} h-full min-h-0 w-[min(280px,92vw)] overflow-hidden sm:w-[260px]`;
   const railHeadBorder = isDarkMode ? 'border-b border-white/[0.05]' : 'border-b border-slate-200';
   const railMuted = isDarkMode ? 'text-[#6d7380]' : 'text-slate-500';
   const railAvatarHover = isDarkMode ? 'hover:bg-white/[0.04]' : 'hover:bg-slate-100';
   const railActiveStrip = isDarkMode
     ? 'pointer-events-none absolute left-0 top-1/2 z-10 h-9 w-[3px] -translate-y-1/2 rounded-r-full bg-cyan-500 shadow-[0_0_12px_rgba(34,211,238,0.45)]'
     : 'pointer-events-none absolute left-0 top-1/2 z-10 h-9 w-[3px] -translate-y-1/2 rounded-r-full bg-cyan-600 shadow-[0_0_12px_rgba(8,145,178,0.35)]';
-  const statusRingBorder = isDarkMode ? 'border-[#0c0f15]' : 'border-white';
-  const chatMainColumn = isDarkMode
-    ? 'flex h-full min-w-0 flex-1 bg-[#0b0e14]'
-    : 'flex h-full min-w-0 flex-1 bg-slate-100';
-  const chatHeader = isDarkMode
-    ? 'shrink-0 border-b border-white/[0.06] bg-[#0b0e14] px-4 py-3'
-    : 'shrink-0 border-b border-slate-200 bg-white px-4 py-3';
-  const messagesScroll = isDarkMode
-    ? 'scrollbar-overlay flex min-h-0 flex-1 flex-col space-y-3 overflow-y-auto bg-[#080a0f] px-4 py-4'
-    : 'scrollbar-overlay flex min-h-0 flex-1 flex-col space-y-3 overflow-y-auto bg-slate-50 px-4 py-4';
-  const composerShell = isDarkMode
-    ? 'shrink-0 border-t border-white/[0.06] bg-[#0b0e14] px-4 py-3'
-    : 'shrink-0 border-t border-slate-200 bg-white px-4 py-3';
+  const dmChatScrollTrack =
+    'scrollbar-chat min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain';
   const emptyText = isDarkMode ? 'text-[#8e9297]' : 'text-slate-500';
-  const headerTitle = isDarkMode ? 'text-white' : 'text-slate-900';
-  const headerAccent = isDarkMode ? 'text-cyan-300' : 'text-cyan-700';
-  const headerMeta = isDarkMode ? 'text-[#8e9297]' : 'text-slate-500';
-  const headerTag = isDarkMode
-    ? 'rounded-full border border-white/[0.08] bg-[#12151f] px-2.5 py-0.5 text-[11px] font-medium text-[#b4b8c4]'
-    : 'rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600';
+  const headerTitle = workspace.textPrimary;
+  const headerAccent = isDarkMode ? 'text-[#8BA3F5]' : 'text-[#4F6BED]';
+  const headerMeta = isDarkMode ? workspace.textMuted : 'text-slate-500';
   const iconBtn = isDarkMode
     ? 'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#b4b8c4] transition hover:bg-white/[0.06] hover:text-white'
     : 'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-900';
-  const iconBtnDanger = isDarkMode
-    ? 'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-rose-400 transition hover:bg-rose-500/15 hover:text-rose-300'
-    : 'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-rose-600 transition hover:bg-rose-50 hover:text-rose-700';
-  const scheduleBtn = isDarkMode
-    ? 'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/[0.08] bg-[#12151f] px-2.5 text-xs font-semibold text-[#e3e5e8] transition hover:bg-white/[0.06]'
-    : 'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-100 px-2.5 text-xs font-semibold text-slate-800 transition hover:bg-slate-200/80';
   const avatarTile = isDarkMode
     ? 'flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-[#151923] text-sm font-bold text-white shadow-inner'
     : 'flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 text-sm font-bold text-slate-800 shadow-inner';
-  const onlineRing = isDarkMode ? 'border-[#0b0e14]' : 'border-white';
   const replyBanner = isDarkMode
     ? 'mb-2 flex items-center justify-between gap-2 rounded-t-xl border border-white/[0.08] bg-[#1a1d21] px-3 py-2 text-sm'
     : 'mb-2 flex items-center justify-between gap-2 rounded-t-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm';
@@ -1529,10 +1648,10 @@ function FriendChatPage({ landingDemo = false } = {}) {
     <div className={chatShell}>
       {/* Khung 1: Sidebar nav chỉ icon, thanh trượt riêng */}
       <NavigationSidebar landingDemo={landingDemo} />
-      <div className="flex h-full min-w-0 flex-1">
-        {/* Khung 2: Danh sách bạn bè - thanh trượt riêng, chỉ hiện khi cần */}
-        {/* Cột 2: rail avatar bạn bè (mockup — thanh chọn tím, chấm online) */}
-        <div className={friendRail}>
+      <div className={`${workspace.shell} min-h-0 min-w-0 flex-1`}>
+        <div className={workspace.shellInner}>
+        {/* Khung 2: Danh sách bạn — cùng token panel như sidebar tổ chức */}
+        <aside className={friendRailAside}>
           <div className={`shrink-0 space-y-2 px-2 pb-2 pt-3 ${railHeadBorder}`}>
             <div className="flex items-center justify-between gap-2">
               <p className={`text-[10px] font-semibold uppercase tracking-wider ${railMuted}`}>
@@ -1666,11 +1785,12 @@ function FriendChatPage({ landingDemo = false } = {}) {
               </div>
             )}
           </div>
-        </div>
+        </aside>
 
-        {/* Khung 3–4: Khu vực chat + sidebar phải */}
-        <div className={chatMainColumn}>
-          <div className="flex-1 flex flex-col h-full min-w-0">
+        {/* Khung chat chính (card như workspace) + sidebar phải */}
+        <div className="flex min-h-0 min-w-0 flex-1 gap-2 overflow-hidden">
+          <div className={`${workspace.main} min-h-0`}>
+          <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
           {friendsLoading ? (
             <div className={`flex flex-1 items-center justify-center ${emptyText}`}>
               {t('friendChat.loadingFriends')}
@@ -1685,7 +1805,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
             <div className={`flex flex-1 items-center justify-center ${emptyText}`}>{t('friendChat.pickFriend')}</div>
           ) : (
             <>
-              <header className={chatHeader}>
+              <header className={workspace.header}>
                 <div className="flex items-start gap-3">
                   <UserAvatar
                     avatar={currentFriend.avatar}
@@ -1701,9 +1821,6 @@ function FriendChatPage({ landingDemo = false } = {}) {
                     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                       <h2 className={`truncate text-base font-bold tracking-tight ${headerTitle}`}>{currentFriend.name}</h2>
                     </div>
-                    <p className={`truncate text-[11px] font-semibold uppercase tracking-wide ${headerAccent}`}>
-                      {currentFriend.subtitle}
-                    </p>
                     <p className={`mt-0.5 text-xs ${headerMeta}`} aria-live="polite">
                       {isCurrentFriendBlocked
                         ? t('friendChat.blockedRailLabel')
@@ -1713,16 +1830,6 @@ function FriendChatPage({ landingDemo = false } = {}) {
                             ? t('friendChat.online')
                             : t('friendChat.offline')}
                     </p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {[t('friendChat.tagChat'), t('friendChat.tagMessages')].map((tag) => (
-                        <span
-                          key={tag}
-                          className={headerTag}
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-0.5">
                     <button
@@ -1745,26 +1852,6 @@ function FriendChatPage({ landingDemo = false } = {}) {
                     </button>
                     <button
                       type="button"
-                      title={t('friendChat.schedule')}
-                      onClick={() =>
-                        navigate('/calendar', {
-                          state: {
-                            source: 'friend-chat',
-                            friendId: String(currentFriend.id),
-                            friendName: currentFriend.name || '',
-                            prefillType: 'meeting',
-                            prefillAttendees: [currentFriend.name].filter(Boolean),
-                            prefillTitle: `Meeting với ${currentFriend.name || 'bạn bè'}`,
-                          },
-                        })
-                      }
-                      className={scheduleBtn}
-                    >
-                      <Calendar className="h-4 w-4 shrink-0" strokeWidth={2} />
-                      {t('friendChat.schedule')}
-                    </button>
-                    <button
-                      type="button"
                       title={isCurrentFriendMuted ? 'Bật thông báo' : t('friendChat.convoNotif')}
                       onClick={toggleMuteCurrentFriend}
                       className={iconBtn}
@@ -1777,59 +1864,21 @@ function FriendChatPage({ landingDemo = false } = {}) {
                     </button>
                     <button
                       type="button"
-                      title={isCurrentFriendPinned ? 'Bỏ ghim hội thoại' : 'Ghim hội thoại'}
-                      onClick={togglePinCurrentFriend}
+                      title="Xem tin nhắn đã ghim"
+                      onClick={() => setPinnedMessagesModalOpen(true)}
                       className={iconBtn}
                     >
-                      {isCurrentFriendPinned ? (
-                        <PinOff className="h-5 w-5" strokeWidth={2} />
-                      ) : (
-                        <Pin className="h-5 w-5" strokeWidth={2} />
-                      )}
+                      <Pin className="h-5 w-5" strokeWidth={2} />
                     </button>
                     <button
                       type="button"
                       title={t('friendChat.openConversationSearch')}
-                      onClick={() => setConversationSearchOpen(true)}
+                      onClick={() => setConversationSearchOpen((v) => !v)}
                       className={iconBtn}
                       aria-label={t('friendChat.openConversationSearch')}
                     >
                       <Search className="h-5 w-5" strokeWidth={2} />
                     </button>
-                    {!landingDemo && (
-                      <>
-                        <button
-                          type="button"
-                          title={t('friendChat.archiveConvo')}
-                          onClick={toggleArchiveCurrentFriend}
-                          className={iconBtn}
-                          aria-label={t('friendChat.archiveConvo')}
-                        >
-                          <Archive className="h-5 w-5" strokeWidth={2} />
-                        </button>
-                        {isCurrentFriendBlocked ? (
-                          <button
-                            type="button"
-                            title={t('friendChat.unblockUser')}
-                            onClick={() => setUnblockConfirmOpen(true)}
-                            className={iconBtn}
-                            aria-label={t('friendChat.unblockUser')}
-                          >
-                            <Ban className="h-5 w-5" strokeWidth={2} />
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            title={t('friendChat.blockUser')}
-                            onClick={() => setBlockConfirmOpen(true)}
-                            className={iconBtnDanger}
-                            aria-label={t('friendChat.blockUser')}
-                          >
-                            <Ban className="h-5 w-5" strokeWidth={2} />
-                          </button>
-                        )}
-                      </>
-                    )}
                   </div>
                 </div>
                 {blockedByPeer && !isCurrentFriendBlocked && (
@@ -1887,53 +1936,44 @@ function FriendChatPage({ landingDemo = false } = {}) {
                   </div>
                 )}
               </header>
-              <ConversationSearchPanel
-                open={conversationSearchOpen}
-                onClose={() => setConversationSearchOpen(false)}
-                isDarkMode={isDarkMode}
-                locale={locale}
-                query={dmMessageSearch}
-                onQueryChange={setDmMessageSearch}
-                scope={dmScope}
-                onScopeChange={setDmScope}
-                scopeOptions={dmScopeOptions}
-                messages={sortedChatMessages}
-                matchesMessage={matchesDmMessage}
-                onSelectMessage={handleConversationSearchSelect}
-                serverResults={
-                  dmMessageSearch.trim().length >= 2 ? dmServerSearchFiltered : null
-                }
-                serverSearching={dmServerSearching}
-              />
-              <div
-                className={messagesScroll}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const file = e.dataTransfer?.files?.[0];
-                  if (file) handleFriendFileSelected({ target: { files: [file], value: '' } });
-                }}
-              >
-                {loadingMessages ? (
-                  <div className={`text-center ${emptyText}`}>{t('friendChat.loadingMessages')}</div>
-                ) : (
-                  <>
-                    {hasMoreOlder && (
-                      <div className="flex justify-center pb-2">
-                        <button
-                          type="button"
-                          onClick={loadOlderMessages}
-                          disabled={loadingOlder}
-                          className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                            isDarkMode
-                              ? 'border-white/10 bg-[#12151f] text-cyan-300 hover:bg-white/5'
-                              : 'border-slate-200 bg-white text-cyan-700 hover:bg-slate-50'
-                          }`}
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div
+                  ref={chatScrollRef}
+                  className={dmChatScrollTrack}
+                  onScroll={handleDmChatScroll}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const file = e.dataTransfer?.files?.[0];
+                    if (file) handleFriendFileSelected({ target: { files: [file], value: '' } });
+                  }}
+                >
+                  <div className="flex min-h-full min-w-0 flex-col px-4 py-3">
+                    <div className="mt-auto flex w-full flex-col gap-3">
+                      {loadingMessages ? (
+                        <div
+                          className={`flex min-h-[30vh] items-center justify-center text-center ${emptyText}`}
                         >
-                          {loadingOlder ? t('friendChat.loadingOlder') : t('friendChat.loadOlder')}
-                        </button>
-                      </div>
-                    )}
+                          {t('friendChat.loadingMessages')}
+                        </div>
+                      ) : (
+                        <>
+                          {hasMoreOlder && (
+                            <div className="flex justify-center pb-2">
+                              <button
+                                type="button"
+                                onClick={loadOlderMessages}
+                                disabled={loadingOlder}
+                                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                                  isDarkMode
+                                    ? 'border-white/10 bg-[#12151f] text-cyan-300 hover:bg-white/5'
+                                    : 'border-slate-200 bg-white text-cyan-700 hover:bg-slate-50'
+                                }`}
+                              >
+                                {loadingOlder ? t('friendChat.loadingOlder') : t('friendChat.loadOlder')}
+                              </button>
+                            </div>
+                          )}
                   {visibleChatMessages.map((m, idx) => {
                     const mid = m._id || m.id;
                     const rawSender = m.senderId?._id || m.senderId || '';
@@ -1973,23 +2013,17 @@ function FriendChatPage({ landingDemo = false } = {}) {
                     const sendPending = isMine && m._sendStatus === 'pending';
                     const reactionRows = Array.isArray(m.reactions) ? m.reactions : [];
 
-                    const mineBubble = isMine
-                      ? isDarkMode
-                        ? 'border-cyan-500/35 bg-gradient-to-br from-cyan-600 to-teal-700 text-white shadow-md shadow-cyan-900/25'
-                        : 'border-cyan-400/45 bg-gradient-to-br from-cyan-500 to-teal-600 text-white shadow-md shadow-cyan-900/15'
-                      : isDarkMode
-                        ? 'border-white/[0.06] bg-[#1a1d26] text-slate-100'
-                        : 'border-slate-200 bg-white text-slate-800 shadow-sm';
+                    const contentTextCls = isDarkMode ? 'text-[#dcddde]' : 'text-slate-800';
 
                     return (
                       <Fragment key={mid != null && mid !== '' ? String(mid) : `dm-msg-${idx}`}>
                         {showDayDivider && (
                           <div className="flex justify-center py-2">
                             <span
-                              className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-wide ${
                                 isDarkMode
                                   ? 'border-white/[0.06] bg-[#12151f] text-[#8e9297]'
-                                  : 'border-slate-200 bg-slate-100 text-slate-500'
+                                  : 'border-slate-200 bg-white text-slate-500 shadow-sm'
                               }`}
                             >
                               {formatDateDividerLabel(m.createdAt)}
@@ -1998,228 +2032,241 @@ function FriendChatPage({ landingDemo = false } = {}) {
                         )}
                         <div
                           data-dm-message-id={mid != null ? String(mid) : undefined}
-                          className={`flex w-full items-end gap-2 transition-shadow ${
-                            isMine ? 'justify-end' : 'justify-start'
+                          className={`group/msg relative -mx-4 px-4 py-0.5 transition-colors ${
+                            isDarkMode ? 'hover:bg-white/[0.035]' : 'hover:bg-slate-100/90'
                           }`}
+                          onMouseEnter={(e) => handleMessageRowMouseEnter(mid, e)}
                         >
-                          {!isMine && (
+                          {showToolbar && (
+                            <div
+                              className={`pointer-events-none absolute right-4 z-30 opacity-0 transition-opacity duration-150 group-hover/msg:pointer-events-auto group-hover/msg:opacity-100 ${
+                                toolbarPlace === 'below'
+                                  ? 'top-full mt-1'
+                                  : '-top-1 -translate-y-full'
+                              }`}
+                            >
+                              <ChannelMessageToolbar
+                                compact
+                                recentReactionsStorageKey="vh_dm_recent_reactions"
+                                isMine={isMine}
+                                showEdit={isMine && canEditDmMessage(m)}
+                                disabled={uploadProgress != null}
+                                onQuickReact={(emoji) => handleQuickReactMessage(m, emoji)}
+                                onOpenEmojiPicker={() => {}}
+                                onMiddleAction={() => {
+                                  if (isMine && canEditDmMessage(m)) {
+                                    setEditingMessageId(mid);
+                                    setEditDraft(String(m.content || ''));
+                                  } else {
+                                    setReplyingToMessage(m);
+                                  }
+                                }}
+                                onForward={() => handleForwardRequest(m)}
+                                onMore={(e) => {
+                                  const r = e?.currentTarget?.getBoundingClientRect?.();
+                                  if (r) {
+                                    setMoreMenu({ open: true, anchorRect: r, message: m });
+                                  }
+                                }}
+                              />
+                            </div>
+                          )}
+                          <div className="flex w-full items-start justify-start gap-3">
                             <UserAvatar
-                              avatar={currentFriend?.avatar}
-                              name={currentFriend?.name}
+                              avatar={isMine ? currentUserAvatar : currentFriend?.avatar}
+                              name={isMine ? currentUserName : currentFriend?.name}
                               size="sm"
                               ringClassName={
                                 isDarkMode
-                                  ? 'mb-0.5 border-white/[0.08] bg-[#151923] text-white shadow-sm'
-                                  : 'mb-0.5 border-slate-200 bg-slate-100 text-slate-800 shadow-sm'
+                                  ? 'mt-0.5 border-white/[0.08] bg-[#151923] text-white shadow-inner'
+                                  : 'mt-0.5 border-slate-200 bg-slate-100 text-slate-800 shadow-inner'
                               }
                             />
-                          )}
-                          <div
-                            className="group relative max-w-[min(80%,28rem)]"
-                            onMouseEnter={(e) => handleMessageRowMouseEnter(mid, e)}
-                          >
-                            {showToolbar && (
-                              <div
-                                className={`absolute z-20 opacity-0 transition-opacity group-hover:opacity-100 ${
-                                  toolbarPlace === 'below' ? 'top-full mt-1' : 'bottom-full mb-1'
-                                } ${isMine ? 'right-0' : 'left-0'}`}
-                              >
-                                <ChannelMessageToolbar
-                                  recentReactionsStorageKey="vh_dm_recent_reactions"
-                                  isMine={isMine}
-                                  showEdit={isMine && canEditDmMessage(m)}
-                                  disabled={uploadProgress != null}
-                                  onQuickReact={(emoji) => handleQuickReactMessage(m, emoji)}
-                                  onOpenEmojiPicker={() => {}}
-                                  onMiddleAction={() => {
-                                    if (isMine && canEditDmMessage(m)) {
-                                      setEditingMessageId(mid);
-                                      setEditDraft(String(m.content || ''));
-                                    } else {
-                                      setReplyingToMessage(m);
-                                    }
-                                  }}
-                                  onForward={() => handleForwardRequest(m)}
-                                  onMore={(e) => {
-                                    const r = e?.currentTarget?.getBoundingClientRect?.();
-                                    if (r) {
-                                      setMoreMenu({ open: true, anchorRect: r, message: m });
-                                    }
-                                  }}
-                                />
-                              </div>
-                            )}
-                            <div
-                              className={`inline-block w-full rounded-2xl border px-3.5 py-2.5 text-sm shadow-sm ${
-                                isMine ? 'rounded-tr-md' : 'rounded-tl-md'
-                              } ${mineBubble}`}
-                            >
-                              <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                            <div className="min-w-0 max-w-[min(100%,42rem)] flex-1">
+                              <div className="mb-1 flex flex-wrap items-center gap-2 justify-start">
                                 <span
-                                  className={`max-w-[12rem] truncate text-xs font-semibold ${
-                                    isMine
-                                      ? 'text-white/95'
-                                      : isDarkMode
-                                        ? 'text-cyan-200'
-                                        : 'text-cyan-800'
-                                  }`}
+                                  className={`text-sm font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
                                 >
                                   {displayName}
                                 </span>
+                                {isMine && (
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                                      isDarkMode
+                                        ? 'border-white/10 bg-white/[0.06] text-[#C5CAD3]'
+                                        : 'border-slate-200 bg-slate-100 text-slate-600'
+                                    }`}
+                                  >
+                                    {t('common.you')}
+                                  </span>
+                                )}
                                 <span
-                                  className={`text-[11px] tabular-nums ${
-                                    isMine ? 'text-white/70' : isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'
-                                  }`}
+                                  className={`text-[11px] tabular-nums ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
                                 >
                                   {formatTime(m.createdAt)}
                                 </span>
                                 {m.editedAt && (
                                   <span
-                                    className={`text-[10px] ${isMine ? 'text-white/55' : 'text-[#8e9297]/70'}`}
+                                    className={`text-[10px] ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
                                   >
                                     {t('friendChat.edited')}
                                   </span>
                                 )}
                               </div>
-                              {replyId && (
-                                <button
-                                  type="button"
-                                  onClick={() => jumpToMessage(replyId)}
-                                  className={`mb-2 w-full border-l-2 pl-2 text-left text-[11px] ${
-                                    isMine
-                                      ? 'border-white/40 text-white/85 hover:bg-white/5'
-                                      : isDarkMode
-                                        ? 'border-cyan-400/40 text-[#8e9297] hover:bg-white/5'
-                                        : 'border-cyan-300 text-slate-500 hover:bg-slate-50'
-                                  }`}
-                                >
-                                  <span
-                                    className={`font-semibold ${
-                                      isMine ? 'text-white' : isDarkMode ? 'text-cyan-200' : 'text-cyan-700'
-                                    }`}
-                                  >
-                                    @{replyLabelForDm(parentMsg || {})}{' '}
-                                  </span>
-                                  <span className="line-clamp-2">{replyPreview}</span>
-                                </button>
-                              )}
-                              {isEditing ? (
-                                <div className="space-y-2">
-                                  <textarea
-                                    value={editDraft}
-                                    onChange={(e) => setEditDraft(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter' && !e.shiftKey) {
-                                        e.preventDefault();
-                                        submitEdit(mid);
-                                      }
-                                      if (e.key === 'Escape') cancelEdit();
-                                    }}
-                                    rows={3}
-                                    className={`w-full resize-y rounded-lg border px-2 py-1.5 text-sm outline-none ${
-                                      isDarkMode
-                                        ? 'border-white/20 bg-black/35 text-white focus:border-cyan-400/50'
-                                        : 'border-slate-200 bg-white text-slate-900 focus:border-cyan-500'
-                                    }`}
-                                  />
-                                  <p className={`text-[11px] ${emptyText}`}>
-                                    {t('friendChat.editEscape')}{' '}
-                                    <button
-                                      type="button"
-                                      className={`${headerAccent} hover:underline`}
-                                      onClick={cancelEdit}
-                                    >
-                                      {t('friendChat.editCancel')}
-                                    </button>
-                                    {' • '}
-                                    {t('friendChat.editEnter')}{' '}
-                                    <button
-                                      type="button"
-                                      className={`${headerAccent} hover:underline`}
-                                      onClick={() => submitEdit(mid)}
-                                    >
-                                      {t('friendChat.editSave')}
-                                    </button>
-                                  </p>
-                                </div>
-                              ) : m.isRecalled ? (
-                                <p className={`text-sm italic ${isMine ? 'text-white/75' : emptyText}`}>
-                                  {t('friendChat.recalledPlaceholder')}
-                                </p>
-                              ) : (
-                                <ChatMessageAttachmentBody
-                                  message={m}
-                                  onImageClick={(_url, messageId) => openMediaViewerForMessage(messageId)}
-                                />
-                              )}
-                              {reactionRows.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  {Object.entries(
-                                    reactionRows.reduce((acc, r) => {
-                                      const em = r.emoji;
-                                      if (!em) return acc;
-                                      acc[em] = (acc[em] || 0) + 1;
-                                      return acc;
-                                    }, {})
-                                  ).map(([em, count]) => (
-                                    <span
-                                      key={em}
-                                      className={`rounded-full border px-2 py-0.5 text-xs ${
-                                        isDarkMode
-                                          ? 'border-white/15 bg-black/25'
-                                          : 'border-slate-200 bg-slate-50'
-                                      }`}
-                                    >
-                                      {em}
-                                      {count > 1 ? ` ${count}` : ''}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                              {sendPending && (
-                                <p className="mt-1 text-right text-[10px] text-white/60">
-                                  {t('friendChat.sending')}
-                                </p>
-                              )}
-                              {sendFailed && (
-                                <div className="mt-1 flex items-center justify-end gap-2">
-                                  <span className="text-[10px] text-rose-200">{t('friendChat.sendFailed')}</span>
+                              <div className={`text-sm leading-relaxed text-left ${contentTextCls}`}>
+                                {replyId && (
                                   <button
                                     type="button"
-                                    className="text-[10px] font-semibold underline text-white"
-                                    onClick={() => retrySend(m)}
+                                    onClick={() => jumpToMessage(replyId)}
+                                    className={`mb-2 border-l-2 pl-2 text-left text-[11px] ${
+                                      isDarkMode
+                                        ? 'border-[#5865F2]/50 text-[#949ba4] hover:bg-white/[0.04]'
+                                        : 'border-[#5865F2]/40 text-[#8e9297] hover:bg-slate-50'
+                                    }`}
                                   >
-                                    {t('friendChat.retrySend')}
+                                    <span className="font-semibold text-[#a29bfe]">
+                                      @{replyLabelForDm(parentMsg || {})}{' '}
+                                    </span>
+                                    <span className="line-clamp-2">{replyPreview}</span>
                                   </button>
-                                </div>
-                              )}
-                              {showReadReceipt && (
-                                <p className="mt-1.5 text-right text-[10px] font-medium text-white/70">
-                                  {readReceiptLabel}
-                                </p>
-                              )}
+                                )}
+                                {isEditing ? (
+                                  <div className="space-y-2">
+                                    <textarea
+                                      value={editDraft}
+                                      onChange={(e) => setEditDraft(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                          e.preventDefault();
+                                          submitEdit(mid);
+                                        }
+                                        if (e.key === 'Escape') cancelEdit();
+                                      }}
+                                      rows={3}
+                                      className={`w-full resize-y rounded-lg border px-2 py-1.5 text-sm outline-none ${
+                                        isDarkMode
+                                          ? 'border-white/20 bg-black/35 text-white focus:border-cyan-400/50'
+                                          : 'border-slate-200 bg-white text-slate-900 focus:border-cyan-500'
+                                      }`}
+                                    />
+                                    <p className={`text-[11px] ${emptyText}`}>
+                                      {t('friendChat.editEscape')}{' '}
+                                      <button
+                                        type="button"
+                                        className={`${headerAccent} hover:underline`}
+                                        onClick={cancelEdit}
+                                      >
+                                        {t('friendChat.editCancel')}
+                                      </button>
+                                      {' • '}
+                                      {t('friendChat.editEnter')}{' '}
+                                      <button
+                                        type="button"
+                                        className={`${headerAccent} hover:underline`}
+                                        onClick={() => submitEdit(mid)}
+                                      >
+                                        {t('friendChat.editSave')}
+                                      </button>
+                                    </p>
+                                  </div>
+                                ) : m.isRecalled ? (
+                                  <p className={`text-sm italic ${emptyText}`}>
+                                    {t('friendChat.recalledPlaceholder')}
+                                  </p>
+                                ) : (
+                                  <ChatMessageAttachmentBody
+                                    message={m}
+                                    mentionVariant="friend"
+                                    onImageClick={(_url, messageId) => openMediaViewerForMessage(messageId)}
+                                  />
+                                )}
+                                {reactionRows.length > 0 && (
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    {Object.entries(
+                                      reactionRows.reduce((acc, r) => {
+                                        const em = r.emoji;
+                                        if (!em) return acc;
+                                        acc[em] = (acc[em] || 0) + 1;
+                                        return acc;
+                                      }, {})
+                                    ).map(([em, count]) => (
+                                      <span
+                                        key={em}
+                                        className={`rounded-full border px-2 py-0.5 text-xs ${
+                                          isDarkMode
+                                            ? 'border-white/15 bg-black/25'
+                                            : 'border-slate-200 bg-slate-50'
+                                        }`}
+                                      >
+                                        {em}
+                                        {count > 1 ? ` ${count}` : ''}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {sendPending && (
+                                  <p
+                                    className={`mt-1 text-left text-[10px] ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}
+                                  >
+                                    {t('friendChat.sending')}
+                                  </p>
+                                )}
+                                {sendFailed && (
+                                  <div className="mt-1 flex items-center justify-start gap-2">
+                                    <span
+                                      className={`text-[10px] ${isDarkMode ? 'text-rose-300' : 'text-rose-600'}`}
+                                    >
+                                      {t('friendChat.sendFailed')}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className={`text-[10px] font-semibold underline ${isDarkMode ? 'text-rose-200' : 'text-rose-700'}`}
+                                      onClick={() => retrySend(m)}
+                                    >
+                                      {t('friendChat.retrySend')}
+                                    </button>
+                                  </div>
+                                )}
+                                {showReadReceipt && (
+                                  <p
+                                    className={`mt-1.5 text-left text-[10px] font-medium ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}
+                                  >
+                                    {readReceiptLabel}
+                                  </p>
+                                )}
+                              </div>
                             </div>
                           </div>
-                          {isMine && (
-                            <UserAvatar
-                              avatar={currentUserAvatar}
-                              name={currentUserName}
-                              size="sm"
-                              ringClassName={
-                                isDarkMode
-                                  ? 'mb-0.5 border-cyan-500/40 bg-[#1e2230] text-cyan-200 shadow-sm'
-                                  : 'mb-0.5 border-cyan-400/60 bg-cyan-50 text-cyan-800 shadow-sm'
-                              }
-                            />
-                          )}
                         </div>
                       </Fragment>
                     );
                   })}
-                  </>
-                )}
+                          <div ref={messagesEndRef} className="h-px w-full shrink-0" aria-hidden />
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {showJumpToDmLatest &&
+                  visibleChatMessages.length > 0 &&
+                  !loadingMessages &&
+                  currentFriend && (
+                    <button
+                      type="button"
+                      title={t('orgPanel.scrollToLatest')}
+                      aria-label={t('orgPanel.scrollToLatest')}
+                      onClick={() => scrollDmChatToLatest('smooth')}
+                      className={`pointer-events-auto absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 ${
+                        isDarkMode
+                          ? 'border border-white/10 bg-[#171B24] text-[#A1A8B3] hover:bg-[#1D2330] hover:text-[#F3F4F6]'
+                          : 'border border-slate-200/90 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <ChevronsDown className="h-5 w-5" strokeWidth={2.25} />
+                    </button>
+                  )}
               </div>
-              <div className="relative shrink-0">
+              <div className={workspace.composerBar}>
                 {failedUpload?.file && uploadProgress == null && (
                   <div
                     className={`mb-2 flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
@@ -2257,8 +2304,10 @@ function FriendChatPage({ landingDemo = false } = {}) {
                 />
                 <UnifiedChatComposer
                   richToolbar
+                  flatInner
+                  showSendButton={false}
                   mentionItems={composerMentionItems}
-                  wrapperClassName={composerShell}
+                  wrapperClassName={workspace.composerWrap}
                   topSlot={
                     replyingToMessage ? (
                       <div className={replyBanner}>
@@ -2440,6 +2489,21 @@ function FriendChatPage({ landingDemo = false } = {}) {
             }}
             onReply={() => moreMenu.message && setReplyingToMessage(moreMenu.message)}
             onForward={() => moreMenu.message && handleForwardRequest(moreMenu.message)}
+            onPinToggle={() => {
+              const msg = moreMenu.message;
+              if (!msg) return;
+              togglePinMessage(msg);
+            }}
+            pinLabel={
+              (() => {
+                const msg = moreMenu.message;
+                const messageId = msg?._id || msg?.id;
+                if (messageId == null) return 'Ghim tin nhắn';
+                return pinnedMessageIdsCurrentFriend.includes(String(messageId))
+                  ? 'Bỏ ghim tin nhắn'
+                  : 'Ghim tin nhắn';
+              })()
+            }
             onEdit={() => {
               const msg = moreMenu.message;
               if (!msg || !canEditDmMessage(msg)) return;
@@ -2495,26 +2559,59 @@ function FriendChatPage({ landingDemo = false } = {}) {
             submitting={forwarding}
             onConfirm={handleForwardConfirm}
           />
+          </div>
 
           {currentFriend && !resolvingDefaultChat && viewFriends.length > 0 && (
-            <FriendChatRightPanel
-              friend={currentFriend}
-              messages={messages}
-              attachments={friendAttachments}
-              currentUserId={currentUserId}
-              onMute={toggleMuteCurrentFriend}
-              onPin={togglePinCurrentFriend}
-              onCreateGroup={createGroupFromDm}
-              isMuted={isCurrentFriendMuted}
-              isPinned={isCurrentFriendPinned}
-              onOpenProfile={() => setProfileModalOpen(true)}
-              onOpenMediaAt={openMediaViewerAtGrid}
-              onViewAllMedia={() => setMediaViewer({ open: true, index: 0 })}
-              onAttachmentAction={handleAttachmentAction}
-              onOpenCalendarForFriend={openCalendarForFriend}
-              onOpenMutualOrganization={openMutualOrganization}
-            />
+            conversationSearchOpen ? (
+              <ConversationSearchPanel
+                inline
+                hideScopeChips
+                open={conversationSearchOpen}
+                onClose={() => setConversationSearchOpen(false)}
+                isDarkMode={isDarkMode}
+                locale={locale}
+                query={dmMessageSearch}
+                onQueryChange={setDmMessageSearch}
+                scope={dmScope}
+                onScopeChange={setDmScope}
+                scopeOptions={dmScopeOptions}
+                messages={sortedChatMessages}
+                matchesMessage={matchesDmMessage}
+                onSelectMessage={handleConversationSearchSelect}
+                serverResults={
+                  dmMessageSearch.trim().length >= 2 ? dmServerSearchFiltered : null
+                }
+                serverSearching={dmServerSearching}
+              />
+            ) : (
+              <FriendChatRightPanel
+                friend={currentFriend}
+                messages={messages}
+                attachments={friendAttachments}
+                currentUserId={currentUserId}
+                onBlock={() => {
+                  if (isCurrentFriendBlocked) setUnblockConfirmOpen(true);
+                  else setBlockConfirmOpen(true);
+                }}
+                onSchedule={() =>
+                  openCalendarForFriend({
+                    prefillType: 'meeting',
+                    prefillTitle: `Meeting với ${currentFriend.name || 'bạn bè'}`,
+                  })
+                }
+                onArchive={toggleArchiveCurrentFriend}
+                isArchived={archivedFriendIds.includes(String(currentFriend.id || ''))}
+                isBlocked={isCurrentFriendBlocked}
+                onOpenProfile={() => setProfileModalOpen(true)}
+                onOpenMediaAt={openMediaViewerAtGrid}
+                onViewAllMedia={() => setMediaViewer({ open: true, index: 0 })}
+                onAttachmentAction={handleAttachmentAction}
+                onOpenCalendarForFriend={openCalendarForFriend}
+                onOpenMutualOrganization={openMutualOrganization}
+              />
+            )
           )}
+        </div>
         </div>
       </div>
       <FriendProfileModal
@@ -2544,6 +2641,73 @@ function FriendChatPage({ landingDemo = false } = {}) {
         onCancel={clearUploadPreview}
         onConfirm={confirmUploadPreview}
       />
+      <Modal
+        isOpen={pinnedMessagesModalOpen}
+        onClose={() => setPinnedMessagesModalOpen(false)}
+        title="Tin nhắn đã ghim"
+        size="md"
+      >
+        {pinnedMessagesForCurrentFriend.length === 0 ? (
+          <p className={`py-6 text-center text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+            Chưa có tin nhắn nào được ghim.
+          </p>
+        ) : (
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+            {pinnedMessagesForCurrentFriend.map((msg) => {
+              const messageId = msg?._id || msg?.id;
+              const senderName =
+                String(msg?.senderId?._id || msg?.senderId || '') === String(currentUserId || '')
+                  ? currentUserName
+                  : currentFriend?.name || 'Bạn bè';
+              return (
+                <div
+                  key={String(messageId)}
+                  className={`rounded-xl border px-3 py-2 ${
+                    isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-slate-50'
+                  }`}
+                >
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className={`truncate text-xs font-semibold ${isDarkMode ? 'text-slate-200' : 'text-slate-700'}`}>
+                      {senderName}
+                    </span>
+                    <span className={`shrink-0 text-[11px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                      {formatTime(msg?.createdAt)}
+                    </span>
+                  </div>
+                  <p className={`line-clamp-2 text-sm ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                    {plainTextForMessage(msg) || 'Tin nhắn đính kèm'}
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPinnedMessagesModalOpen(false);
+                        jumpToMessage(messageId);
+                      }}
+                      className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
+                        isDarkMode ? 'bg-cyan-600 text-white hover:bg-cyan-500' : 'bg-cyan-600 text-white hover:bg-cyan-700'
+                      }`}
+                    >
+                      Đi tới tin nhắn
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => togglePinMessage(msg)}
+                      className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
+                        isDarkMode
+                          ? 'bg-white/10 text-slate-200 hover:bg-white/15'
+                          : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                      }`}
+                    >
+                      Bỏ ghim
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
       <ConfirmDialog
         isOpen={deleteMsgConfirmId != null}
         onClose={() => setDeleteMsgConfirmId(null)}

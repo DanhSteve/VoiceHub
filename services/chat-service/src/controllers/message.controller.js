@@ -20,7 +20,6 @@ const {
   fetchAccessibleChannelPermissionMatrix,
   assertCanWriteInOrgChannel,
 } = require('../utils/orgChannelPermissions');
- Tester
 
 /** Header gọi organization-service: tin cậy gateway (giống proxy) hoặc Bearer để /auth/me. */
 function headersForOrganizationForward(req) {

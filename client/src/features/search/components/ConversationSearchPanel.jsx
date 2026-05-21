@@ -38,6 +38,8 @@ export default function ConversationSearchPanel({
   /** Kết quả từ server (ưu tiên khi có query) */
   serverResults = null,
   serverSearching = false,
+  inline = false,
+  hideScopeChips = false,
 }) {
   const { t } = useAppStrings();
 
@@ -65,20 +67,17 @@ export default function ConversationSearchPanel({
   const muted = isDarkMode ? 'text-[#8e9297]' : 'text-slate-500';
   const rowHover = isDarkMode ? 'hover:bg-white/[0.05]' : 'hover:bg-slate-50';
 
-  return (
-    <>
-      <button
-        type="button"
-        className={`fixed inset-0 z-[240] ${overlay}`}
-        aria-label={t('common.close')}
-        onClick={onClose}
-      />
-      <aside
-        className={`fixed right-0 top-0 z-[250] flex h-full w-[min(360px,92vw)] flex-col border-l shadow-2xl ${panel}`}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="conversation-search-title"
-      >
+  const asideClass = inline
+    ? `flex h-full min-h-0 w-[min(320px,32vw)] shrink-0 flex-col overflow-hidden border-l shadow-none ${panel}`
+    : `fixed right-0 top-0 z-[250] flex h-full w-[min(360px,92vw)] flex-col border-l shadow-2xl ${panel}`;
+
+  const content = (
+    <aside
+      className={asideClass}
+      role="dialog"
+      aria-modal={inline ? undefined : 'true'}
+      aria-labelledby="conversation-search-title"
+    >
         <header className={`flex shrink-0 items-center justify-between border-b px-4 py-3 ${isDarkMode ? 'border-white/[0.06]' : 'border-slate-200'}`}>
           <h2 id="conversation-search-title" className="text-base font-bold">
             {t('friendChat.conversationSearchTitle')}
@@ -103,14 +102,16 @@ export default function ConversationSearchPanel({
             aria-label={t('friendChat.searchInConversationAria')}
             size="md"
           />
-          <SearchFilterChips
-            aria-label={t('friendChat.dmScopeLabel')}
-            options={scopeOptions}
-            value={scope}
-            onChange={onScopeChange}
-            isDarkMode={isDarkMode}
-            size="sm"
-          />
+          {!hideScopeChips && (
+            <SearchFilterChips
+              aria-label={t('friendChat.dmScopeLabel')}
+              options={scopeOptions}
+              value={scope}
+              onChange={onScopeChange}
+              isDarkMode={isDarkMode}
+              size="sm"
+            />
+          )}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-overlay px-2 py-2">
@@ -145,6 +146,19 @@ export default function ConversationSearchPanel({
           )}
         </div>
       </aside>
+  );
+
+  if (inline) return content;
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`fixed inset-0 z-[240] ${overlay}`}
+        aria-label={t('common.close')}
+        onClick={onClose}
+      />
+      {content}
     </>
   );
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Bell,
-  BellOff,
+  Archive,
+  Ban,
   Check,
   ChevronRight,
   Clock,
@@ -9,10 +9,7 @@ import {
   Forward,
   Loader2,
   MoreHorizontal,
-  Pin,
-  PinOff,
   Plus,
-  UserPlus,
   Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -27,6 +24,7 @@ import ChatAttachmentContextMenu from './ChatAttachmentContextMenu';
 import { isAvatarImageUrl } from '../../utils/avatarDisplay';
 import { buildMediaAttachmentMenuItems } from '../../utils/buildAttachmentMenuItems';
 import { fileTypeBadge, formatFileSize } from '../../utils/chatFileDisplay';
+import { entShell } from '../../theme/enterpriseWorkspace';
 import {
   formatDmEventWhen,
   getDmRemindersForFriend,
@@ -55,11 +53,11 @@ export default function FriendChatRightPanel({
   messages = [],
   attachments,
   currentUserId,
-  onMute,
-  onPin,
-  onCreateGroup,
-  isMuted = false,
-  isPinned = false,
+  onBlock,
+  onSchedule,
+  onArchive,
+  isArchived = false,
+  isBlocked = false,
   onOpenProfile,
   onOpenMediaAt,
   onViewAllMedia,
@@ -174,12 +172,11 @@ export default function FriendChatRightPanel({
     });
   };
 
-  const shell = isDarkMode
-    ? 'hidden h-full w-[min(320px,32vw)] shrink-0 flex-col overflow-hidden border-l border-white/[0.06] bg-[#0b0c14] lg:flex'
-    : 'hidden h-full w-[min(320px,32vw)] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white lg:flex';
+  const sidebarTok = entShell(isDarkMode);
+  const shell = `${sidebarTok.sidebar} hidden h-full min-h-0 w-[min(320px,32vw)] shrink-0 flex-col overflow-hidden lg:flex`;
   const hairlineB = isDarkMode ? 'border-b border-white/[0.06]' : 'border-b border-slate-200';
   const hairlineT = isDarkMode ? 'border-t border-white/[0.06]' : 'border-t border-slate-200';
-  const titleMain = isDarkMode ? 'text-white' : 'text-slate-900';
+  const titleMain = sidebarTok.textPrimary;
   const labelMuted = isDarkMode ? 'text-gray-500' : 'text-slate-500';
   const sectionBtn = isDarkMode
     ? 'flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-white hover:bg-white/[0.03]'
@@ -191,6 +188,9 @@ export default function FriendChatRightPanel({
   const actionCircle = isDarkMode
     ? 'flex flex-col items-center gap-1.5 rounded-xl p-2 text-[10px] text-gray-400 transition hover:bg-white/[0.05] hover:text-white'
     : 'flex flex-col items-center gap-1.5 rounded-xl p-2 text-[10px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-900';
+  const actionCircleDisabled = isDarkMode
+    ? 'cursor-not-allowed opacity-45 hover:bg-transparent hover:text-gray-400'
+    : 'cursor-not-allowed opacity-50 hover:bg-transparent hover:text-slate-500';
 
   const renderFileRow = (f) => {
     const mime = f.fileMeta?.mimeType || '';
@@ -390,17 +390,23 @@ export default function FriendChatRightPanel({
           </button>
 
           <div className="mt-4 grid w-full grid-cols-3 gap-1">
-            <button type="button" onClick={onMute} className={actionCircle}>
-              {isMuted ? <BellOff className="h-5 w-5" /> : <Bell className="h-5 w-5" />}
-              <span>{isMuted ? t('friendChat.footerUnmute') : t('friendChat.footerMute')}</span>
+            <button type="button" onClick={onBlock} className={actionCircle}>
+              <Ban className="h-5 w-5" />
+              <span>{isBlocked ? t('friendChat.unblockUser') : t('friendChat.blockUser')}</span>
             </button>
-            <button type="button" onClick={onPin} className={actionCircle}>
-              {isPinned ? <PinOff className="h-5 w-5" /> : <Pin className="h-5 w-5" />}
-              <span>{isPinned ? t('friendChat.footerUnpin') : t('friendChat.footerPin')}</span>
+            <button
+              type="button"
+              onClick={onSchedule}
+              disabled={isBlocked}
+              title={isBlocked ? 'Đã chặn người dùng, không thể đặt lịch' : t('friendChat.schedule')}
+              className={`${actionCircle} ${isBlocked ? actionCircleDisabled : ''}`}
+            >
+              <Clock className="h-5 w-5" />
+              <span>{t('friendChat.schedule')}</span>
             </button>
-            <button type="button" onClick={onCreateGroup} className={actionCircle}>
-              <UserPlus className="h-5 w-5" />
-              <span>{t('friendChat.footerGroup')}</span>
+            <button type="button" onClick={onArchive} className={actionCircle}>
+              <Archive className="h-5 w-5" />
+              <span>{isArchived ? t('friendChat.showActiveChats') : t('friendChat.archiveConvo')}</span>
             </button>
           </div>
         </div>
@@ -409,21 +415,6 @@ export default function FriendChatRightPanel({
           <button type="button" className={quickRow} onClick={openRemindersModal}>
             <Clock className="h-5 w-5 shrink-0 opacity-70" />
             <span className="min-w-0 flex-1">{t('friendChat.remindersList')}</span>
-            <ChevronRight className="h-4 w-4 shrink-0 opacity-50" />
-          </button>
-          <button
-            type="button"
-            className={`${quickRow} ${hairlineT}`}
-            onClick={() => setMutualOpen(true)}
-          >
-            <Users className="h-5 w-5 shrink-0 opacity-70" />
-            <span className="min-w-0 flex-1">
-              {mutualOrgs.loading ? (
-                <Loader2 className="inline h-4 w-4 animate-spin opacity-60" />
-              ) : (
-                t('friendChat.mutualGroups', { count: mutualCount })
-              )}
-            </span>
             <ChevronRight className="h-4 w-4 shrink-0 opacity-50" />
           </button>
         </div>

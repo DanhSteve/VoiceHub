@@ -94,7 +94,7 @@ class NotificationController {
   async getUserNotifications(req, res) {
     try {
       const userId = req.user?.id || req.userContext?.userId || req.params.userId;
-      const { isRead, type, page, limit, organizationId } = req.query;
+      const { isRead, type, page, limit, organizationId, scope } = req.query;
 
       if (!userId) {
         return res.status(400).json({
@@ -107,6 +107,7 @@ class NotificationController {
         isRead: isRead === 'true' ? true : isRead === 'false' ? false : undefined,
         type,
         organizationId,
+        scope,
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 50,
       });

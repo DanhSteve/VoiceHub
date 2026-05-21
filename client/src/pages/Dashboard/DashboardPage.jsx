@@ -50,24 +50,161 @@ function truncateText(value, maxLength = 56) {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
+function isValidObjectId(value) {
+  return /^[a-f\d]{24}$/i.test(String(value || '').trim());
+}
 
-/** Màu ô heatmap theo mức hoạt động (task + tin nhắn trong ngày). */
-function activityCellClass(total, isDarkMode = true) {
+/** Chuẩn hóa yyyy-mm-dd theo giờ local */
+function dayKeyFromDate(value) {
+  const d = value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Tổng task done trong org — đã dùng ở thẻ chỉ số (từng org gọi GET /statistics). */
+async function sumTaskDoneAcrossOrgs(orgIds) {
+  if (!Array.isArray(orgIds) || orgIds.length === 0) {
+    return { total: 0, allFailed: false };
+  }
+  let total = 0;
+  let failures = 0;
+  await Promise.all(
+    orgIds.map(async (oid) => {
+      const raw = await taskAPI.getStatistics(oid).catch(() => null);
+      if (!raw) {
+        failures += 1;
+        return;
+      }
+      const stats = raw?.data?.data ?? raw?.data ?? raw;
+      const done = Number(stats?.done);
+      if (!Number.isFinite(done)) failures += 1;
+      else total += done;
+    })
+  );
+  return { total, allFailed: failures === orgIds.length };
+}
+
+async function fetchMessagesForDashboardPaged(api, { maxPages = 40, limit = 100 } = {}) {
+  const rows = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const msgRes = await api.get('/messages', { params: { limit, page }, skipGlobalErrorHandling: true }).catch(() => null);
+    if (!msgRes) break;
+    const msgBody = msgRes?.data?.data ?? msgRes?.data ?? msgRes;
+    const batch = Array.isArray(msgBody?.messages) ? msgBody.messages : [];
+    if (!batch.length) break;
+    rows.push(...batch);
+    if (batch.length < limit) break;
+  }
+  return rows;
+}
+
+async function fetchTasksForDashboardPaged({ maxPages = 25, limit = 100 } = {}) {
+  const rows = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const res = await taskAPI.getTasks({ limit, page }).catch(() => null);
+    if (!res) break;
+    const body = res?.data?.data ?? res?.data ?? res;
+    const batch = Array.isArray(body?.tasks) ? body.tasks : [];
+    if (!batch.length) break;
+    rows.push(...batch);
+    if (batch.length < limit) break;
+  }
+  return rows;
+}
+
+/**
+ * Lưới đóng góp kiểu GitHub: mỗi cột một tuần (Chủ nhật trên → Thứ bảy dưới).
+ * Ngày ngoài năm chọn được render trong lưới nhưng inYear=false (ô trong suốt).
+ */
+function buildGithubYearGrid(year, dailyMap, locale) {
+  const yearStart = new Date(year, 0, 1);
+  yearStart.setHours(0, 0, 0, 0);
+  const yearEnd = new Date(year, 11, 31);
+  yearEnd.setHours(23, 59, 59, 999);
+
+  const jan1 = new Date(year, 0, 1);
+  jan1.setHours(0, 0, 0, 0);
+  const startDow = jan1.getDay();
+  const gridStart = new Date(jan1);
+  gridStart.setDate(jan1.getDate() - startDow);
+
+  const dec31 = new Date(year, 11, 31);
+  dec31.setHours(0, 0, 0, 0);
+  const endDow = dec31.getDay();
+  const gridEnd = new Date(dec31);
+  gridEnd.setDate(dec31.getDate() + (6 - endDow));
+
+  const msPerDay = 86400000;
+  const totalDays = Math.round((gridEnd.getTime() - gridStart.getTime()) / msPerDay) + 1;
+  const numWeeks = totalDays / 7;
+
+  const weeks = [];
+  for (let w = 0; w < numWeeks; w += 1) {
+    const col = [];
+    for (let d = 0; d < 7; d += 1) {
+      const date = new Date(gridStart.getTime() + (w * 7 + d) * msPerDay);
+      date.setHours(12, 0, 0, 0);
+      const key = dayKeyFromDate(date);
+      const t = date.getTime();
+      const inYear = t >= yearStart.getTime() && t <= yearEnd.getTime();
+      let tasks = 0;
+      let messages = 0;
+      if (inYear && dailyMap && typeof dailyMap === 'object') {
+        const bucket = dailyMap[key];
+        tasks = bucket?.tasks || 0;
+        messages = bucket?.messages || 0;
+      }
+      col.push({
+        key,
+        date,
+        inYear,
+        tasks,
+        messages,
+        total: tasks + messages,
+      });
+    }
+    weeks.push(col);
+  }
+
+  const monthLocale = locale === 'en' ? 'en-US' : 'vi-VN';
+  const monthLabels = [];
+  let lastMonth = -1;
+  for (let w = 0; w < numWeeks; w += 1) {
+    let label = '';
+    for (let d = 0; d < 7; d += 1) {
+      const cell = weeks[w][d];
+      if (cell.inYear) {
+        const m = cell.date.getMonth();
+        if (m !== lastMonth) {
+          label = cell.date.toLocaleDateString(monthLocale, { month: 'short' });
+          lastMonth = m;
+        }
+        break;
+      }
+    }
+    monthLabels.push(label);
+  }
+
+  return { weeks, monthLabels, numWeeks };
+}
+
+function githubContributionCellClass(total, isDarkMode) {
   const n = Math.max(0, Number(total) || 0);
   if (isDarkMode) {
-    if (n === 0) return 'bg-white/[0.04]';
-    if (n === 1) return 'bg-cyan-900/55';
-    if (n <= 3) return 'bg-cyan-700/60';
-    if (n <= 6) return 'bg-cyan-500/65';
-    return 'bg-cyan-400/75';
+    if (n === 0) return 'bg-[#161b22] border border-[#30363d]/60';
+    if (n === 1) return 'bg-[#0e4429] border border-[#30363d]/40';
+    if (n <= 3) return 'bg-[#006d32] border border-[#30363d]/35';
+    if (n <= 6) return 'bg-[#26a641] border border-[#30363d]/25';
+    return 'bg-[#39d353] border border-[#30363d]/20';
   }
-  if (n === 0) return 'bg-slate-100';
-  if (n === 1) return 'bg-cyan-100';
-  if (n <= 3) return 'bg-cyan-200';
-  if (n <= 6) return 'bg-cyan-400/85';
-  return 'bg-cyan-500';
-
+  if (n === 0) return 'bg-slate-100 border border-slate-200/90';
+  if (n === 1) return 'bg-emerald-200 border border-emerald-300/70';
+  if (n <= 3) return 'bg-emerald-300 border border-emerald-400/70';
+  if (n <= 6) return 'bg-emerald-400 border border-emerald-500/70';
+  return 'bg-emerald-500 border border-emerald-600/80';
 }
+
+
 
 function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   const [activeFilter, setActiveFilter] = useState(() =>
@@ -95,9 +232,13 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   /** Cuộc họp sắp tới (từ GET /api/meetings + startFrom/startTo) */
   const [upcomingMeetings, setUpcomingMeetings] = useState([]);
   const [workspaceEntries, setWorkspaceEntries] = useState([]);
-  const [personalActivityDays, setPersonalActivityDays] = useState([]);
+  /** Map yyyy-mm-dd -> { tasks, messages } để heatmap đóng góp theo năm */
+  const [activityDailyMap, setActivityDailyMap] = useState({});
+  const [activityYear, setActivityYear] = useState(() => new Date().getFullYear());
   const [weeklyActivityDays, setWeeklyActivityDays] = useState([]);
   const [weeklyActivityNotes, setWeeklyActivityNotes] = useState([]);
+  const [recentDmContacts, setRecentDmContacts] = useState([]);
+  const [recentNotifications, setRecentNotifications] = useState([]);
   const { user } = useAuth();
   const { onlineUsers, connected: socketConnected } = useSocket();
   const navigate = useLandingSafeNavigate(landingDemo);
@@ -166,14 +307,21 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         { id: 'demo-org-1', name: 'Alpha Corp', slug: 'alpha-corp', myRole: 'admin' },
         { id: 'demo-org-2', name: 'BetaLabs', slug: 'betalabs', myRole: 'member' },
       ]);
-      setPersonalActivityDays(
-        Array.from({ length: 35 }, (_, index) => ({
-          key: `demo-${index}`,
-          tasks: index % 4 === 0 ? 2 : index % 3 === 0 ? 1 : 0,
-          messages: index % 5 === 0 ? 4 : index % 2 === 0 ? 1 : 0,
-          total: index % 4 === 0 ? 6 : index % 3 === 0 ? 2 : index % 2 === 0 ? 1 : 0,
-        }))
-      );
+      const demoY = new Date().getFullYear();
+      const demoDaily = {};
+      for (let mi = 0; mi < 12; mi += 1) {
+        const dim = new Date(demoY, mi + 1, 0).getDate();
+        for (let dom = 1; dom <= dim; dom += 1) {
+          if (Math.random() > 0.72) continue;
+          const k = `${demoY}-${String(mi + 1).padStart(2, '0')}-${String(dom).padStart(2, '0')}`;
+          demoDaily[k] = {
+            tasks: Math.random() > 0.76 ? 1 : 0,
+            messages: Math.floor(Math.random() * 6),
+          };
+        }
+      }
+      setActivityDailyMap(demoDaily);
+      setActivityYear(demoY);
       const demoWeekLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
       setWeeklyActivityDays(
         demoWeekLabels.map((label, index) => ({
@@ -194,6 +342,16 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         { icon: '✅', title: 'Hoàn thành task UI', detail: '2 task đã hoàn tất trong tuần này', path: '/tasks' },
         { icon: '💬', title: 'Tin nhắn công việc', detail: '3 đoạn trao đổi quan trọng được gửi', path: '/chat/friends' },
         { icon: '📝', title: 'Cập nhật tiến độ', detail: '1 task được cập nhật trạng thái', path: '/tasks' },
+      ]);
+      setRecentDmContacts([
+        { id: 'dm-demo-1', name: 'Lan Anh', preview: 'Cập nhật mockup mới rồi nhé', time: '2 phút trước' },
+        { id: 'dm-demo-2', name: 'Minh Tuấn', preview: 'Chiều họp nhanh 15p được không?', time: '12 phút trước' },
+        { id: 'dm-demo-3', name: 'Hải Nam', preview: 'Mình đã gửi tài liệu qua file', time: '1 giờ trước' },
+      ]);
+      setRecentNotifications([
+        { id: 'nt-demo-1', title: 'Nhắc hạn task', preview: 'Task UI Dashboard sắp đến hạn', time: '5 phút trước' },
+        { id: 'nt-demo-2', title: 'Lời mời kết bạn', preview: 'Bạn có 1 lời mời kết bạn mới', time: '20 phút trước' },
+        { id: 'nt-demo-3', title: 'Tin nhắn mới', preview: 'Bạn được nhắc trong một cuộc trò chuyện', time: '1 giờ trước' },
       ]);
       return;
     }
@@ -306,19 +464,34 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         }
 
         const notif = await api
-          .get('/notifications', { params: { limit: 1 }, skipGlobalErrorHandling: true })
+          .get('/notifications', { params: { limit: 8 }, skipGlobalErrorHandling: true })
           .catch(() => null);
         let unread = 0;
+        let dashboardRecentNotifications = [];
         if (notif) {
           const nd = notif.data?.data ?? notif.data ?? notif;
           unread = Number(nd?.unreadCount) || 0;
+          const rows = Array.isArray(nd?.notifications) ? nd.notifications : [];
+          const nowTs = Date.now();
+          const relTime = (value) => {
+            const ts = value ? new Date(value).getTime() : NaN;
+            if (!Number.isFinite(ts)) return 'Vừa xong';
+            const diffMin = Math.max(1, Math.floor((nowTs - ts) / 60000));
+            if (diffMin < 60) return `${diffMin} phút trước`;
+            const diffHours = Math.floor(diffMin / 60);
+            if (diffHours < 24) return `${diffHours} giờ trước`;
+            const diffDays = Math.floor(diffHours / 24);
+            return `${diffDays} ngày trước`;
+          };
+          dashboardRecentNotifications = rows.slice(0, 3).map((row, idx) => ({
+            id: row?._id || row?.id || `nt-${idx}`,
+            title: row?.title || 'Thông báo',
+            preview: row?.content || row?.message || '',
+            time: relTime(row?.createdAt),
+          }));
         }
 
-        const dayKey = (value) => {
-          const d = value ? new Date(value) : null;
-          if (!d || Number.isNaN(d.getTime())) return '';
-          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        };
+        const dayKey = dayKeyFromDate;
         const getRowId = (value) => String(value?._id || value?.id || value || '').trim();
         const resolveWeeklyPath = ({ kind, organizationId }) => {
           const orgId = String(organizationId || '').trim();
@@ -335,9 +508,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             : ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
         const daily = {};
-        const taskListRes = await taskAPI.getTasks({ limit: 200 }).catch(() => null);
-        const taskBody = taskListRes?.data?.data ?? taskListRes?.data ?? taskListRes;
-        const taskRows = Array.isArray(taskBody?.tasks) ? taskBody.tasks : [];
+        const taskRows = await fetchTasksForDashboardPaged({ maxPages: 25, limit: 100 }).catch(() => []);
         const weeklyDayMap = new Map();
         const weeklyNotes = [];
         const weekStart = new Date();
@@ -407,9 +578,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             });
           }
         });
-        const msgRes = await api.get('/messages', { params: { limit: 300, page: 1 } }).catch(() => null);
-        const msgBody = msgRes?.data?.data ?? msgRes?.data ?? msgRes;
-        const msgRows = Array.isArray(msgBody?.messages) ? msgBody.messages : [];
+        const msgRows = await fetchMessagesForDashboardPaged(api, { maxPages: 40, limit: 100 }).catch(() => []);
         msgRows.forEach((msg) => {
           const senderId = getRowId(msg.senderId);
           if (currentUserKey && senderId !== currentUserKey) return;
@@ -444,14 +613,74 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             });
           }
         });
-        const today = new Date();
-        const activityGrid = Array.from({ length: 35 }, (_, index) => {
-          const d = new Date(today);
-          d.setDate(today.getDate() - (34 - index));
-          const key = dayKey(d);
-          const row = daily[key] || { tasks: 0, messages: 0 };
-          return { key, ...row, total: row.tasks + row.messages };
+
+        const friendNameById = new Map();
+        friendsRaw.forEach((row) => {
+          const u = row.friendId && typeof row.friendId === 'object' ? row.friendId : null;
+          const fid = String(u?._id || u?.id || u?.userId || row.friendId || '').trim();
+          if (!fid) return;
+          const n =
+            u?.displayName ||
+            u?.name ||
+            u?.username ||
+            (u?.email ? String(u.email).split('@')[0] : '') ||
+            'Bạn bè';
+          friendNameById.set(fid, n);
         });
+
+        const dmLatestByPeer = new Map();
+        const makePreview = (msg) => {
+          const type = String(msg?.messageType || 'text');
+          if (type === 'file') return msg?.fileMeta?.originalName || msg?.content || 'Đã gửi tệp đính kèm';
+          if (type === 'image') return 'Đã gửi hình ảnh';
+          if (type === 'business_card') return 'Đã chia sẻ danh thiếp';
+          const text = String(msg?.content || '').trim();
+          return text || 'Tin nhắn mới';
+        };
+        msgRows.forEach((msg) => {
+          if (msg?.roomId) return;
+          const senderId = getRowId(msg?.senderId);
+          const receiverId = getRowId(msg?.receiverId);
+          if (!senderId || !receiverId || !currentUserKey) return;
+          const mySide = String(currentUserKey);
+          if (senderId !== mySide && receiverId !== mySide) return;
+          const peerId = senderId === mySide ? receiverId : senderId;
+          if (!peerId) return;
+          const ts = new Date(msg?.createdAt).getTime();
+          if (!Number.isFinite(ts)) return;
+          const prev = dmLatestByPeer.get(peerId);
+          if (!prev || ts > prev.ts) {
+            const senderObj = msg?.senderId && typeof msg.senderId === 'object' ? msg.senderId : null;
+            const receiverObj = msg?.receiverId && typeof msg.receiverId === 'object' ? msg.receiverId : null;
+            const peerObj = senderId === mySide ? receiverObj : senderObj;
+            const peerName =
+              friendNameById.get(peerId) ||
+              peerObj?.displayName ||
+              peerObj?.name ||
+              peerObj?.username ||
+              'Bạn bè';
+            dmLatestByPeer.set(peerId, {
+              id: peerId,
+              name: peerName,
+              preview: makePreview(msg),
+              ts,
+            });
+          }
+        });
+        const relDmTime = (ts) => {
+          const now = Date.now();
+          const diffMin = Math.max(1, Math.floor((now - ts) / 60000));
+          if (diffMin < 60) return `${diffMin} phút trước`;
+          const diffHours = Math.floor(diffMin / 60);
+          if (diffHours < 24) return `${diffHours} giờ trước`;
+          const diffDays = Math.floor(diffHours / 24);
+          return `${diffDays} ngày trước`;
+        };
+        const dashboardRecentDms = Array.from(dmLatestByPeer.values())
+          .sort((a, b) => b.ts - a.ts)
+          .slice(0, 3)
+          .map((row) => ({ ...row, time: relDmTime(row.ts) }));
+
         const weekActivityGrid = Array.from(weeklyDayMap.values()).map((day) => ({
           ...day,
           note: day.note || 'Chưa có hoạt động',
@@ -467,7 +696,9 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             unread,
             taskDone,
           });
-          setPersonalActivityDays(activityGrid);
+          setActivityDailyMap({ ...daily });
+          setRecentDmContacts(dashboardRecentDms);
+          setRecentNotifications(dashboardRecentNotifications);
           setWeeklyActivityDays(weekActivityGrid);
           setWeeklyActivityNotes(weekActivityNotes);
         }
@@ -479,6 +710,9 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           setUpcomingMeetings([]);
           setWeeklyActivityDays([]);
           setWeeklyActivityNotes([]);
+          setActivityDailyMap({});
+          setRecentDmContacts([]);
+          setRecentNotifications([]);
         }
       }
     })();
@@ -513,6 +747,36 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   );
 
   const { isDarkMode } = useTheme();
+
+  const contributionYearChoices = useMemo(() => {
+    const y = new Date().getFullYear();
+    return [0, 1, 2, 3, 4].map((i) => y - i);
+  }, []);
+
+  const githubGrid = useMemo(
+    () => buildGithubYearGrid(activityYear, activityDailyMap, locale),
+    [activityYear, activityDailyMap, locale]
+  );
+
+  const activityTotalSelectedYear = useMemo(() => {
+    if (!activityDailyMap || typeof activityDailyMap !== 'object') return 0;
+    const prefix = `${activityYear}-`;
+    let sum = 0;
+    for (const [k, v] of Object.entries(activityDailyMap)) {
+      if (!k.startsWith(prefix)) continue;
+      sum += Number(v?.tasks || 0) + Number(v?.messages || 0);
+    }
+    return sum;
+  }, [activityDailyMap, activityYear]);
+
+  /** Nhãn cột ngày bên trái (sparse): T2/T4/T6 ↔ Mon/Wed/Fri */
+  const contributionLeftDayMarkers = useMemo(() => {
+    if (locale === 'en') {
+      return ['', 'Mon', '', 'Wed', '', 'Fri', ''];
+    }
+    return ['', 'T2', '', 'T4', '', 'T6', ''];
+  }, [locale]);
+
   const shellBg = appShellBg(isDarkMode);
   const dashHeader = isDarkMode
     ? 'border-b border-white/[0.06] bg-[#0D0D0F]/95 backdrop-blur-md'
@@ -522,7 +786,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     ? 'border-l border-white/[0.06] bg-[#121214]'
     : 'border-l border-sky-200/90 bg-sky-100/85';
   const cardSurface = isDarkMode
-    ? 'border border-white/[0.06] bg-[#1A1A1C]'
+    ? 'border border-white/[0.04] bg-[#171a22]'
     : 'border border-slate-200/90 bg-white shadow-sm';
   const inputSurface = isDarkMode
     ? 'border border-white/[0.06] bg-[#1A1A1C] text-white placeholder:text-[#6b7280] focus:border-cyan-500/40 focus:ring-1 focus:ring-cyan-500/25'
@@ -921,38 +1185,113 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           </div>
 
           <GlassCard className={`mb-8 ${cardSurface} ${isDarkMode ? 'shadow-[0_8px_32px_rgba(0,0,0,0.25)]' : 'shadow-md'}`}>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
                 <h2 className={`text-base font-bold ${textHeading}`}>{t('dashboard.personalActivityTitle')}</h2>
                 <p className={`mt-1 text-xs ${textMuted}`}>{t('dashboard.personalActivitySub')}</p>
                 <p className={`mt-1 text-[11px] ${textSub}`}>{t('dashboard.personalActivityHint')}</p>
               </div>
-              <div className={`text-xs ${textSub}`}>
-
-                {personalActivityDays.reduce((sum, item) => sum + (item?.total || 0), 0)} activities
-
+              <div className={`text-right text-xs tabular-nums ${textSub}`}>
+                <span className={`font-semibold ${accentText}`}>{activityYear}</span>
+                <span className="mx-1 opacity-70">·</span>
+                {t('dashboard.personalActivityCount', { n: activityTotalSelectedYear })}
               </div>
             </div>
-            <div className="grid grid-cols-7 gap-1.5">
-              {personalActivityDays.map((day) => (
-                <div
-                  key={day.key}
-                  title={t('dashboard.personalActivityDayTitle', {
-                    date: day.key,
-                    tasks: day.tasks,
-                    messages: day.messages,
-                  })}
-                  className={`aspect-square rounded-[4px] border ${
-                    isDarkMode ? 'border-white/[0.05]' : 'border-white'
-                  } ${activityCellClass(day.total, isDarkMode)}`}
-                />
-              ))}
+            <div className={`flex flex-col gap-4 rounded-xl px-3 py-3 sm:px-4 ${isDarkMode ? 'bg-[#0d1117]/35' : 'bg-slate-50/70'}`}>
+              <div className="flex min-w-0 flex-1 gap-4">
+                <div className={`min-h-0 min-w-0 flex-1 overflow-x-auto scrollbar-overlay ${isDarkMode ? '' : ''}`}>
+                  <div className="flex w-max min-w-full gap-2">
+                    <div className="flex shrink-0 flex-col pt-[15px]">
+                      <div className="flex flex-col gap-[3px]" aria-hidden>
+                        {contributionLeftDayMarkers.map((lab, i) => (
+                          <span
+                            key={`dw-${i}`}
+                            className={`flex h-[10px] items-center justify-end whitespace-nowrap pr-1 text-[9px] ${textMuted}`}
+                          >
+                            {lab || '\u00a0'}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="min-w-0 shrink-0">
+                      <div className="flex gap-[3px]">
+                        {githubGrid.monthLabels.map((lab, wi) => (
+                          <div key={`mh-${wi}`} className="w-[11px] shrink-0 text-left leading-none">
+                            {lab ? <span className={`text-[10px] ${textMuted}`}>{lab}</span> : null}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-[3px] flex gap-[3px]">
+                        {githubGrid.weeks.map((week, wi) => (
+                          <div key={`wk-${wi}`} className="flex shrink-0 flex-col gap-[3px]" role="presentation">
+                            {week.map((cell, di) => (
+                              <div
+                                key={cell.key + String(di)}
+                                title={
+                                  cell.inYear
+                                    ? t('dashboard.personalActivityDayTitle', {
+                                        date: cell.key,
+                                        tasks: cell.tasks,
+                                        messages: cell.messages,
+                                      })
+                                    : ''
+                                }
+                                className={`h-[10px] w-[11px] rounded-[2px] ${
+                                  cell.inYear ? githubContributionCellClass(cell.total, isDarkMode) : 'pointer-events-none border-0 bg-transparent'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <nav
+                  aria-label={t('dashboard.activityYearNavAria')}
+                  className={`flex shrink-0 flex-col items-end gap-0.5 border-l pl-3 ${isDarkMode ? 'border-white/[0.08]' : 'border-slate-200'}`}
+                >
+                  {contributionYearChoices.map((y) => (
+                    <button
+                      key={y}
+                      type="button"
+                      onClick={() => setActivityYear(y)}
+                      className={`rounded-md px-2 py-0.5 text-sm font-semibold transition ${
+                        y === activityYear
+                          ? isDarkMode
+                            ? 'bg-cyan-500/25 text-cyan-200 ring-1 ring-cyan-500/40'
+                            : 'bg-cyan-100 text-cyan-800 ring-1 ring-cyan-200'
+                          : isDarkMode
+                            ? `${textMuted} hover:bg-white/[0.06] hover:text-white`
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      {y}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+              <div className={`flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] ${textMuted}`}>
+                <span>{t('dashboard.personalActivityDataNote')}</span>
+                <div className="flex items-center gap-1">
+                  <span>{t('dashboard.personalActivityLegendLess')}</span>
+                  <div className="flex gap-1">
+                    {[0, 1, 4, 8, 12].map((fakeTotal, i) => (
+                      <div
+                        key={`lg-${i}`}
+                        className={`h-[10px] w-[11px] rounded-[2px] ${fakeTotal === 0 ? githubContributionCellClass(0, isDarkMode) : githubContributionCellClass(fakeTotal, isDarkMode)}`}
+                      />
+                    ))}
+                  </div>
+                  <span>{t('dashboard.personalActivityLegendMore')}</span>
+                </div>
+              </div>
             </div>
           </GlassCard>
 
           <div id="vh-dashboard-activity" className="space-y-6">
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              <GlassCard className={`${cardSurface} ${isDarkMode ? 'shadow-[0_8px_32px_rgba(0,0,0,0.25)]' : 'shadow-md'}`}>
+              <GlassCard className={`${cardSurface} ${isDarkMode ? 'shadow-[0_8px_24px_rgba(0,0,0,0.22)]' : 'shadow-md'}`}>
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className={`text-base font-bold ${textHeading}`}>{t('dashboard.privateMessagesTitle')}</h2>
                   <button
@@ -964,26 +1303,32 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   </button>
                 </div>
                 <div className="space-y-2">
-                  {filteredActivities
-                    .filter((a) => a.type === 'message')
-                    .slice(0, 4)
-                    .map((activity, idx) => (
+                  {recentDmContacts.length === 0 ? (
+                    <p className={`rounded-xl border border-dashed px-3 py-2 text-xs ${isDarkMode ? 'border-white/[0.08] text-[#6b7280]' : 'border-slate-200 text-slate-500'}`}>
+                      Chưa có tin nhắn gần đây.
+                    </p>
+                  ) : (
+                    recentDmContacts.map((activity, idx) => (
                       <button
-                        key={`dm-${idx}`}
+                        key={`dm-${activity.id || idx}`}
                         type="button"
                         onClick={() => navigate('/chat/friends')}
-                        className={`w-full rounded-xl border px-3 py-2 text-left transition ${
-                          isDarkMode ? 'border-white/[0.08] bg-[#141416] hover:bg-white/[0.05]' : 'border-slate-200 bg-white hover:bg-slate-50'
+                        className={`w-full rounded-xl px-3 py-2 text-left transition ${
+                          isDarkMode ? 'bg-white/[0.03] hover:bg-white/[0.06]' : 'bg-slate-50 hover:bg-slate-100'
                         }`}
                       >
-                        <div className={`text-sm font-semibold ${textHeading}`}>{activity.user}</div>
-                        <div className={`mt-0.5 truncate text-xs ${textMuted}`}>{activity.item}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className={`truncate text-sm font-semibold ${textHeading}`}>{activity.name}</div>
+                          <div className={`shrink-0 text-[11px] ${textSub}`}>{activity.time}</div>
+                        </div>
+                        <div className={`mt-0.5 truncate text-xs ${textMuted}`}>{activity.preview}</div>
                       </button>
-                    ))}
+                    ))
+                  )}
                 </div>
               </GlassCard>
 
-              <GlassCard className={`${cardSurface} ${isDarkMode ? 'shadow-[0_8px_32px_rgba(0,0,0,0.25)]' : 'shadow-md'}`}>
+              <GlassCard className={`${cardSurface} ${isDarkMode ? 'shadow-[0_8px_24px_rgba(0,0,0,0.22)]' : 'shadow-md'}`}>
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className={`text-base font-bold ${textHeading}`}>Thông báo</h2>
                   <button
@@ -995,19 +1340,28 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   </button>
                 </div>
                 <div className="space-y-2">
-                  {filteredActivities.slice(0, 4).map((activity, idx) => (
+                  {recentNotifications.length === 0 ? (
+                    <p className={`rounded-xl border border-dashed px-3 py-2 text-xs ${isDarkMode ? 'border-white/[0.08] text-[#6b7280]' : 'border-slate-200 text-slate-500'}`}>
+                      Chưa có thông báo gần đây.
+                    </p>
+                  ) : (
+                    recentNotifications.map((activity, idx) => (
                     <button
-                      key={`noti-${idx}`}
+                      key={`noti-${activity.id || idx}`}
                       type="button"
                       onClick={() => navigate('/notifications')}
-                      className={`w-full rounded-xl border px-3 py-2 text-left transition ${
-                        isDarkMode ? 'border-white/[0.08] bg-[#141416] hover:bg-white/[0.05]' : 'border-slate-200 bg-white hover:bg-slate-50'
+                      className={`w-full rounded-xl px-3 py-2 text-left transition ${
+                        isDarkMode ? 'bg-white/[0.03] hover:bg-white/[0.06]' : 'bg-slate-50 hover:bg-slate-100'
                       }`}
                     >
-                      <div className={`text-sm font-semibold ${textHeading}`}>{activity.user}</div>
-                      <div className={`mt-0.5 truncate text-xs ${textMuted}`}>{activity.action}</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className={`truncate text-sm font-semibold ${textHeading}`}>{activity.title}</div>
+                        <div className={`shrink-0 text-[11px] ${textSub}`}>{activity.time}</div>
+                      </div>
+                      <div className={`mt-0.5 truncate text-xs ${textMuted}`}>{activity.preview}</div>
                     </button>
-                  ))}
+                    ))
+                  )}
                 </div>
               </GlassCard>
             </div>
@@ -1044,30 +1398,67 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
 
       <aside className={`flex w-80 shrink-0 flex-col overflow-hidden ${dashAside}`}>
         <div className="flex-1 min-h-0 space-y-6 overflow-y-auto overflow-x-visible p-4 scrollbar-overlay">
-          <div className="space-y-2">
-            <p className={`text-xs font-bold uppercase tracking-wider ${textSub}`}>{t('dashboard.quickAccess')}</p>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { icon: '💬', title: 'Chat', note: 'Tin nhắn và bạn bè', path: '/chat/friends' },
-                { icon: '🎤', title: 'Voice', note: 'Phòng họp nhanh', path: '/voice' },
-                { icon: '📅', title: 'Lịch', note: 'Sự kiện và nhắc việc', path: '/calendar' },
-                { icon: '🔔', title: 'Thông báo', note: 'Cập nhật mới nhất', path: '/notifications' },
-              ].map((row) => (
+          <div className={`rounded-2xl p-3.5 ${isDarkMode ? 'bg-[#0f1218]' : 'bg-white'}`}>
+            <div className={`rounded-2xl p-3 ${isDarkMode ? 'bg-gradient-to-b from-[#1a1f2b] to-[#141821]' : 'bg-slate-50'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-extrabold ${isDarkMode ? 'bg-indigo-500 text-white' : 'bg-indigo-100 text-indigo-700'}`}>
+                  {initialsFromName(displayName)}
+                </div>
+                <div className="min-w-0">
+                  <div className={`truncate text-base font-bold ${textHeading}`}>{displayName}</div>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <div className={`text-2xl font-extrabold tabular-nums ${textHeading}`}>{metrics.orgCount ?? 0}</div>
+                  <div className={`text-[11px] ${textSub}`}>{t('dashboard.statOrg')}</div>
+                </div>
+                <div>
+                  <div className={`text-2xl font-extrabold tabular-nums ${textHeading}`}>{metrics.friendsTotal ?? 0}</div>
+                  <div className={`text-[11px] ${textSub}`}>{t('dashboard.statFriends')}</div>
+                </div>
+                <div>
+                  <div className={`text-2xl font-extrabold tabular-nums ${textHeading}`}>{metrics.taskDone ?? 0}</div>
+                  <div className={`text-[11px] ${textSub}`}>{t('dashboard.statTaskDone')}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className={`text-xs font-bold uppercase tracking-wider ${textSub}`}>Sắp tới</h3>
                 <button
-                  key={row.path}
                   type="button"
-                  onClick={() => navigate(row.path)}
-                  className={`rounded-2xl border px-3 py-3 text-left transition ${isDarkMode ? 'border-white/[0.05] bg-[#1A1A1C] text-[#e5e7eb] hover:border-cyan-500/35 hover:bg-white/[0.03]' : 'border-slate-200 bg-white text-slate-800 hover:border-cyan-300 hover:bg-slate-50'}`}
+                  onClick={() => navigate('/calendar')}
+                  className={`text-[11px] font-semibold ${isDarkMode ? 'text-cyan-400 hover:text-cyan-300' : 'text-cyan-700 hover:text-cyan-600'}`}
                 >
-                  <div className="flex items-start gap-2">
-                    <span className="text-base leading-none">{row.icon}</span>
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold leading-tight">{row.title}</div>
-                      <div className={`mt-0.5 text-[11px] leading-tight ${textMuted}`}>{row.note}</div>
-                    </div>
-                  </div>
+                  {t('dashboard.viewAllShort')}
                 </button>
-              ))}
+              </div>
+              <div className="space-y-2.5">
+                {!metrics.loading && upcomingMeetings.length === 0 && (
+                  <p className={`rounded-xl border border-dashed px-3 py-2 text-xs ${isDarkMode ? 'border-white/[0.08] text-[#6b7280]' : 'border-slate-200 text-slate-500'}`}>
+                    {t('dashboard.noMeetingsWeek')}
+                  </p>
+                )}
+                {upcomingMeetings.slice(0, 3).map((event, idx) => {
+                  const borderColors = ['border-l-blue-500', 'border-l-emerald-500', 'border-l-amber-500'];
+                  const bc = borderColors[idx % borderColors.length];
+                  return (
+                    <button
+                      key={event.id != null ? String(event.id) : idx}
+                      type="button"
+                      onClick={() => navigate('/calendar')}
+                      className={`w-full rounded-xl border-l-4 px-3 py-2 text-left transition ${bc} ${isDarkMode ? 'bg-[#161b25] hover:bg-white/[0.04]' : 'bg-white hover:bg-slate-50'}`}
+                    >
+                      <div className={`truncate text-sm font-semibold ${textHeading}`}>{event.title}</div>
+                      <div className={`mt-0.5 text-xs ${textMuted}`}>
+                        {event.time} · {t('dashboard.peopleUnit', { n: event.attendees })}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -1077,62 +1468,15 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
               <button
                 type="button"
                 onClick={() => navigate('/friends')}
-                className={`w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
+                className={`w-full rounded-xl px-3 py-2 text-left text-sm font-semibold transition ${
                   isDarkMode
-                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
-                    : 'border-emerald-600/30 bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
+                    ? 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                    : 'bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
                 }`}
               >
                 {t('dashboard.pendingInvites', { n: metrics.pendingCount })}
               </button>
             )}
-          </div>
-
-          <div>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className={`text-xs font-bold uppercase tracking-wider ${textSub}`}>{t('dashboard.meetingsTitle')}</h3>
-              <button
-                type="button"
-                onClick={() => navigate('/calendar')}
-                className={`text-[11px] font-semibold ${isDarkMode ? 'text-cyan-400 hover:text-cyan-300' : 'text-cyan-700 hover:text-cyan-600'}`}
-              >
-                {t('dashboard.viewAllShort')}
-              </button>
-            </div>
-            <div className="space-y-3">
-              {!metrics.loading && upcomingMeetings.length === 0 && (
-                <p className={`text-xs ${textSub}`}>{t('dashboard.noMeetingsWeek')}</p>
-              )}
-              {upcomingMeetings.map((event, idx) => {
-                const borderColors = ['border-l-blue-500', 'border-l-emerald-500', 'border-l-amber-500'];
-                const bc = borderColors[idx % borderColors.length];
-                return (
-                  <div
-                    key={event.id != null ? String(event.id) : idx}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => navigate('/calendar')}
-                    onKeyDown={(e) => e.key === 'Enter' && navigate('/calendar')}
-                    className={`cursor-pointer rounded-xl border p-3 pl-3 ${bc} border-l-4 shadow-sm transition ${isDarkMode ? 'border-white/[0.06] bg-[#1A1A1C] hover:bg-white/[0.02]' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-                  >
-                    <div className={`text-sm font-semibold ${textHeading}`}>{event.title}</div>
-                    <div className={`mt-1 text-xs ${textMuted}`}>
-                      {event.time} · {t('dashboard.peopleUnit', { n: event.attendees })}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate('/calendar');
-                      }}
-                      className={`mt-3 w-full rounded-lg py-2 text-xs font-semibold transition ${isDarkMode ? 'bg-cyan-600/20 text-cyan-200 hover:bg-cyan-600/30' : 'bg-cyan-100 text-cyan-800 hover:bg-cyan-200'}`}
-                    >
-                      {t('dashboard.joinMeetingBtn')}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
           </div>
 
           <div>
@@ -1177,7 +1521,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             <button
               type="button"
               onClick={() => navigate('/chat/friends')}
-              className={`mt-3 w-full rounded-xl border py-2.5 text-sm font-semibold transition ${isDarkMode ? 'border-white/[0.08] text-[#9ca3af] hover:bg-white/[0.04] hover:text-white' : 'border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 hover:text-slate-900'}`}
+              className={`mt-3 w-full rounded-xl py-2.5 text-sm font-semibold transition ${isDarkMode ? 'bg-white/[0.03] text-[#9ca3af] hover:bg-white/[0.08] hover:text-white' : 'bg-white text-slate-800 shadow-sm hover:bg-slate-50 hover:text-slate-900'}`}
             >
               {t('dashboard.openFriendChat')}
             </button>

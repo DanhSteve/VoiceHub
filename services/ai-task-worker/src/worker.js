@@ -424,6 +424,34 @@ async function publishToDlq(ch, sourceQueue, msg, err) {
   });
 }
 
+function isAmqpConnectRetryable(err) {
+  const code = err && err.code;
+  return code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ECONNRESET' || code === 'EAI_AGAIN';
+}
+
+async function connectAmqpWithRetry(url) {
+  const maxAttempts = Math.max(1, parseInt(process.env.RABBITMQ_CONNECT_MAX_ATTEMPTS || '45', 10) || 45);
+  const delayMs = Math.max(500, parseInt(process.env.RABBITMQ_CONNECT_RETRY_MS || '2000', 10) || 2000);
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const conn = await amqp.connect(url);
+      if (attempt > 1) {
+        console.log(`[ai-task-worker] RabbitMQ connected (attempt ${attempt}/${maxAttempts})`);
+      }
+      return conn;
+    } catch (err) {
+      lastErr = err;
+      if (!isAmqpConnectRetryable(err) || attempt >= maxAttempts) throw err;
+      console.warn(
+        `[ai-task-worker] RabbitMQ not ready (attempt ${attempt}/${maxAttempts}): ${err.message}. Retry in ${delayMs}ms…`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 function isTransientJobError(err) {
   const code = err && err.code;
   if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED') return true;
@@ -441,7 +469,7 @@ async function start() {
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL is not set');
 
-  const conn = await amqp.connect(url);
+  const conn = await connectAmqpWithRetry(url);
   const ch = await conn.createChannel();
   await ch.assertQueue(EXTRACT_QUEUE, { durable: true });
   await ch.assertQueue(SYNC_QUEUE, { durable: true });

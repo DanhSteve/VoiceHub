@@ -40,6 +40,8 @@ export default function ChannelMessageMoreMenu({
   createTaskDisabled = false,
   /** Hiển thị khi hover (đặc biệt khi disabled) */
   createTaskHoverTitle = '',
+  onPinToggle,
+  pinLabel = '',
 }) {
   if (!open || !anchorRect) return null;
 
@@ -134,6 +136,20 @@ export default function ChannelMessageMoreMenu({
           >
             Chỉnh sửa tin nhắn
             <span className="text-slate-400">✏️</span>
+          </button>
+        )}
+        {typeof onPinToggle === 'function' && (
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center justify-between px-3 py-2.5 text-left text-slate-100 hover:bg-white/8"
+            onClick={() => {
+              onPinToggle?.();
+              onClose();
+            }}
+          >
+            {pinLabel || 'Ghim tin nhắn'}
+            <span className="text-slate-400">📌</span>
           </button>
         )}
         <div className="my-1 h-px bg-white/10" />

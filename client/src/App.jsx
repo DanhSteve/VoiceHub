@@ -250,8 +250,12 @@ function App() {
           </ProtectedRoute>
         } />
         
-        {/* Notifications - thông báo */}
-        {/* Realtime notifications qua Socket.IO */}
+        {/* Notifications — cá nhân (public) vs tổ chức (sidebar org) */}
+        <Route path="/notifications/organization" element={
+          <ProtectedRoute>
+            <NotificationsPage />
+          </ProtectedRoute>
+        } />
         <Route path="/notifications" element={
           <ProtectedRoute>
             <NotificationsPage />
