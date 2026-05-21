@@ -6,11 +6,14 @@ const Department = require('../models/Department');
 const Team = require('../models/Team');
 const Channel = require('../models/Channel');
 const ChannelAccess = require('../models/ChannelAccess');
+const ChannelRoleAccess = require('../models/ChannelRoleAccess');
+const ScopeRoleAccess = require('../models/ScopeRoleAccess');
 const axios = require('axios');
 const { emitRealtimeEvent } = require('/shared');
 const { syncUserOrgRole } = require('../services/rolePermissionOrgSync');
 const { syncHierarchyRoles } = require('../services/hierarchyRoleSync');
 const { purgeOrganizationEverywhere } = require('../services/organizationCascadePurge');
+const { resolveTaskWorkspaceScope } = require('../services/taskWorkspaceScope.service');
 
 const getUserId = (req) => req.user?.id || req.user?.userId || req.user?._id;
 const MAX_OWNED_ORGS_PER_USER = 3;
@@ -114,8 +117,8 @@ function roleInternalHeaders() {
   return h;
 }
 
-async function fetchUserRoleNamesInOrg(userId, orgId) {
-  if (!userId || !orgId || !GATEWAY_INTERNAL_TOKEN) return [];
+async function fetchUserRolesInOrg(userId, orgId) {
+  if (!userId || !orgId) return [];
   try {
     const res = await axios.get(
       `${ROLE_PERMISSION_BASE}/api/roles/user/${encodeURIComponent(String(userId))}/server/${encodeURIComponent(
@@ -128,17 +131,176 @@ async function fetchUserRoleNamesInOrg(userId, orgId) {
       }
     );
     if (res.status !== 200 || !Array.isArray(res.data?.data)) return [];
-    return res.data.data.map((r) => String(r?.name || '')).filter(Boolean);
+    return res.data.data
+      .map((r) => ({
+        id: String(r?._id || r?.id || '').trim(),
+        name: String(r?.name || '').trim(),
+      }))
+      .filter((r) => r.id);
   } catch {
     return [];
   }
 }
 
-function hasScopedRoleTag(roleNames, tagPrefix, entityId) {
-  const id = shortId(entityId);
-  if (!id) return false;
-  const token = `${String(tagPrefix)}_${id}`.toLowerCase();
-  return (roleNames || []).some((name) => String(name || '').toLowerCase().includes(token));
+async function fetchUserRoleNamesInOrg(userId, orgId) {
+  const roles = await fetchUserRolesInOrg(userId, orgId);
+  return roles.map((r) => r.name).filter(Boolean);
+}
+
+function normalizeRoleChannelPermissions(raw = {}) {
+  return {
+    canSee: Boolean(raw.canSee),
+    canRead: Boolean(raw.canRead),
+    canWrite: Boolean(raw.canWrite),
+    canDelete: Boolean(raw.canDelete),
+    canVoice: Boolean(raw.canVoice),
+  };
+}
+
+function mergeRoleChannelPermissions(acc, next) {
+  return {
+    canSee: acc.canSee || next.canSee,
+    canRead: acc.canRead || next.canRead,
+    canWrite: acc.canWrite || next.canWrite,
+    canDelete: acc.canDelete || next.canDelete,
+    canVoice: acc.canVoice || next.canVoice,
+  };
+}
+
+function hasAnyRoleChannelPermission(permissions) {
+  const p = normalizeRoleChannelPermissions(permissions);
+  return p.canSee || p.canRead || p.canWrite || p.canDelete || p.canVoice;
+}
+
+function buildScopeRoleAclMap(rows, userRoleIds) {
+  const byScopeId = new Map();
+  for (const row of rows || []) {
+    if (!userRoleIds.has(String(row.roleId))) continue;
+    const scopeKey = String(row.scopeId);
+    const roleKey = String(row.roleId);
+    if (!byScopeId.has(scopeKey)) byScopeId.set(scopeKey, new Map());
+    const roleMap = byScopeId.get(scopeKey);
+    const prev = roleMap.get(roleKey) || {
+      canSee: false,
+      canRead: false,
+      canWrite: false,
+      canDelete: false,
+      canVoice: false,
+    };
+    roleMap.set(
+      roleKey,
+      mergeRoleChannelPermissions(prev, normalizeRoleChannelPermissions(row.permissions))
+    );
+  }
+  return byScopeId;
+}
+
+function buildChannelRoleAclMap(rows, userRoleIds) {
+  const byChannelId = new Map();
+  for (const row of rows || []) {
+    if (!userRoleIds.has(String(row.roleId))) continue;
+    const channelKey = String(row.channel);
+    const roleKey = String(row.roleId);
+    if (!byChannelId.has(channelKey)) byChannelId.set(channelKey, new Map());
+    const roleMap = byChannelId.get(channelKey);
+    const prev = roleMap.get(roleKey) || {
+      canSee: false,
+      canRead: false,
+      canWrite: false,
+      canDelete: false,
+      canVoice: false,
+    };
+    roleMap.set(
+      roleKey,
+      mergeRoleChannelPermissions(prev, normalizeRoleChannelPermissions(row.permissions))
+    );
+  }
+  return byChannelId;
+}
+
+function resolveEffectiveRolePerm(
+  channelRoleMap,
+  divisionRoleMap,
+  departmentRoleMap,
+  teamRoleMap,
+  channel,
+  roleId
+) {
+  const channelKey = String(channel._id);
+  const fromChannel = channelRoleMap.get(channelKey)?.get(roleId);
+  if (fromChannel && hasAnyRoleChannelPermission(fromChannel)) return fromChannel;
+
+  const teamKey = String(channel.team || '');
+  const fromTeam = teamKey ? teamRoleMap.get(teamKey)?.get(roleId) : null;
+  if (fromTeam && hasAnyRoleChannelPermission(fromTeam)) return fromTeam;
+
+  const depKey = String(channel.department || '');
+  const fromDept = depKey ? departmentRoleMap.get(depKey)?.get(roleId) : null;
+  if (fromDept && hasAnyRoleChannelPermission(fromDept)) return fromDept;
+
+  const divKey = String(channel.division || '');
+  const fromDiv = divKey ? divisionRoleMap.get(divKey)?.get(roleId) : null;
+  if (fromDiv && hasAnyRoleChannelPermission(fromDiv)) return fromDiv;
+
+  return null;
+}
+
+async function persistScopeRoleAccess(orgId, scopeType, scopeId, entries, actorId) {
+  const keepRoleIds = [];
+  for (const entry of entries) {
+    const roleId = String(entry?.roleId || '').trim();
+    if (!roleId) continue;
+    const permissions = normalizeRoleChannelPermissions(entry?.permissions || {});
+    if (!hasAnyRoleChannelPermission(permissions)) {
+      await ScopeRoleAccess.deleteOne({ organization: orgId, scopeType, scopeId, roleId });
+      continue;
+    }
+    keepRoleIds.push(roleId);
+    await ScopeRoleAccess.findOneAndUpdate(
+      { organization: orgId, scopeType, scopeId, roleId },
+      {
+        organization: orgId,
+        scopeType,
+        scopeId,
+        roleId,
+        permissions,
+        updatedBy: actorId || null,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  if (entries.length === 0) {
+    await ScopeRoleAccess.deleteMany({ organization: orgId, scopeType, scopeId });
+  } else {
+    await ScopeRoleAccess.deleteMany({
+      organization: orgId,
+      scopeType,
+      scopeId,
+      roleId: { $nin: keepRoleIds },
+    });
+  }
+
+  const rows = await ScopeRoleAccess.find({ organization: orgId, scopeType, scopeId })
+    .select('roleId permissions')
+    .lean();
+  return rows.map((row) => ({
+    roleId: String(row.roleId),
+    permissions: normalizeRoleChannelPermissions(row.permissions),
+  }));
+}
+
+function hasExecutiveRbacRole(roleNames) {
+  return (roleNames || []).some((name) => {
+    const n = String(name || '').trim().toLowerCase();
+    if (!n) return false;
+    if (n.includes('quản trị') || n.includes('quan tri') || n.includes('administrator')) {
+      return true;
+    }
+    if (n === 'admin' || n.includes('owner') || n.includes('chủ sở')) return true;
+    if (n === 'hr' || n.includes('nhân sự') || n.includes('nhan su')) return true;
+    return false;
+  });
 }
 
 const seedHierarchyStructure = async ({ organizationId, ownerId, blueprint }) => {
@@ -715,64 +877,145 @@ exports.getAccessibleChannelIds = async (req, res, next) => {
         },
       ])
     );
-    const membershipTeamId = String(membership.team || '');
-    const membershipDivisionId = String(membership.division || '');
+    const userRoles = await fetchUserRolesInOrg(userId, orgId);
+    const userRoleIds = new Set(userRoles.map((r) => r.id));
+    const roleNames = userRoles.map((r) => r.name);
+    const [channelRoleAclRows, scopeRoleAclRows] = await Promise.all([
+      ChannelRoleAccess.find({ organization: orgId }).select('channel roleId permissions').lean(),
+      ScopeRoleAccess.find({ organization: orgId }).select('scopeType scopeId roleId permissions').lean(),
+    ]);
+    const channelRoleByChannelId = buildChannelRoleAclMap(channelRoleAclRows, userRoleIds);
+    const divisionRoleById = buildScopeRoleAclMap(
+      scopeRoleAclRows.filter((r) => r.scopeType === 'division'),
+      userRoleIds
+    );
+    const departmentRoleById = buildScopeRoleAclMap(
+      scopeRoleAclRows.filter((r) => r.scopeType === 'department'),
+      userRoleIds
+    );
+    const teamRoleById = buildScopeRoleAclMap(
+      scopeRoleAclRows.filter((r) => r.scopeType === 'team'),
+      userRoleIds
+    );
     const membershipRole = Membership.normalizeRole(membership.role);
-    const isOrgAdminScope = membershipRole === 'owner' || membershipRole === 'admin';
-    const roleNames = await fetchUserRoleNamesInOrg(userId, orgId);
+    const isOrgAdminScope =
+      membershipRole === 'owner' || membershipRole === 'admin' || membershipRole === 'hr';
+    const isStructureAdmin = isOrgAdminScope || hasExecutiveRbacRole(roleNames);
+
     const uid = String(userId);
     const permissionsByChannelId = {};
     const channelIds = [];
+    const scopedFromVisibleChannels = {
+      divisionIds: new Set(),
+      departmentIds: new Set(),
+      teamIds: new Set(),
+    };
 
     for (const ch of channels) {
       const channelId = String(ch._id);
       const acl = aclByChannelId.get(channelId) || null;
-      const isPrimaryTeam = membershipTeamId && String(ch.team || '') === membershipTeamId;
-      const inMembershipDivision =
-        membershipDivisionId && String(ch.division || '') === membershipDivisionId;
-      const hasTeamScopedRole = hasScopedRoleTag(roleNames, 'team', ch.team);
-      const hasDepartmentScopedRole = hasScopedRoleTag(roleNames, 'dep', ch.department);
-      const hasDivisionScopedRole = hasScopedRoleTag(roleNames, 'div', ch.division);
+      let roleAcl = null;
+      const channelRoleMap = channelRoleByChannelId.get(channelId);
+      if (channelRoleMap) {
+        for (const role of userRoles) {
+          const roleId = String(role.id || '');
+          if (!roleId) continue;
+          const fromChannel = channelRoleMap.get(roleId);
+          if (fromChannel && hasAnyRoleChannelPermission(fromChannel)) {
+            roleAcl = mergeRoleChannelPermissions(
+              roleAcl || normalizeRoleChannelPermissions({}),
+              fromChannel
+            );
+          }
+        }
+      }
 
+      let canSee = false;
       let canRead = false;
       let canWrite = false;
+      let canDelete = false;
       let canVoice = false;
 
-      if (isOrgAdminScope) {
-        // Owner/Admin được toàn quyền trên mọi kênh trong tổ chức (xuyên khối/phòng/team).
+      if (isStructureAdmin) {
+        canSee = true;
         canRead = true;
         canWrite = true;
+        canDelete = true;
         canVoice = true;
-      } else if (isPrimaryTeam || hasTeamScopedRole) {
-        canRead = true;
-        canWrite = true;
-        canVoice = true;
-      } else if (hasDepartmentScopedRole || hasDivisionScopedRole) {
-        // Role khối/phòng ban: cho phép hoạt động chat/voice trên kênh thuộc phạm vi đã cấp.
-        // Tránh tình trạng UI hiển thị khóa dù user đã được cấp role theo cấu trúc.
-        canRead = true;
-        canWrite = true;
-        canVoice = true;
+      } else if (roleAcl) {
+        canSee = roleAcl.canSee;
+        canRead = roleAcl.canRead;
+        canWrite = roleAcl.canWrite;
+        canDelete = roleAcl.canDelete;
+        canVoice = roleAcl.canVoice;
       } else if (acl) {
+        canSee = Boolean(acl.canRead);
         canRead = Boolean(acl.canRead);
         canWrite = Boolean(acl.canWrite);
         canVoice = Boolean(acl.canVoice);
-      } else if (inMembershipDivision) {
-        // Trong cùng khối: chỉ hiển thị cấu trúc, chưa có ACL thì không đọc/ghi/voice.
-        canRead = false;
       }
 
       if (ch.members && ch.members.length > 0) {
         const inLegacyMemberList = ch.members.some((m) => String(m) === uid || String(m?._id || m) === uid);
         if (inLegacyMemberList) {
-          canRead = true;
-          canWrite = true;
-          canVoice = true;
+          if (!roleAcl) {
+            canSee = true;
+            canRead = true;
+            canWrite = true;
+            canDelete = true;
+            canVoice = true;
+          } else {
+            canSee = canSee || true;
+            canRead = canRead || true;
+          }
         }
       }
 
-      permissionsByChannelId[channelId] = { canRead, canWrite, canVoice };
-      if (canRead) channelIds.push(channelId);
+      const visible = canSee || canRead;
+      permissionsByChannelId[channelId] = {
+        canSee: visible,
+        canRead,
+        canWrite,
+        canDelete,
+        canVoice,
+      };
+      if (visible) {
+        channelIds.push(channelId);
+        if (!isStructureAdmin) {
+          if (ch.division) scopedFromVisibleChannels.divisionIds.add(String(ch.division));
+          if (ch.department) scopedFromVisibleChannels.departmentIds.add(String(ch.department));
+          if (ch.team) scopedFromVisibleChannels.teamIds.add(String(ch.team));
+        }
+      }
+    }
+
+    if (!isStructureAdmin) {
+      const deptIds = [...scopedFromVisibleChannels.departmentIds];
+      const teamIds = [...scopedFromVisibleChannels.teamIds];
+      if (deptIds.length) {
+        const deptRows = await Department.find({
+          _id: { $in: deptIds },
+          organization: orgId,
+        })
+          .select('division branch')
+          .lean();
+        for (const row of deptRows) {
+          if (row.division) scopedFromVisibleChannels.divisionIds.add(String(row.division));
+        }
+      }
+      if (teamIds.length) {
+        const teamRows = await Team.find({
+          _id: { $in: teamIds },
+          organization: orgId,
+          isActive: true,
+        })
+          .select('department division')
+          .lean();
+        for (const row of teamRows) {
+          if (row.department) scopedFromVisibleChannels.departmentIds.add(String(row.department));
+          if (row.division) scopedFromVisibleChannels.divisionIds.add(String(row.division));
+        }
+      }
     }
 
     res.json({
@@ -785,9 +1028,31 @@ exports.getAccessibleChannelIds = async (req, res, next) => {
           divisionId: membership.division ? String(membership.division) : null,
           departmentId: membership.department ? String(membership.department) : null,
           teamId: membership.team ? String(membership.team) : null,
+          canSeeAllStructure: isStructureAdmin,
+          scopedDivisionIds: [...scopedFromVisibleChannels.divisionIds],
+          scopedDepartmentIds: [...scopedFromVisibleChannels.departmentIds],
+          scopedTeamIds: [...scopedFromVisibleChannels.teamIds],
         },
       },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Phạm vi xem/tạo task trong workspace tổ chức (owner/admin/hr, trưởng phòng, team leader, nhân viên). */
+exports.getTaskWorkspaceScope = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { orgId } = req.params;
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+    const scope = await resolveTaskWorkspaceScope(userId, orgId);
+    if (!scope) {
+      return res.status(403).json({ status: 'fail', message: 'Access denied' });
+    }
+    return res.json({ status: 'success', data: scope });
   } catch (error) {
     next(error);
   }
@@ -879,6 +1144,272 @@ exports.revokeChannelAccess = async (req, res, next) => {
       user: userId,
     });
     return res.json({ status: 'success', message: 'Access revoked' });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.listChannelRoleAccess = async (req, res, next) => {
+  try {
+    const { orgId, channelId } = req.params;
+    const channel = await Channel.findOne({
+      _id: channelId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id name type team department division')
+      .lean();
+    if (!channel) {
+      return res.status(404).json({ status: 'fail', message: 'Channel not found' });
+    }
+    const rows = await ChannelRoleAccess.find({ organization: orgId, channel: channelId })
+      .select('roleId permissions updatedAt')
+      .lean();
+    return res.json({
+      status: 'success',
+      data: {
+        channel,
+        entries: rows.map((row) => ({
+          roleId: String(row.roleId),
+          permissions: normalizeRoleChannelPermissions(row.permissions),
+        })),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.saveChannelRoleAccess = async (req, res, next) => {
+  try {
+    const actorId = getUserId(req);
+    const { orgId, channelId } = req.params;
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const channel = await Channel.findOne({
+      _id: channelId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id')
+      .lean();
+    if (!channel) {
+      return res.status(404).json({ status: 'fail', message: 'Channel not found' });
+    }
+
+    const keepRoleIds = [];
+    for (const entry of entries) {
+      const roleId = String(entry?.roleId || '').trim();
+      if (!roleId) continue;
+      const permissions = normalizeRoleChannelPermissions(entry?.permissions || {});
+      if (!hasAnyRoleChannelPermission(permissions)) {
+        await ChannelRoleAccess.deleteOne({ organization: orgId, channel: channelId, roleId });
+        continue;
+      }
+      keepRoleIds.push(roleId);
+      await ChannelRoleAccess.findOneAndUpdate(
+        { organization: orgId, channel: channelId, roleId },
+        {
+          organization: orgId,
+          channel: channelId,
+          roleId,
+          permissions,
+          updatedBy: actorId || null,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+
+    if (entries.length === 0) {
+      await ChannelRoleAccess.deleteMany({ organization: orgId, channel: channelId });
+    } else {
+      await ChannelRoleAccess.deleteMany({
+        organization: orgId,
+        channel: channelId,
+        roleId: { $nin: keepRoleIds },
+      });
+    }
+
+    const rows = await ChannelRoleAccess.find({ organization: orgId, channel: channelId })
+      .select('roleId permissions')
+      .lean();
+    return res.json({
+      status: 'success',
+      data: {
+        entries: rows.map((row) => ({
+          roleId: String(row.roleId),
+          permissions: normalizeRoleChannelPermissions(row.permissions),
+        })),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.listDivisionRoleAccess = async (req, res, next) => {
+  try {
+    const { orgId, divisionId } = req.params;
+    const division = await Division.findOne({
+      _id: divisionId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id name')
+      .lean();
+    if (!division) {
+      return res.status(404).json({ status: 'fail', message: 'Division not found' });
+    }
+    const rows = await ScopeRoleAccess.find({
+      organization: orgId,
+      scopeType: 'division',
+      scopeId: divisionId,
+    })
+      .select('roleId permissions')
+      .lean();
+    return res.json({
+      status: 'success',
+      data: {
+        scope: { type: 'division', id: String(division._id), name: division.name },
+        entries: rows.map((row) => ({
+          roleId: String(row.roleId),
+          permissions: normalizeRoleChannelPermissions(row.permissions),
+        })),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.saveDivisionRoleAccess = async (req, res, next) => {
+  try {
+    const actorId = getUserId(req);
+    const { orgId, divisionId } = req.params;
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const division = await Division.findOne({
+      _id: divisionId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id')
+      .lean();
+    if (!division) {
+      return res.status(404).json({ status: 'fail', message: 'Division not found' });
+    }
+    const saved = await persistScopeRoleAccess(orgId, 'division', divisionId, entries, actorId);
+    return res.json({ status: 'success', data: { entries: saved } });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.listDepartmentRoleAccess = async (req, res, next) => {
+  try {
+    const { orgId, departmentId } = req.params;
+    const department = await Department.findOne({
+      _id: departmentId,
+      organization: orgId,
+    })
+      .select('_id name')
+      .lean();
+    if (!department) {
+      return res.status(404).json({ status: 'fail', message: 'Department not found' });
+    }
+    const rows = await ScopeRoleAccess.find({
+      organization: orgId,
+      scopeType: 'department',
+      scopeId: departmentId,
+    })
+      .select('roleId permissions')
+      .lean();
+    return res.json({
+      status: 'success',
+      data: {
+        scope: { type: 'department', id: String(department._id), name: department.name },
+        entries: rows.map((row) => ({
+          roleId: String(row.roleId),
+          permissions: normalizeRoleChannelPermissions(row.permissions),
+        })),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.saveDepartmentRoleAccess = async (req, res, next) => {
+  try {
+    const actorId = getUserId(req);
+    const { orgId, departmentId } = req.params;
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const department = await Department.findOne({
+      _id: departmentId,
+      organization: orgId,
+    })
+      .select('_id')
+      .lean();
+    if (!department) {
+      return res.status(404).json({ status: 'fail', message: 'Department not found' });
+    }
+    const saved = await persistScopeRoleAccess(orgId, 'department', departmentId, entries, actorId);
+    return res.json({ status: 'success', data: { entries: saved } });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.listTeamRoleAccess = async (req, res, next) => {
+  try {
+    const { orgId, teamId } = req.params;
+    const team = await Team.findOne({
+      _id: teamId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id name')
+      .lean();
+    if (!team) {
+      return res.status(404).json({ status: 'fail', message: 'Team not found' });
+    }
+    const rows = await ScopeRoleAccess.find({
+      organization: orgId,
+      scopeType: 'team',
+      scopeId: teamId,
+    })
+      .select('roleId permissions')
+      .lean();
+    return res.json({
+      status: 'success',
+      data: {
+        scope: { type: 'team', id: String(team._id), name: team.name },
+        entries: rows.map((row) => ({
+          roleId: String(row.roleId),
+          permissions: normalizeRoleChannelPermissions(row.permissions),
+        })),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.saveTeamRoleAccess = async (req, res, next) => {
+  try {
+    const actorId = getUserId(req);
+    const { orgId, teamId } = req.params;
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const team = await Team.findOne({
+      _id: teamId,
+      organization: orgId,
+      isActive: true,
+    })
+      .select('_id')
+      .lean();
+    if (!team) {
+      return res.status(404).json({ status: 'fail', message: 'Team not found' });
+    }
+    const saved = await persistScopeRoleAccess(orgId, 'team', teamId, entries, actorId);
+    return res.json({ status: 'success', data: { entries: saved } });
   } catch (error) {
     return next(error);
   }

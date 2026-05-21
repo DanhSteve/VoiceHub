@@ -1,6 +1,7 @@
 const express = require('express');
 const { protect, authorize } = require('../middleware/auth');
 const hierarchyController = require('../controllers/hierarchyController');
+const organizationController = require('../controllers/organizationController');
 
 const router = express.Router({ mergeParams: true });
 
@@ -19,6 +20,16 @@ router.post('/divisions/:divisionId/departments', authorize(['owner', 'admin']),
 router.get('/departments/:deptId/teams', hierarchyController.listTeamsByDepartment);
 router.post('/departments/:deptId/teams', authorize(['owner', 'admin']), hierarchyController.createTeamByDepartment);
 router.put('/teams/:teamId', authorize(['owner', 'admin']), hierarchyController.updateTeamByHierarchy);
+router.get(
+  '/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listTeamRoleAccess
+);
+router.put(
+  '/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveTeamRoleAccess
+);
 
 router.get('/teams/:teamId/channels', hierarchyController.listChannelsByTeam);
 router.post('/teams/:teamId/channels', authorize(['owner', 'admin']), hierarchyController.createChannelByTeam);

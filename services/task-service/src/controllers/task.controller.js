@@ -5,6 +5,13 @@ const mongoose = require('../db');
 const { logger } = require('/shared');
 const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
 const { publishTaskFromFileJob } = require('../messaging/taskFromFilePublisher');
+const {
+  fetchTaskWorkspaceScope,
+  buildTaskVisibilityFilter,
+  canCreateTaskInScope,
+  canAssignUser,
+  userCanAccessTask,
+} = require('../services/taskWorkspaceScope');
 
 const CHAT_SERVICE_URL = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
@@ -19,6 +26,7 @@ class TaskController {
     try {
       const {
         title,
+        summary,
         description,
         assigneeId,
         serverId,
@@ -26,6 +34,11 @@ class TaskController {
         priority,
         dueDate,
         tags,
+        departmentId,
+        teamId,
+        departmentName,
+        aiGenerated,
+        sourceMessageId,
       } = req.body;
       const createdBy = req.user?.id || req.userContext?.userId;
 
@@ -36,8 +49,32 @@ class TaskController {
         });
       }
 
+      let scope = null;
+      if (organizationId) {
+        scope = await fetchTaskWorkspaceScope(createdBy, organizationId);
+        if (!scope) {
+          return res.status(403).json({
+            success: false,
+            message: 'Không có quyền tạo task trong tổ chức này',
+          });
+        }
+        if (!canCreateTaskInScope(scope)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Chỉ trưởng phòng, team leader, quản trị viên hoặc chủ sở hữu mới được tạo task',
+          });
+        }
+        if (assigneeId && !canAssignUser(scope, assigneeId)) {
+          return res.status(403).json({
+            success: false,
+            message: 'Không thể gán task cho thành viên ngoài phạm vi quản lý',
+          });
+        }
+      }
+
       const task = await taskService.createTask({
         title,
+        summary,
         description,
         assigneeId,
         createdBy,
@@ -46,6 +83,11 @@ class TaskController {
         priority,
         dueDate,
         tags,
+        departmentId: departmentId || scope?.departmentId || null,
+        teamId: teamId || scope?.teamId || null,
+        departmentName,
+        aiGenerated: Boolean(aiGenerated),
+        sourceMessageId: sourceMessageId || null,
       });
 
       res.status(201).json({
@@ -82,30 +124,15 @@ class TaskController {
         });
       }
 
-      const isCreator = String(task.createdBy) === String(userId);
-      const isAssignee = task.assigneeId && String(task.assigneeId) === String(userId);
-      if (isCreator || isAssignee) {
+      let scope = null;
+      if (task.organizationId) {
+        scope = await fetchTaskWorkspaceScope(userId, task.organizationId);
+      }
+      if (userCanAccessTask(task, userId, scope)) {
         return res.json({
           success: true,
           data: task,
         });
-      }
-
-      if (task.organizationId) {
-        const orgRes = await axios.get(
-          `${ORGANIZATION_SERVICE_URL}/api/organizations/${task.organizationId}`,
-          {
-            headers: buildTrustedGatewayHeaders(userId),
-            timeout: 15000,
-            validateStatus: () => true,
-          }
-        );
-        if (orgRes.status === 200) {
-          return res.json({
-            success: true,
-            data: task,
-          });
-        }
       }
 
       return res.status(403).json({
@@ -155,15 +182,6 @@ class TaskController {
         });
       }
 
-      if (assigneeId && String(assigneeId) !== String(userId)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Forbidden',
-        });
-      }
-
-      const filter = { isActive: true };
-
       const parseOid = (raw, label) => {
         if (raw == null || raw === '') return null;
         const s = String(raw).trim();
@@ -173,26 +191,44 @@ class TaskController {
         return { value: s };
       };
 
-      if (assigneeId) {
-        const p = parseOid(assigneeId, 'assigneeId');
-        if (p.error) {
-          return res.status(400).json({ success: false, message: p.error });
-        }
-        filter.assigneeId = p.value;
-      } else if (userId) {
-        const p = parseOid(userId, 'user');
-        if (p.error) {
-          return res.status(400).json({ success: false, message: p.error });
-        }
-        filter.$or = [{ assigneeId: p.value }, { createdBy: p.value }];
-      }
+      const filter = { isActive: true };
+      let workspaceScope = null;
 
       if (organizationId) {
         const p = parseOid(organizationId, 'organizationId');
         if (p.error) {
           return res.status(400).json({ success: false, message: p.error });
         }
+        workspaceScope = await fetchTaskWorkspaceScope(userId, p.value);
+        if (!workspaceScope) {
+          return res.status(403).json({
+            success: false,
+            message: 'Forbidden',
+          });
+        }
         filter.organizationId = p.value;
+        const visibilityFilter = buildTaskVisibilityFilter(workspaceScope, userId);
+        Object.assign(filter, visibilityFilter);
+        filter.isActive = true;
+      } else if (assigneeId && String(assigneeId) !== String(userId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden',
+        });
+      } else {
+        if (assigneeId) {
+          const p = parseOid(assigneeId, 'assigneeId');
+          if (p.error) {
+            return res.status(400).json({ success: false, message: p.error });
+          }
+          filter.assigneeId = p.value;
+        } else if (userId) {
+          const p = parseOid(userId, 'user');
+          if (p.error) {
+            return res.status(400).json({ success: false, message: p.error });
+          }
+          filter.$or = [{ assigneeId: p.value }, { createdBy: p.value }];
+        }
       }
       if (serverId) {
         const p = parseOid(serverId, 'serverId');
@@ -458,6 +494,14 @@ class TaskController {
         return res.status(400).json({
           success: false,
           message: 'Message has no file attachment',
+        });
+      }
+
+      const scope = await fetchTaskWorkspaceScope(userId, organizationId);
+      if (!scope || !canCreateTaskInScope(scope)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Chỉ trưởng phòng, team leader, quản trị viên hoặc chủ sở hữu mới được tạo task tự động',
         });
       }
 

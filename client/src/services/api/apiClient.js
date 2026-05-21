@@ -60,6 +60,8 @@ const apiClient = axios.create({
   timeout: 60000, // Tăng lên 60s để tránh timeout khi hash password hoặc database operations
   headers: {
     'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
   },
 });
 
@@ -92,14 +94,43 @@ apiClient.interceptors.request.use(
   }
 );
 
+function isLikelyBrowserCacheFailure(error) {
+  const msg = String(error?.message || '').toLowerCase();
+  return msg.includes('cache') || msg.includes('err_cache');
+}
+
 // Response interceptor - Handle errors
 apiClient.interceptors.response.use(
   (response) => {
     return response.data;
   },
-  (error) => {
+  async (error) => {
     if (error?.code === 'LANDING_EMBED_WRITE_BLOCKED' || error?.isLandingEmbedBlock) {
       return Promise.reject(error);
+    }
+
+    const config = error?.config;
+    if (
+      config &&
+      !config.__cacheBustRetry &&
+      !error.response &&
+      (isLikelyBrowserCacheFailure(error) || error.code === 'ERR_NETWORK')
+    ) {
+      const method = String(config.method || 'get').toLowerCase();
+      if (method === 'get' || method === 'head') {
+        config.__cacheBustRetry = true;
+        config.headers = {
+          ...config.headers,
+          'Cache-Control': 'no-store, no-cache',
+          Pragma: 'no-cache',
+        };
+        config.params = { ...(config.params || {}), _nc: Date.now() };
+        try {
+          return await apiClient.request(config);
+        } catch (retryErr) {
+          error = retryErr;
+        }
+      }
     }
 
     if (isLandingEmbedActive()) {
@@ -118,9 +149,13 @@ apiClient.interceptors.response.use(
         toast.error(mapAuthSessionMessageForLogout(error.response?.data?.message || error.message));
       }
     } else if (error.response?.status === 403) {
-      toast.error('Bạn không có quyền thực hiện hành động này');
+      if (!error.config?.skipPermissionDeniedToast) {
+        toast.error('Bạn không có quyền thực hiện hành động này');
+      }
     } else if (error.response?.status === 404) {
-      toast.error('Không tìm thấy dữ liệu');
+      if (!error.config?.skipNotFoundToast) {
+        toast.error('Không tìm thấy dữ liệu');
+      }
     } else if (error.response?.status >= 500) {
       toast.error('Lỗi server. Vui lòng thử lại sau.');
     } else {

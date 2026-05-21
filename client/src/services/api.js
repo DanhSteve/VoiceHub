@@ -63,6 +63,8 @@ const api = axios.create({
   headers: {
     // Content-Type: JSON (mọi request gửi JSON)
     'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
   },
 });
 
@@ -158,9 +160,38 @@ api.interceptors.response.use(
   
   /* ----- ERROR HANDLER -----
      Response lỗi (status 400+, 500+, network error) */
-  (error) => {
+  async (error) => {
     if (error?.code === 'LANDING_EMBED_WRITE_BLOCKED' || error?.isLandingEmbedBlock) {
       return Promise.reject(error);
+    }
+
+
+    const config = error?.config;
+    const cacheMsg = String(error?.message || '').toLowerCase();
+    const likelyCacheFailure =
+      cacheMsg.includes('cache') || cacheMsg.includes('err_cache');
+    if (
+      config &&
+      !config.__cacheBustRetry &&
+      !error.response &&
+      (likelyCacheFailure || error.code === 'ERR_NETWORK')
+    ) {
+      const method = String(config.method || 'get').toLowerCase();
+      if (method === 'get' || method === 'head') {
+        config.__cacheBustRetry = true;
+        config.headers = {
+          ...config.headers,
+          'Cache-Control': 'no-store, no-cache',
+          Pragma: 'no-cache',
+        };
+        config.params = { ...(config.params || {}), _nc: Date.now() };
+        try {
+          return await api.request(config);
+        } catch (retryErr) {
+          error = retryErr;
+        }
+      }
+
     }
 
     console.error('[API] Request error:', {
@@ -278,9 +309,11 @@ api.interceptors.response.use(
         code: error.code,
       });
     }
-    // 403 Forbidden: Không có quyền
+    // 403 Forbidden: Không có quyền (caller có thể skip toast qua skipPermissionDeniedToast)
     else if (error.response?.status === 403) {
-      toast.error('Bạn không có quyền thực hiện hành động này');
+      if (!error.config?.skipPermissionDeniedToast) {
+        toast.error('Bạn không có quyền thực hiện hành động này');
+      }
     } 
     // 404 Not Found: Resource không tồn tại
     // Với /friends/search: không hiển thị toast ở đây, để trang Bạn bè tự hiển thị "Không tìm thấy người dùng"

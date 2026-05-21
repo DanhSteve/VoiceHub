@@ -7,9 +7,14 @@ const taskSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    summary: {
+      type: String,
+      maxlength: 500,
+      default: '',
+    },
     description: {
       type: String,
-      maxlength: 2000,
+      maxlength: 12000,
       default: '',
     },
     assigneeId: {
@@ -29,6 +34,21 @@ const taskSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       required: true,
       ref: 'Organization',
+    },
+    departmentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department',
+      default: null,
+    },
+    teamId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Team',
+      default: null,
+    },
+    departmentName: {
+      type: String,
+      trim: true,
+      default: '',
     },
     status: {
       type: String,
@@ -81,6 +101,14 @@ const taskSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    aiGenerated: {
+      type: Boolean,
+      default: false,
+    },
+    sourceMessageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -90,6 +118,8 @@ const taskSchema = new mongoose.Schema(
 // Indexes
 taskSchema.index({ assigneeId: 1, status: 1 });
 taskSchema.index({ organizationId: 1, status: 1 });
+taskSchema.index({ organizationId: 1, departmentId: 1, status: 1 });
+taskSchema.index({ organizationId: 1, teamId: 1, status: 1 });
 taskSchema.index({ serverId: 1 });
 taskSchema.index({ createdBy: 1 });
 taskSchema.index({ dueDate: 1 });

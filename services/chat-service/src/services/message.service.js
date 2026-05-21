@@ -307,11 +307,24 @@ class MessageService {
   async markAsRead(messageId, userId) {
     try {
       await ensureMongoReady();
+      const uid = mongoose.Types.ObjectId.isValid(userId)
+        ? new mongoose.Types.ObjectId(String(userId))
+        : userId;
+      const existing = await Message.findById(messageId);
+      if (!existing) return null;
+      if (String(existing.receiverId) !== String(uid)) {
+        throw new Error('Unauthorized');
+      }
+      if (existing.isRead) {
+        return toClientMessage(existing);
+      }
+
+      const readAt = new Date();
       const message = await Message.findByIdAndUpdate(
         messageId,
         {
           isRead: true,
-          readAt: new Date(),
+          readAt,
         },
         { new: true }
       );
@@ -326,6 +339,159 @@ class MessageService {
     } catch (error) {
       const err = normalizeMongoError(error);
       throw new Error(`Error marking message as read: ${err.message}`);
+    }
+  }
+
+  /** Đánh dấu đã đọc mọi tin DM incoming từ peer. */
+  async markConversationAsRead(readerId, peerId) {
+    try {
+      await ensureMongoReady();
+      const readerOid = mongoose.Types.ObjectId.isValid(readerId)
+        ? new mongoose.Types.ObjectId(String(readerId))
+        : readerId;
+      const peerOid = mongoose.Types.ObjectId.isValid(peerId)
+        ? new mongoose.Types.ObjectId(String(peerId))
+        : peerId;
+
+      const readAt = new Date();
+      const filter = {
+        receiverId: readerOid,
+        senderId: peerOid,
+        roomId: { $exists: false },
+        isRead: false,
+        isDeleted: { $ne: true },
+        isRecalled: { $ne: true },
+      };
+
+      const last = await Message.findOne(filter).sort({ createdAt: -1 }).select('_id').exec();
+      const result = await Message.updateMany(filter, { $set: { isRead: true, readAt } });
+
+      return {
+        modifiedCount: result.modifiedCount || 0,
+        readAt,
+        lastReadMessageId: last?._id ? String(last._id) : null,
+      };
+    } catch (error) {
+      const err = normalizeMongoError(error);
+      throw new Error(`Error marking conversation as read: ${err.message}`);
+    }
+  }
+
+  /** Số tin chưa đọc theo từng người gửi (DM). */
+  async countUnreadByPeer(userId) {
+    try {
+      await ensureMongoReady();
+      const uid = mongoose.Types.ObjectId.isValid(userId)
+        ? new mongoose.Types.ObjectId(String(userId))
+        : userId;
+
+      const rows = await Message.aggregate([
+        {
+          $match: {
+            receiverId: uid,
+            senderId: { $ne: uid },
+            isRead: false,
+            isDeleted: { $ne: true },
+            isRecalled: { $ne: true },
+            $or: [{ roomId: { $exists: false } }, { roomId: null }],
+          },
+        },
+        { $group: { _id: '$senderId', count: { $sum: 1 } } },
+      ]);
+
+      const byPeer = {};
+      for (const row of rows) {
+        if (row._id) byPeer[String(row._id)] = row.count;
+      }
+      return byPeer;
+    } catch (error) {
+      const err = normalizeMongoError(error);
+      throw new Error(`Error counting unread by peer: ${err.message}`);
+    }
+  }
+
+  async addReaction(messageId, userId, emoji) {
+    try {
+      await ensureMongoReady();
+      const em = String(emoji || '').trim();
+      if (!em) throw new Error('emoji is required');
+
+      const uid = mongoose.Types.ObjectId.isValid(userId)
+        ? new mongoose.Types.ObjectId(String(userId))
+        : userId;
+
+      const msg = await Message.findById(messageId);
+      if (!msg || msg.isDeleted || msg.isRecalled) return null;
+
+      const sender = String(msg.senderId);
+      const receiver = String(msg.receiverId || '');
+      const me = String(uid);
+      if (me !== sender && me !== receiver) {
+        throw new Error('Unauthorized');
+      }
+
+      const reactions = Array.isArray(msg.reactions) ? [...msg.reactions] : [];
+      const idx = reactions.findIndex(
+        (r) => String(r.userId) === me && String(r.emoji) === em
+      );
+      if (idx >= 0) {
+        return toClientMessage(msg);
+      }
+      reactions.push({ emoji: em, userId: uid, createdAt: new Date() });
+
+      const updated = await Message.findByIdAndUpdate(
+        messageId,
+        { reactions },
+        { new: true }
+      );
+
+      const redis = getRedisClient();
+      if (redis) await redis.del(`message:${messageId}`);
+
+      return toClientMessage(updated);
+    } catch (error) {
+      const err = normalizeMongoError(error);
+      throw new Error(`Error adding reaction: ${err.message}`);
+    }
+  }
+
+  async removeReaction(messageId, userId, emoji) {
+    try {
+      await ensureMongoReady();
+      const em = String(emoji || '').trim();
+      if (!em) throw new Error('emoji is required');
+
+      const uid = mongoose.Types.ObjectId.isValid(userId)
+        ? new mongoose.Types.ObjectId(String(userId))
+        : userId;
+      const me = String(uid);
+
+      const msg = await Message.findById(messageId);
+      if (!msg) return null;
+
+      const sender = String(msg.senderId);
+      const receiver = String(msg.receiverId || '');
+      if (me !== sender && me !== receiver) {
+        throw new Error('Unauthorized');
+      }
+
+      const reactions = (Array.isArray(msg.reactions) ? msg.reactions : []).filter(
+        (r) => !(String(r.userId) === me && String(r.emoji) === em)
+      );
+
+      const updated = await Message.findByIdAndUpdate(
+        messageId,
+        { reactions },
+        { new: true }
+      );
+
+      const redis = getRedisClient();
+      if (redis) await redis.del(`message:${messageId}`);
+
+      return toClientMessage(updated);
+    } catch (error) {
+      const err = normalizeMongoError(error);
+      throw new Error(`Error removing reaction: ${err.message}`);
     }
   }
 
@@ -439,7 +605,8 @@ class MessageService {
       await ensureMongoReady();
 
       const oldMessage = await Message.findById(messageId);
-      if (!oldMessage || oldMessage.senderId.toString() !== userId.toString()) {
+      const senderStr = String(oldMessage?.senderId?._id || oldMessage?.senderId || '');
+      if (!oldMessage || !userId || senderStr !== String(userId)) {
         return null;
       }
 
@@ -627,6 +794,83 @@ class MessageService {
     } catch (error) {
       const err = normalizeMongoError(error);
       throw new Error(`Error searching messages: ${err.message}`);
+    }
+  }
+
+  /** Tìm kiếm tin DM giữa user và peer (không có roomId). */
+  async searchDmMessages(userId, peerId, options = {}) {
+    try {
+      await ensureMongoReady();
+      const { q, page = 1, limit = 30 } = options;
+      if (!userId || !peerId) {
+        return { messages: [], total: 0, currentPage: 1, totalPages: 0 };
+      }
+
+      const me = mongoose.Types.ObjectId.isValid(userId)
+        ? new mongoose.Types.ObjectId(String(userId))
+        : userId;
+      const peer = mongoose.Types.ObjectId.isValid(peerId)
+        ? new mongoose.Types.ObjectId(String(peerId))
+        : peerId;
+
+      const parts = [
+        {
+          $or: [
+            { senderId: me, receiverId: peer },
+            { senderId: peer, receiverId: me },
+          ],
+        },
+        { $or: [{ roomId: { $exists: false } }, { roomId: null }] },
+        { isDeleted: { $ne: true } },
+        { isRecalled: { $ne: true } },
+      ];
+
+      const enc = isEncryptionEnabled();
+      const qTrim = q && String(q).trim();
+      if (!enc && qTrim) {
+        parts.push({ content: { $regex: escapeRegex(qTrim), $options: 'i' } });
+      }
+
+      const filter = { $and: parts };
+      const pageNum = Math.max(1, parseInt(page, 10) || 1);
+      const lim = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
+
+      if (!enc) {
+        const skip = (pageNum - 1) * lim;
+        const messages = await Message.find(filter)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(lim)
+          .exec();
+        for (const m of messages) await maybeMigrateMessageContent(m);
+        const total = await Message.countDocuments(filter);
+        return {
+          messages: messages.map((m) => toClientMessage(m)),
+          total,
+          currentPage: pageNum,
+          totalPages: Math.max(1, Math.ceil(total / lim)),
+        };
+      }
+
+      const scanCap = Math.min(parseInt(process.env.CHAT_SEARCH_SCAN_CAP || '400', 10) || 400, 2000);
+      const raw = await Message.find(filter).sort({ createdAt: -1 }).limit(scanCap).exec();
+      for (const m of raw) await maybeMigrateMessageContent(m);
+      let out = raw.map((m) => toClientMessage(m));
+      if (qTrim) {
+        const low = qTrim.toLowerCase();
+        out = out.filter((m) => String(m.content || '').toLowerCase().includes(low));
+      }
+      const total = out.length;
+      const skip = (pageNum - 1) * lim;
+      return {
+        messages: out.slice(skip, skip + lim),
+        total,
+        currentPage: pageNum,
+        totalPages: Math.max(1, Math.ceil(total / lim)),
+      };
+    } catch (error) {
+      const err = normalizeMongoError(error);
+      throw new Error(`Error searching DM messages: ${err.message}`);
     }
   }
 

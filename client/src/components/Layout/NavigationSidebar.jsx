@@ -14,7 +14,7 @@ import {
   Rocket,
   Sun,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -52,6 +52,9 @@ const iconBtn =
 const orgAvatarBtn =
   'relative flex h-10 w-10 sm:h-11 sm:w-11 md:h-12 md:w-12 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold uppercase tracking-wide transition-all duration-200';
 
+/** Trang thông báo trong menu tổ chức — giữ sidebar org khi mở */
+const ORG_NOTIFICATIONS_PATH = '/notifications/organization';
+
 const PUBLIC_NAV_DEF = [
   { key: 'dashboard', Icon: Home, path: '/dashboard' },
   { key: 'friends', Icon: MessageSquare, path: '/chat/friends' },
@@ -65,7 +68,7 @@ const ORG_NAV_DEF = [
   { key: 'org', Icon: Building2, path: '/workspaces', isWorkspaceEntry: true },
   { key: 'tasks', Icon: ListTodo, path: '/tasks' },
   { key: 'documents', Icon: FileText, path: '/documents' },
-  { key: 'notifications', path: '/notifications', bellBadge: true },
+  { key: 'notifications', path: ORG_NOTIFICATIONS_PATH, bellBadge: true },
 ];
 
 const NavigationSidebar = ({ landingDemo = false } = {}) => {
@@ -73,7 +76,13 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, updateUser } = useAuth();
-  const { activeWorkspace, getLastWorkspacePath, lastWorkspaceSlug } = useWorkspace();
+  const {
+    activeWorkspace,
+    setActiveWorkspace,
+    getLastWorkspacePath,
+    lastWorkspaceSlug,
+    setLastWorkspaceSlug,
+  } = useWorkspace();
   const { locale } = useLocale();
   const { t, dict } = useAppStrings();
   const { isDarkMode, toggleTheme } = useTheme();
@@ -101,24 +110,59 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     let cancelled = false;
     const loadBellBadge = async () => {
       try {
-        const [frRes, ntRes] = await Promise.allSettled([
-          friendService.getPendingRequests(),
-          api.get('/notifications', { params: { limit: 1 } }),
-        ]);
-        let pending = 0;
-        if (frRes.status === 'fulfilled') {
-          const r = frRes.value;
-          const list = Array.isArray(r?.data?.data)
-            ? r.data.data
-            : Array.isArray(r?.data)
-              ? r.data
-              : [];
-          pending = list.length;
+        const onOrgRail =
+          location.pathname.startsWith('/w/') ||
+          location.pathname.startsWith(ORG_NOTIFICATIONS_PATH);
+        const orgIdFromUrl = (() => {
+          if (!location.pathname.startsWith(ORG_NOTIFICATIONS_PATH)) return '';
+          const q = new URLSearchParams(location.search);
+          return String(q.get('organizationId') || q.get('orgId') || '').trim();
+        })();
+        const orgIdForBadge =
+          orgIdFromUrl ||
+          activeWorkspace?._id ||
+          activeWorkspace?.id ||
+          activeWorkspace?.organizationId ||
+          '';
+        const notifParams =
+          onOrgRail && orgIdForBadge
+            ? { scope: 'organization', organizationId: String(orgIdForBadge), limit: 1 }
+            : { scope: 'personal', limit: 1 };
+
+        const requests = [
+          api.get('/notifications', { params: notifParams, skipGlobalErrorHandling: true }),
+        ];
+        if (!onOrgRail) {
+          requests.unshift(
+            friendService.getPendingRequests({ skipGlobalErrorHandling: true })
+          );
         }
+
+        const results = await Promise.allSettled(requests);
+        let pending = 0;
         let unread = 0;
-        if (ntRes.status === 'fulfilled') {
-          const d = ntRes.value?.data?.data ?? ntRes.value?.data;
-          unread = Number(d?.unreadCount) || 0;
+        if (!onOrgRail) {
+          const frRes = results[0];
+          const ntRes = results[1];
+          if (frRes?.status === 'fulfilled') {
+            const r = frRes.value;
+            const list = Array.isArray(r?.data?.data)
+              ? r.data.data
+              : Array.isArray(r?.data)
+                ? r.data
+                : [];
+            pending = list.length;
+          }
+          if (ntRes?.status === 'fulfilled') {
+            const d = ntRes.value?.data?.data ?? ntRes.value?.data;
+            unread = Number(d?.unreadCount) || 0;
+          }
+        } else {
+          const ntRes = results[0];
+          if (ntRes?.status === 'fulfilled') {
+            const d = ntRes.value?.data?.data ?? ntRes.value?.data;
+            unread = Number(d?.unreadCount) || 0;
+          }
         }
         if (!cancelled) setBellBadgeCount(pending + unread);
       } catch {
@@ -131,7 +175,7 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [landingDemo]);
+  }, [landingDemo, location.pathname, activeWorkspace?._id, activeWorkspace?.id, activeWorkspace?.organizationId]);
 
   useEffect(() => {
     if (profileOpen || createOrgMenuOpen || joinByLinkOpen) setSidebarExpanded(true);
@@ -144,44 +188,98 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     if (joinByLinkOpen) setJoinByLinkOpen(false);
   }, [sidebarExpanded, profileOpen, createOrgMenuOpen, joinByLinkOpen]);
 
-  useEffect(() => {
+  const loadMyOrganizations = useCallback(async () => {
     if (landingDemo) {
       setMyOrganizations([
         { _id: 'demo-org-1', name: 'Alpha Corp', slug: 'alpha-corp' },
         { _id: 'demo-org-2', name: 'BetaLabs', slug: 'betalabs' },
       ]);
-      return undefined;
+      return;
     }
-    let cancelled = false;
-    const loadMyOrganizations = async () => {
-      try {
-        const payload = await organizationAPI.getOrganizations();
-        const list = Array.isArray(payload?.data)
-          ? payload.data
-          : Array.isArray(payload?.data?.data)
-            ? payload.data.data
-            : Array.isArray(payload)
-              ? payload
-              : [];
-        if (!cancelled) setMyOrganizations(list.slice(0, 8));
-      } catch {
-        if (!cancelled) setMyOrganizations([]);
-      }
-    };
-    loadMyOrganizations();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const payload = await organizationAPI.getOrganizations();
+      const list = Array.isArray(payload?.data)
+        ? payload.data
+        : Array.isArray(payload?.data?.data)
+          ? payload.data.data
+          : Array.isArray(payload)
+            ? payload
+            : [];
+      setMyOrganizations(list);
+    } catch {
+      setMyOrganizations([]);
+    }
   }, [landingDemo]);
+
+  useEffect(() => {
+    loadMyOrganizations();
+  }, [loadMyOrganizations]);
+
+  useEffect(() => {
+    if (!landingDemo && location.pathname.startsWith('/workspaces')) {
+      loadMyOrganizations();
+    }
+  }, [location.pathname, landingDemo, loadMyOrganizations]);
+
+  const orgIdFromUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return String(params.get('organizationId') || params.get('orgId') || '').trim();
+  }, [location.search]);
+
+  const slugFromPath = useMemo(() => {
+    const match = location.pathname.match(/^\/w\/([^/]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }, [location.pathname]);
+
+  /** Đồng bộ workspace đang chọn với URL (/w/:slug hoặc ?organizationId=) */
+  useEffect(() => {
+    if (landingDemo || myOrganizations.length === 0) return;
+
+    let target = null;
+    if (slugFromPath) {
+      target =
+        myOrganizations.find((o) => String(o?.slug || '') === slugFromPath) || null;
+    } else if (orgIdFromUrl) {
+      target =
+        myOrganizations.find((o) => String(o?._id || o?.id || '') === orgIdFromUrl) || null;
+    }
+
+    if (!target) return;
+    const id = String(target._id || target.id || '');
+    const slug = String(target.slug || '').trim();
+    const currentId = String(activeWorkspace?._id || activeWorkspace?.id || '');
+    if (currentId === id && String(activeWorkspace?.slug || '') === slug) return;
+
+    setActiveWorkspace({
+      _id: id,
+      id,
+      slug,
+      name: target.name,
+      organizationId: id,
+      myRole: target.myRole,
+    });
+    if (slug) setLastWorkspaceSlug(slug);
+  }, [
+    slugFromPath,
+    orgIdFromUrl,
+    myOrganizations,
+    landingDemo,
+    activeWorkspace?._id,
+    activeWorkspace?.id,
+    activeWorkspace?.slug,
+    setActiveWorkspace,
+    setLastWorkspaceSlug,
+  ]);
 
   const timeLocale = locale === 'en' ? 'en-US' : 'vi-VN';
   const currentTime = time.toLocaleTimeString(timeLocale, { hour: '2-digit', minute: '2-digit' });
 
   const hasWorkspaceContext = Boolean(activeWorkspace?.slug || String(lastWorkspaceSlug || '').trim());
   const activeWorkspaceId = activeWorkspace?._id || activeWorkspace?.id || activeWorkspace?.organizationId || '';
-  const inOrganizationContext = location.pathname.startsWith('/w/') || (
-    hasWorkspaceContext && (location.pathname.startsWith('/documents') || location.pathname.startsWith('/notifications'))
-  );
+  const inOrganizationContext =
+    location.pathname.startsWith('/w/') ||
+    location.pathname.startsWith(ORG_NOTIFICATIONS_PATH) ||
+    (hasWorkspaceContext && location.pathname.startsWith('/documents'));
   const navItems = useMemo(() => {
     const base = inOrganizationContext
       ? ORG_NAV_DEF
@@ -306,11 +404,62 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     setJoinByLinkOpen(false);
     setJoinLinkInput('');
     navigate(`/workspaces?${params.toString()}`);
+    loadMyOrganizations();
+  };
+
+  const handleSelectOrganization = (org) => {
+    if (!org) return;
+    const id = String(org._id || org.id || '');
+    const slug = String(org.slug || '').trim();
+    setActiveWorkspace({
+      _id: id,
+      id,
+      slug,
+      name: org.name,
+      organizationId: id,
+      myRole: org.myRole,
+    });
+    if (slug) setLastWorkspaceSlug(slug);
+    setCreateOrgMenuOpen(false);
+    setJoinByLinkOpen(false);
+
+    const path = location.pathname;
+    if (path.startsWith(ORG_NOTIFICATIONS_PATH)) {
+      navigate(`${ORG_NOTIFICATIONS_PATH}?organizationId=${encodeURIComponent(id)}`);
+      return;
+    }
+    if (path.startsWith('/documents')) {
+      navigate(`/documents?organizationId=${encodeURIComponent(id)}`);
+      return;
+    }
+    if (path.startsWith('/w/') || inOrganizationContext) {
+      navigate(slug ? `/w/${encodeURIComponent(slug)}` : '/workspaces');
+      return;
+    }
+    navigate(slug ? `/w/${encodeURIComponent(slug)}` : '/workspaces');
+  };
+
+  const isOrganizationActive = (org) => {
+    const id = String(org?._id || org?.id || '');
+    const slug = String(org?.slug || '').trim();
+    const activeId = String(activeWorkspaceId || '');
+    if (activeId && id && activeId === id) return true;
+    if (slug && slugFromPath && slug === slugFromPath) return true;
+    if (orgIdFromUrl && id && orgIdFromUrl === id) return true;
+    return false;
   };
 
   const isActivePath = (path) => {
     if (path === '/workspaces') {
       return location.pathname.startsWith('/workspaces') || location.pathname.startsWith('/w/');
+    }
+    if (path === '/notifications') {
+      return (
+        location.pathname === '/notifications' || location.pathname === '/notifications/'
+      );
+    }
+    if (path === ORG_NOTIFICATIONS_PATH) {
+      return location.pathname.startsWith(ORG_NOTIFICATIONS_PATH);
     }
     if (path === '/') return location.pathname === '/';
     return location.pathname.startsWith(path);
@@ -324,12 +473,16 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
 
   const getOrgNavTargetPath = (item) => {
     const workspacePath = getLastWorkspacePath();
+    if (item.key === 'notifications') {
+      if (!inOrganizationContext) return '/notifications';
+      if (activeWorkspaceId) {
+        return `${ORG_NOTIFICATIONS_PATH}?organizationId=${encodeURIComponent(activeWorkspaceId)}`;
+      }
+      return ORG_NOTIFICATIONS_PATH;
+    }
     if (!inOrganizationContext) return item.path;
     if (item.key === 'org') return workspacePath;
     if (item.key === 'tasks') return `${workspacePath}?tab=tasks`;
-    if (item.key === 'notifications' && activeWorkspaceId) {
-      return `/notifications?organizationId=${encodeURIComponent(activeWorkspaceId)}`;
-    }
     if (item.key === 'documents' && activeWorkspaceId) {
       return `/documents?organizationId=${encodeURIComponent(activeWorkspaceId)}`;
     }
@@ -442,16 +595,15 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
                     <Tooltip key={idx} label={item.tooltip}>
                       <Link
                         to={getOrgNavTargetPath(item)}
-                        className={`relative flex shrink-0 items-center justify-center rounded-xl transition-all duration-200 ${
-                          active ? 'ring-2 ring-cyan-500/75 ring-offset-2 ring-offset-transparent' : ''
-                        }`}
+                        className={`relative ${iconBtn} ${active ? activeCls : inactive}`}
+                        aria-label={item.label}
+                        aria-current={active ? 'page' : undefined}
                       >
                         <NotificationBellBadge
                           count={bellBadgeCount}
                           isDark={isDarkMode}
-                          className={
-                            active ? 'ring-2 ring-cyan-400/40 shadow-lg' : 'opacity-95 hover:opacity-100'
-                          }
+                          variant="nav"
+                          active={active}
                         />
                       </Link>
                     </Tooltip>
@@ -482,16 +634,12 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
               <div className={`my-1 h-px w-8 ${divCls}`} />
               <div className="flex w-full flex-col items-center gap-1.5">
                 {myOrganizations.map((org) => {
-                  const orgPath = org?.slug
-                    ? `/w/${encodeURIComponent(org.slug)}`
-                    : '/workspaces';
-                  const active =
-                    (org?.slug && location.pathname.startsWith(`/w/${encodeURIComponent(org.slug)}`)) ||
-                    (location.pathname === '/workspaces' && !org?.slug);
+                  const active = isOrganizationActive(org);
                   return (
                     <Tooltip key={String(org?._id || org?.slug || org?.name)} label={org?.name || 'Workspace'}>
-                      <Link
-                        to={orgPath}
+                      <button
+                        type="button"
+                        onClick={() => handleSelectOrganization(org)}
                         className={`${orgAvatarBtn} ${
                           active
                             ? isDarkMode
@@ -502,13 +650,12 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
                               : 'border-slate-300 bg-white text-slate-800 hover:border-cyan-300 hover:bg-slate-50'
                         }`}
                         aria-label={org?.name || 'Workspace'}
+                        aria-current={active ? 'true' : undefined}
                       >
                         {active && (
                           <span className="absolute -left-2 h-5 w-1 rounded-r-full bg-cyan-400" aria-hidden />
                         )}
-                        <span>
-                          {(org?.name || 'W').slice(0, 2)}
-                        </span>
+                        <span>{(org?.name || 'W').slice(0, 2).toUpperCase()}</span>
                         {Number(org?.onlineMembers || 0) > 0 && (
                           <span
                             className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 ${
@@ -517,11 +664,11 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
                             aria-hidden
                           />
                         )}
-                      </Link>
+                      </button>
                     </Tooltip>
                   );
                 })}
-                {location.pathname.startsWith('/workspaces') && (
+                {!landingDemo && (
                   <Tooltip label={createOrgShortLabel}>
                     <button
                       type="button"
@@ -531,12 +678,12 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
                       }}
                       className={`${orgAvatarBtn} ${
                         isDarkMode
-                          ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
-                          : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          ? 'border-dashed border-emerald-400/50 bg-emerald-500/10 text-emerald-200 hover:border-emerald-400 hover:bg-emerald-500/20'
+                          : 'border-dashed border-emerald-400 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-100'
                       }`}
                       aria-label={createOrgShortLabel}
                     >
-                      <span className="text-xl leading-none">+</span>
+                      <span className="text-xl font-light leading-none">+</span>
                     </button>
                   </Tooltip>
                 )}

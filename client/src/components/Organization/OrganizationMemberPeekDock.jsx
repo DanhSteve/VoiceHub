@@ -16,6 +16,8 @@ function OrganizationMemberPeekDock({ children }) {
   const [memberMenuOpen, setMemberMenuOpen] = useState(false);
   const dockRef = useRef(null);
   const BASE_W = 384;
+  const MIN_W = 100;
+  const MAX_W = BASE_W + 100;
   const [openW, setOpenW] = useState(BASE_W);
   const resizingRef = useRef(null);
 
@@ -73,19 +75,19 @@ function OrganizationMemberPeekDock({ children }) {
       }}
       title={open ? undefined : t('organizations.memberDockTitle')}
     >
-      <div className="flex h-full flex-row" style={{ width: openW, minWidth: BASE_W }}>
+      <div className="flex h-full flex-row" style={{ width: openW, minWidth: MIN_W, maxWidth: MAX_W }}>
         {open ? (
           <div
             className="absolute inset-y-0 left-0 z-30 w-2 cursor-col-resize"
-            title="Kéo để nới panel (tối đa +20px)"
+            title={`Kéo để đổi độ rộng (${MIN_W}px – ${MAX_W}px)`}
             onMouseDown={(e) => {
               if (e.button !== 0) return;
               resizingRef.current = {
                 active: true,
                 startX: e.clientX,
                 startW: openW,
-                minW: BASE_W,
-                maxW: BASE_W + 20,
+                minW: MIN_W,
+                maxW: MAX_W,
               };
               e.preventDefault();
             }}

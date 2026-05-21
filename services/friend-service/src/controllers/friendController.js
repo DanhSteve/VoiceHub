@@ -107,18 +107,11 @@ exports.removeFriend = async (req, res, next) => {
 exports.blockUser = async (req, res, next) => {
   try {
     const { userId } = req.body;
-
-    await Friendship.findOneAndUpdate(
-      {
-        $or: [
-          { requester: req.user._id, recipient: userId },
-          { requester: userId, recipient: req.user._id },
-        ],
-      },
-      { status: 'blocked', requester: req.user._id },
-      { upsert: true }
-    );
-
+    const currentUserId = req.user?.id || req.user?._id;
+    if (!userId || !currentUserId) {
+      return res.status(400).json({ status: 'fail', message: 'userId is required' });
+    }
+    await friendService.blockUser(String(currentUserId), String(userId));
     res.json({ status: 'success', message: 'User blocked' });
   } catch (error) {
     next(error);
@@ -127,12 +120,12 @@ exports.blockUser = async (req, res, next) => {
 
 exports.unblockUser = async (req, res, next) => {
   try {
-    await Friendship.findOneAndDelete({
-      requester: req.user._id,
-      recipient: req.params.userId,
-      status: 'blocked',
-    });
-
+    const currentUserId = req.user?.id || req.user?._id;
+    const friendId = req.params.userId;
+    if (!friendId || !currentUserId) {
+      return res.status(400).json({ status: 'fail', message: 'userId is required' });
+    }
+    await friendService.unblockUser(String(currentUserId), String(friendId));
     res.json({ status: 'success', message: 'User unblocked' });
   } catch (error) {
     next(error);

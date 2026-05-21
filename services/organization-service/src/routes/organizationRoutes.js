@@ -50,6 +50,7 @@ router.patch(
 
 router.get('/:orgId/structure', organizationController.getOrganizationStructure);
 router.get('/:orgId/accessible-channel-ids', organizationController.getAccessibleChannelIds);
+router.get('/:orgId/task-workspace-scope', organizationController.getTaskWorkspaceScope);
 router.get(
   '/:orgId/channels/:channelId/access',
   authorize(['owner', 'admin']),
@@ -64,6 +65,46 @@ router.post(
   '/:orgId/channels/:channelId/access/revoke',
   authorize(['owner', 'admin']),
   organizationController.revokeChannelAccess
+);
+router.get(
+  '/:orgId/channels/:channelId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listChannelRoleAccess
+);
+router.put(
+  '/:orgId/channels/:channelId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveChannelRoleAccess
+);
+router.get(
+  '/:orgId/divisions/:divisionId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listDivisionRoleAccess
+);
+router.put(
+  '/:orgId/divisions/:divisionId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveDivisionRoleAccess
+);
+router.get(
+  '/:orgId/departments/:departmentId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listDepartmentRoleAccess
+);
+router.put(
+  '/:orgId/departments/:departmentId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveDepartmentRoleAccess
+);
+router.get(
+  '/:orgId/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.listTeamRoleAccess
+);
+router.put(
+  '/:orgId/teams/:teamId/role-access',
+  authorize(['owner', 'admin']),
+  organizationController.saveTeamRoleAccess
 );
 
 router.get('/:id', organizationController.getOrganization);

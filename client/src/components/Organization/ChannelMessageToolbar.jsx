@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Forward, MoreHorizontal, Pencil, Reply, SmilePlus } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 
 const DEFAULT_STORAGE_KEY = 'vh_org_recent_reactions';
@@ -41,6 +42,8 @@ export default function ChannelMessageToolbar({
   onForward,
   onMore,
   disabled = false,
+  /** Kích thước nhỏ (workspace org) */
+  compact = false,
   /** Tách lịch sử emoji kênh vs DM */
   recentReactionsStorageKey = DEFAULT_STORAGE_KEY,
 }) {
@@ -69,20 +72,27 @@ export default function ChannelMessageToolbar({
     return r.slice(0, 3);
   }, [recent]);
 
+  const iconSz = compact ? 'h-7 w-7' : 'h-8 w-8';
+  const emojiSz = compact ? 'text-base' : 'text-lg';
   const bar = isDarkMode
-    ? 'pointer-events-auto flex items-center gap-0.5 rounded-full border border-white/15 bg-[#2b2d31] px-1.5 py-1 shadow-lg'
-    : 'pointer-events-auto flex items-center gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-1 shadow-md';
+    ? `pointer-events-auto flex items-center gap-0.5 rounded-lg border border-white/10 bg-[#1e2128] shadow-lg ${
+        compact ? 'px-1 py-0.5' : 'rounded-full px-1.5 py-1'
+      }`
+    : `pointer-events-auto flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white shadow-md ${
+        compact ? 'px-1 py-0.5' : 'rounded-full px-1.5 py-1'
+      }`;
   const sep = isDarkMode ? 'border-r border-white/10' : 'border-r border-slate-200';
   const iconBtn = isDarkMode
-    ? 'flex h-8 w-8 items-center justify-center rounded-md text-slate-200 transition hover:bg-white/10'
-    : 'flex h-8 w-8 items-center justify-center rounded-md text-slate-600 transition hover:bg-slate-100';
+    ? `flex ${iconSz} items-center justify-center rounded-md text-[#b8bcc8] transition hover:bg-white/10 hover:text-white`
+    : `flex ${iconSz} items-center justify-center rounded-md text-slate-600 transition hover:bg-slate-100`;
   const emojiPanel = isDarkMode
     ? 'absolute bottom-full right-0 z-[70] mb-1 grid max-h-48 w-44 grid-cols-5 gap-1 rounded-xl border border-white/15 bg-[#1e1f22] p-2 shadow-xl'
     : 'absolute bottom-full right-0 z-[70] mb-1 grid max-h-48 w-44 grid-cols-5 gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl';
+  const iconClass = compact ? 'h-3.5 w-3.5' : 'h-4 w-4';
 
   return (
     <div className={bar} onClick={(e) => e.stopPropagation()}>
-      <div className={`flex items-center gap-0.5 pr-1.5 ${sep}`}>
+      <div className={`flex items-center gap-0.5 ${compact ? 'pr-1' : 'pr-1.5'} ${sep}`}>
         {recentSlots.map((em) => (
           <button
             key={em}
@@ -93,7 +103,7 @@ export default function ChannelMessageToolbar({
               pushRecent(em);
               onQuickReact?.(em);
             }}
-            className={`flex h-8 w-8 items-center justify-center rounded-md text-lg transition disabled:opacity-40 ${
+            className={`flex ${iconSz} items-center justify-center rounded-md ${emojiSz} transition disabled:opacity-40 ${
               isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-100'
             }`}
           >
@@ -102,7 +112,7 @@ export default function ChannelMessageToolbar({
         ))}
       </div>
 
-      <div className="relative flex items-center gap-0.5 pl-0.5">
+      <div className={`relative flex items-center gap-0.5 ${compact ? 'pl-0' : 'pl-0.5'}`}>
         <button
           type="button"
           title="Thêm biểu cảm"
@@ -110,7 +120,7 @@ export default function ChannelMessageToolbar({
           onClick={() => setEmojiOpen((v) => !v)}
           className={iconBtn}
         >
-          🙂
+          <SmilePlus className={iconClass} strokeWidth={2} />
         </button>
         {emojiOpen && (
           <>
@@ -149,7 +159,11 @@ export default function ChannelMessageToolbar({
           onClick={() => onMiddleAction?.()}
           className={iconBtn}
         >
-          {showEdit ? '✏️' : '↩️'}
+          {showEdit ? (
+            <Pencil className={iconClass} strokeWidth={2} />
+          ) : (
+            <Reply className={iconClass} strokeWidth={2} />
+          )}
         </button>
 
         <button
@@ -159,7 +173,7 @@ export default function ChannelMessageToolbar({
           onClick={() => onForward?.()}
           className={iconBtn}
         >
-          ↪️
+          <Forward className={iconClass} strokeWidth={2} />
         </button>
 
         <button
@@ -169,7 +183,7 @@ export default function ChannelMessageToolbar({
           onClick={(e) => onMore?.(e)}
           className={iconBtn}
         >
-          ⋯
+          <MoreHorizontal className={iconClass} strokeWidth={2} />
         </button>
       </div>
     </div>

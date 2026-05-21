@@ -1,16 +1,34 @@
-import { useMemo, useState } from 'react';
-import { Calendar, FileText, LayoutGrid, Link2, Phone } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Archive,
+  Ban,
+  Check,
+  ChevronRight,
+  Clock,
+  FolderOpen,
+  Forward,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Users,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useLocale } from '../../context/LocaleContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
-
-const URL_REGEX = /(https?:\/\/[^\s<>"']+)/gi;
-
-function extractUrls(text) {
-  if (!text || typeof text !== 'string') return [];
-  const raw = text.match(URL_REGEX);
-  return raw ? [...new Set(raw)] : [];
-}
+import { meetingAPI } from '../../services/api/meetingAPI';
+import { fetchMutualOrganizations } from '../../utils/mutualOrganizations';
+import UserAvatar from '../Shared/UserAvatar';
+import Modal from '../Shared/Modal';
+import ChatAttachmentContextMenu from './ChatAttachmentContextMenu';
+import { isAvatarImageUrl } from '../../utils/avatarDisplay';
+import { buildMediaAttachmentMenuItems } from '../../utils/buildAttachmentMenuItems';
+import { fileTypeBadge, formatFileSize } from '../../utils/chatFileDisplay';
+import { entShell } from '../../theme/enterpriseWorkspace';
+import {
+  formatDmEventWhen,
+  getDmRemindersForFriend,
+} from '../../utils/dmCalendarReminders';
 
 function formatShortDate(iso, localeTag) {
   if (!iso) return '';
@@ -25,392 +43,580 @@ function formatShortDate(iso, localeTag) {
   }
 }
 
-function hostFromUrl(url) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
-function fileDisplayName(message, fileFallback) {
-  const fm = message?.fileMeta;
-  const original = typeof fm?.originalName === 'string' ? fm.originalName.trim() : '';
-  if (original) return original;
-
-  const content = String(message?.content ?? '');
-  if (!/^https?:\/\//i.test(content)) return fileFallback;
-  try {
-    const pathOnly = content.split('?')[0];
-    const u = new URL(pathOnly);
-    const last = u.pathname.split('/').filter(Boolean).pop() || '';
-    const decoded = decodeURIComponent(last.replace(/\+/g, ' '));
-    const stripped = decoded.replace(/^[0-9a-f-]{8}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{12}_/i, '');
-    return stripped || decoded || fileFallback;
-  } catch {
-    return fileFallback;
-  }
-}
-
-function isStorageAttachmentUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-  return /storage\.googleapis\.com|firebasestorage\.app|googleapis\.com\/storage/i.test(url);
-}
-
-function avatarNode(friend) {
-  const a = friend?.avatar;
-  if (typeof a === 'string' && a.startsWith('http')) {
-    return <img src={a} alt="" className="h-full w-full object-cover" />;
-  }
-  return <span className="text-3xl">{a || '👤'}</span>;
-}
+const GRID_PREVIEW = 8;
 
 /**
- * Sidebar phải — chat 1-1: hồ sơ, lối tắt, tab, ghim / lịch (mockup).
+ * Sidebar phải — Thông tin hội thoại (chuẩn Zalo).
  */
 export default function FriendChatRightPanel({
   friend,
   messages = [],
-  onMute,
-  onPin,
-  onCreateGroup,
-  isMuted = false,
-  isPinned = false,
-  isInFriendsContext = false,
+  attachments,
+  currentUserId,
+  onBlock,
+  onSchedule,
+  onArchive,
+  isArchived = false,
+  isBlocked = false,
+  onOpenProfile,
+  onOpenMediaAt,
+  onViewAllMedia,
+  onAttachmentAction,
+  onOpenCalendarForFriend,
+  onOpenMutualOrganization,
 }) {
   const { t } = useAppStrings();
   const { locale } = useLocale();
   const { isDarkMode } = useTheme();
-  const [tab, setTab] = useState('chung');
   const [openMedia, setOpenMedia] = useState(true);
   const [openFiles, setOpenFiles] = useState(true);
+  const [ctxMenu, setCtxMenu] = useState(null);
+  const [fileMoreId, setFileMoreId] = useState(null);
+  const [remindersOpen, setRemindersOpen] = useState(false);
+  const [mutualOpen, setMutualOpen] = useState(false);
+  const [peerReminders, setPeerReminders] = useState([]);
+  const [remindersLoading, setRemindersLoading] = useState(false);
+  const [mutualOrgs, setMutualOrgs] = useState({
+    loading: false,
+    count: 0,
+    organizations: [],
+  });
 
-  const { images, files, links } = useMemo(() => {
-    const imgs = [];
-    const flist = [];
-    const linkItems = [];
+  const { mediaItems = [], files = [] } = attachments || {};
+  const gridMedia = mediaItems.slice(0, GRID_PREVIEW);
 
-    const fileFb = t('friendChat.fileAttachment');
+  const messageById = useMemo(() => {
+    const map = new Map();
     for (const m of messages) {
-      if (!m) continue;
-      const msgType = m.messageType || 'text';
-      const content = String(m.content ?? '');
-      const id = m._id || m.id;
-
-      if (msgType === 'image') {
-        imgs.push({ id, preview: content, at: m.createdAt });
-      } else if (msgType === 'file') {
-        flist.push({
-          id,
-          name: fileDisplayName(m, fileFb),
-          at: m.createdAt,
-          url: /^https?:\/\//i.test(content) ? content : null,
-        });
-      }
-
-      const urls = extractUrls(content);
-      const contentPath = content.split('?')[0];
-      for (const url of urls) {
-        const urlPath = url.split('?')[0];
-        if ((msgType === 'file' || msgType === 'image') && urlPath === contentPath) {
-          continue;
-        }
-        if (msgType === 'file' && isStorageAttachmentUrl(url)) {
-          continue;
-        }
-        linkItems.push({
-          id: `${id}-${url}`,
-          url,
-          title: url.length > 48 ? `${url.slice(0, 45)}…` : url,
-          at: m.createdAt,
-        });
-      }
+      const id = m?._id || m?.id;
+      if (id != null) map.set(String(id), m);
     }
-
-    const byTime = (a, b) =>
-      new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime();
-
-    return {
-      images: [...imgs].sort(byTime).slice(0, 8),
-      files: [...flist].sort(byTime).slice(0, 6),
-      links: [...linkItems].sort(byTime).slice(0, 8),
-    };
-  }, [messages, t]);
-
-  const daysSinceFirstMsg = useMemo(() => {
-    const sorted = [...messages]
-      .filter((m) => m?.createdAt)
-      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    if (!sorted.length) return null;
-    const startMs = new Date(sorted[0].createdAt).getTime();
-    return Math.max(0, Math.floor((Date.now() - startMs) / 86400000));
+    return map;
   }, [messages]);
 
-  const isOnline = friend?.status === 'online';
+  const closeMenu = useCallback(() => setCtxMenu(null), []);
 
-  const shell = isDarkMode
-    ? 'hidden h-full w-[min(320px,32vw)] shrink-0 flex-col overflow-hidden border-l border-white/[0.06] bg-[#0b0c14] lg:flex'
-    : 'hidden h-full w-[min(320px,32vw)] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-slate-50 lg:flex';
-  const hairline = isDarkMode ? 'border-white/[0.06]' : 'border-slate-200';
-  const hairlineT = isDarkMode ? 'border-t border-white/[0.06]' : 'border-t border-slate-200';
+  const openMediaMenu = (e, item) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const msg = messageById.get(String(item.id));
+    const canDelete =
+      msg &&
+      currentUserId &&
+      String(msg.senderId?._id || msg.senderId || '') === String(currentUserId);
+
+    setCtxMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: buildMediaAttachmentMenuItems({
+        item,
+        message: msg,
+        canDelete,
+        t,
+        onAction: onAttachmentAction,
+      }),
+    });
+  };
+
+  const openFileMenu = (e, file) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const msg = messageById.get(String(file.id));
+    const canDelete =
+      msg &&
+      currentUserId &&
+      String(msg.senderId?._id || msg.senderId || '') === String(currentUserId);
+
+    setCtxMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          id: 'open',
+          label: t('friendChat.openFile'),
+          icon: '📂',
+          onClick: () => onAttachmentAction?.('open', { url: file.url }),
+        },
+        {
+          id: 'share',
+          label: t('friendChat.mediaShare'),
+          icon: '↗',
+          onClick: () => onAttachmentAction?.('share', { messageId: file.id, message: msg }),
+        },
+        {
+          id: 'jump',
+          label: t('friendChat.jumpToMessage'),
+          icon: '💬',
+          onClick: () => onAttachmentAction?.('jumpToMessage', { messageId: file.id }),
+        },
+        {
+          id: 'save',
+          label: t('friendChat.mediaSaveDevice'),
+          icon: '💾',
+          onClick: () =>
+            onAttachmentAction?.('saveDevice', {
+              messageId: file.id,
+              url: file.url,
+              name: file.name,
+            }),
+        },
+        {
+          id: 'delete',
+          label: t('friendChat.mediaDeleteForMe'),
+          icon: '🗑',
+          danger: true,
+          disabled: !canDelete,
+          onClick: () => onAttachmentAction?.('delete', { messageId: file.id, message: msg }),
+        },
+      ],
+    });
+  };
+
+  const sidebarTok = entShell(isDarkMode);
+  const shell = `${sidebarTok.sidebar} hidden h-full min-h-0 w-[min(320px,32vw)] shrink-0 flex-col overflow-hidden lg:flex`;
   const hairlineB = isDarkMode ? 'border-b border-white/[0.06]' : 'border-b border-slate-200';
-  const panelMuted = isDarkMode ? 'bg-white/[0.03]' : 'bg-white';
-  const titleMain = isDarkMode ? 'text-white' : 'text-slate-900';
-  const subtitleMuted = isDarkMode ? 'text-cyan-300/90' : 'text-cyan-700';
-  const labelCaps = isDarkMode ? 'text-gray-500' : 'text-slate-500';
-  const bodyText = isDarkMode ? 'text-gray-200' : 'text-slate-700';
-  const linkAccent = isDarkMode ? 'text-violet-300 hover:bg-white/[0.06]' : 'text-cyan-700 hover:bg-slate-100';
+  const hairlineT = isDarkMode ? 'border-t border-white/[0.06]' : 'border-t border-slate-200';
+  const titleMain = sidebarTok.textPrimary;
+  const labelMuted = isDarkMode ? 'text-gray-500' : 'text-slate-500';
   const sectionBtn = isDarkMode
-    ? 'flex w-full items-center justify-between px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/[0.03]'
-    : 'flex w-full items-center justify-between px-3 py-2.5 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100/80';
-  const thumbBg = isDarkMode ? 'border border-white/[0.06] bg-[#14151c]' : 'border border-slate-200 bg-slate-100';
-  const fileRow = isDarkMode
-    ? 'flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.03] p-2'
-    : 'flex items-start gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm';
-  const dashedEmpty = isDarkMode
-    ? 'rounded-xl border border-dashed border-white/[0.08] px-3 py-6 text-center text-xs text-gray-500'
-    : 'rounded-xl border border-dashed border-slate-300 px-3 py-6 text-center text-xs text-slate-500';
-  const insetCard = isDarkMode
-    ? 'rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-4 text-center text-xs text-gray-500'
-    : 'rounded-xl border border-slate-200 bg-white px-3 py-4 text-center text-xs text-slate-500 shadow-sm';
-  const statBox = isDarkMode
-    ? 'rounded-xl border border-white/[0.06] bg-white/[0.03] px-2 py-3 text-center'
-    : 'rounded-xl border border-slate-200 bg-white px-2 py-3 text-center shadow-sm';
-  const footerBtn = isDarkMode
-    ? 'rounded-lg bg-white/[0.05] px-2 py-1.5 text-[10px] text-gray-400 hover:text-white'
-    : 'rounded-lg bg-slate-100 px-2 py-1.5 text-[10px] text-slate-600 hover:bg-slate-200 hover:text-slate-900';
-  const avatarRing = isDarkMode ? 'ring-[#0b0c14]' : 'ring-slate-50';
-  const onlineDotBorder = isDarkMode ? 'border-[#0b0c14]' : 'border-slate-50';
+    ? 'flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-white hover:bg-white/[0.03]'
+    : 'flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50';
+  const thumbBg = isDarkMode ? 'bg-[#14151c]' : 'bg-slate-100';
+  const quickRow = isDarkMode
+    ? 'flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-200 hover:bg-white/[0.04]'
+    : 'flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-800 hover:bg-slate-50';
+  const actionCircle = isDarkMode
+    ? 'flex flex-col items-center gap-1.5 rounded-xl p-2 text-[10px] text-gray-400 transition hover:bg-white/[0.05] hover:text-white'
+    : 'flex flex-col items-center gap-1.5 rounded-xl p-2 text-[10px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-900';
+  const actionCircleDisabled = isDarkMode
+    ? 'cursor-not-allowed opacity-45 hover:bg-transparent hover:text-gray-400'
+    : 'cursor-not-allowed opacity-50 hover:bg-transparent hover:text-slate-500';
 
-  const tabs = useMemo(
-    () => [
-      { id: 'chung', label: t('friendChat.tabChung'), Icon: LayoutGrid },
-      { id: 'files', label: t('friendChat.tabTep'), Icon: FileText },
-      { id: 'links', label: t('friendChat.tabLink'), Icon: Link2 },
-      { id: 'cal', label: t('friendChat.tabLich'), Icon: Calendar },
-    ],
-    [t]
+  const renderFileRow = (f) => {
+    const mime = f.fileMeta?.mimeType || '';
+    const badge = fileTypeBadge(f.name, mime);
+    const sizeLabel = formatFileSize(f.fileMeta?.byteSize);
+    const msg = messageById.get(String(f.id));
+    const showActions = fileMoreId === String(f.id);
+
+    return (
+      <div
+        key={f.id}
+        className={`group px-3 py-2 transition ${
+          isDarkMode ? 'hover:bg-white/[0.04]' : 'hover:bg-slate-50'
+        }`}
+        onMouseEnter={() => setFileMoreId(String(f.id))}
+        onMouseLeave={() => setFileMoreId(null)}
+      >
+        <div className="flex items-start gap-3">
+          <button
+            type="button"
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white ${badge.bg}`}
+            onClick={() => f.url && onAttachmentAction?.('open', { url: f.url })}
+            onContextMenu={(e) => openFileMenu(e, f)}
+          >
+            {badge.letter}
+          </button>
+          <button
+            type="button"
+            className="min-w-0 flex-1 text-left"
+            onClick={() => f.url && onAttachmentAction?.('open', { url: f.url })}
+            onContextMenu={(e) => openFileMenu(e, f)}
+          >
+            <div className={`truncate text-sm font-semibold ${titleMain}`}>{f.name}</div>
+            <div className={`mt-0.5 flex items-center gap-1.5 text-xs ${labelMuted}`}>
+              {sizeLabel}
+              {f.url && <Check className="h-3.5 w-3.5 text-emerald-500" strokeWidth={2.5} aria-hidden />}
+            </div>
+          </button>
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <span className={`text-xs tabular-nums ${labelMuted}`}>{formatShortDate(f.at, locale)}</span>
+            {showActions && f.url && (
+              <div className={`flex items-center gap-0.5 rounded-lg border p-0.5 shadow-md ${
+                isDarkMode ? 'border-white/10 bg-[#1a1d26]' : 'border-slate-200 bg-white'
+              }`}>
+              <button
+                type="button"
+                title={t('friendChat.openFile')}
+                onClick={() => onAttachmentAction?.('open', { url: f.url })}
+                className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-white/10"
+              >
+                <FolderOpen className="h-4 w-4 text-slate-600 dark:text-gray-300" />
+              </button>
+              <button
+                type="button"
+                title={t('friendChat.mediaShare')}
+                onClick={() => onAttachmentAction?.('share', { messageId: f.id, message: msg })}
+                className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-white/10"
+              >
+                <Forward className="h-4 w-4 text-slate-600 dark:text-gray-300" />
+              </button>
+              <button
+                type="button"
+                title={t('friendChat.moreActions')}
+                onClick={(e) => openFileMenu(e, f)}
+                className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-white/10"
+              >
+                <MoreHorizontal className="h-4 w-4 text-slate-600 dark:text-gray-300" />
+              </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const friendId = friend?.id != null ? String(friend.id) : '';
+
+  const loadMutualOrgs = useCallback(
+    (force = false) => {
+      if (!friendId) {
+        setMutualOrgs({ loading: false, count: 0, organizations: [] });
+        return undefined;
+      }
+      let cancelled = false;
+      setMutualOrgs((prev) => ({ ...prev, loading: true }));
+      fetchMutualOrganizations(friendId, { force })
+        .then((data) => {
+          if (cancelled) return;
+          const organizations = Array.isArray(data?.organizations) ? data.organizations : [];
+          setMutualOrgs({
+            loading: false,
+            count: Number(data?.count ?? organizations.length) || 0,
+            organizations,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setMutualOrgs({ loading: false, count: 0, organizations: [] });
+          }
+        });
+      return () => {
+        cancelled = true;
+      };
+    },
+    [friendId]
   );
+
+  useEffect(() => {
+    const cleanup = loadMutualOrgs(false);
+    return cleanup;
+  }, [loadMutualOrgs]);
+
+  useEffect(() => {
+    if (!friendId || !remindersOpen) return undefined;
+    let cancelled = false;
+    setRemindersLoading(true);
+    const local = getDmRemindersForFriend(friendId, friend?.name || '');
+    const from = new Date();
+    const to = new Date();
+    to.setDate(to.getDate() + 120);
+
+    meetingAPI
+      .getMeetings({ startFrom: from.toISOString(), startTo: to.toISOString() })
+      .then((res) => {
+        if (cancelled) return;
+        const body = res?.data ?? res;
+        const data = body?.data ?? body;
+        const meetings = Array.isArray(data?.meetings) ? data.meetings : [];
+        const peerMeetings = meetings
+          .filter((m) =>
+            (m.participants || []).some(
+              (p) => String(p.userId || p._id || p) === friendId
+            )
+          )
+          .map((m) => ({
+            id: m._id || m.id,
+            title: m.title || t('calendar.tabEvent'),
+            type: 'meeting',
+            source: 'api',
+            startAt: m.startTime,
+            _startAt: m.startTime ? new Date(m.startTime) : null,
+          }));
+        const merged = [...local, ...peerMeetings].sort((a, b) => {
+          const ta = a._startAt?.getTime?.() ?? (a.startAt ? new Date(a.startAt).getTime() : 0);
+          const tb = b._startAt?.getTime?.() ?? (b.startAt ? new Date(b.startAt).getTime() : 0);
+          return ta - tb;
+        });
+        setPeerReminders(merged);
+      })
+      .catch(() => {
+        if (!cancelled) setPeerReminders(local);
+      })
+      .finally(() => {
+        if (!cancelled) setRemindersLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [friendId, friend?.name, remindersOpen, t]);
+
+  const openRemindersModal = () => {
+    const local = getDmRemindersForFriend(friendId, friend?.name || '');
+    setPeerReminders(local);
+    setRemindersOpen(true);
+  };
 
   if (!friend) return null;
 
+  const mutualCount = mutualOrgs.loading ? '…' : mutualOrgs.count;
+
   return (
     <aside className={shell}>
-      <div className={`shrink-0 px-4 py-4 ${hairlineB}`}>
-        <div className="relative mx-auto flex max-w-[240px] flex-col items-center">
-          <div
-            className={`h-20 w-20 overflow-hidden rounded-full bg-gradient-to-br from-cyan-600 to-teal-600 ring-4 shadow-xl ${avatarRing}`}
-          >
-            {avatarNode(friend)}
-          </div>
-          <span
-            className={`absolute bottom-1 right-4 h-3.5 w-3.5 rounded-full border-2 ${onlineDotBorder} ${
-              isOnline ? 'bg-emerald-500' : 'bg-gray-500'
-            }`}
-          />
-        </div>
-        <h4 className={`mt-3 text-center text-lg font-bold ${titleMain}`}>{friend.name}</h4>
-        <p className={`text-center text-[11px] font-semibold uppercase tracking-wide ${subtitleMuted}`}>
-          {t('friendChat.rightMemberBadge')}
-        </p>
-
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <div className={`rounded-xl border px-2 py-2 text-center ${hairline} ${panelMuted}`}>
-            <div className={`text-[10px] uppercase tracking-wide ${labelCaps}`}>{t('friendChat.rightTz')}</div>
-            <div className={`text-xs font-medium ${bodyText}`}>GMT+7</div>
-          </div>
-          <div className={`rounded-xl border px-2 py-2 text-center ${hairline} ${panelMuted}`}>
-            <div className={`text-[10px] uppercase tracking-wide ${labelCaps}`}>{t('friendChat.rightStatus')}</div>
-            <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400/90">
-              {isOnline ? t('friendChat.statusIdle') : t('friendChat.offline')}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 py-3 text-sm font-semibold text-white shadow-lg transition hover:brightness-110"
-          >
-            <Phone className="h-4 w-4" />
-            {t('friendChat.rightCall')}
-          </button>
-          <button
-            type="button"
-            className={
-              isDarkMode
-                ? 'flex items-center justify-center gap-2 rounded-xl border border-white/[0.1] bg-white/[0.06] py-3 text-sm font-semibold text-white transition hover:bg-white/[0.1]'
-                : 'flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white py-3 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50'
-            }
-          >
-            <Calendar className="h-4 w-4" />
-            {t('friendChat.rightCalendar')}
-          </button>
-        </div>
-      </div>
-
-      <div className={`flex shrink-0 gap-1 px-2 ${hairlineB}`}>
-        {tabs.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={`flex flex-1 flex-col items-center gap-1 rounded-t-lg py-2 text-[10px] font-semibold uppercase tracking-wide transition ${
-              tab === id
-                ? isDarkMode
-                  ? 'border-b-2 border-cyan-400 text-white'
-                  : 'border-b-2 border-cyan-600 text-slate-900'
-                : isDarkMode
-                  ? 'text-gray-500 hover:text-gray-300'
-                  : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Icon className="h-4 w-4" strokeWidth={1.75} />
-            {label}
-          </button>
-        ))}
+      <div className={`shrink-0 px-4 py-3 text-center ${hairlineB}`}>
+        <h3 className={`text-sm font-bold ${titleMain}`}>{t('friendChat.profileTitle')}</h3>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-overlay">
-        <div className="px-3 py-3">
-          <h5 className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${labelCaps}`}>{t('friendChat.pinnedTitle')}</h5>
-          <p className={dashedEmpty}>{t('friendChat.pinnedEmpty')}</p>
+        <div className="flex flex-col items-center px-4 pb-4 pt-3">
+          <UserAvatar
+            avatar={friend.avatar}
+            name={friend.name}
+            size="xl"
+            onClick={onOpenProfile}
+            showOnline
+            status={friend.status}
+            ringClassName="bg-gradient-to-br from-cyan-600 to-teal-600 ring-4 ring-cyan-500/20 text-white shadow-lg"
+            title={t('friendChat.profileTitle')}
+          />
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            className={`mt-3 text-base font-bold hover:underline ${titleMain}`}
+          >
+            {friend.name}
+          </button>
+
+          <div className="mt-4 grid w-full grid-cols-3 gap-1">
+            <button type="button" onClick={onBlock} className={actionCircle}>
+              <Ban className="h-5 w-5" />
+              <span>{isBlocked ? t('friendChat.unblockUser') : t('friendChat.blockUser')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={onSchedule}
+              disabled={isBlocked}
+              title={isBlocked ? 'Đã chặn người dùng, không thể đặt lịch' : t('friendChat.schedule')}
+              className={`${actionCircle} ${isBlocked ? actionCircleDisabled : ''}`}
+            >
+              <Clock className="h-5 w-5" />
+              <span>{t('friendChat.schedule')}</span>
+            </button>
+            <button type="button" onClick={onArchive} className={actionCircle}>
+              <Archive className="h-5 w-5" />
+              <span>{isArchived ? t('friendChat.showActiveChats') : t('friendChat.archiveConvo')}</span>
+            </button>
+          </div>
         </div>
 
-        <div className={`px-3 py-3 ${hairlineT}`}>
-          <h5 className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${labelCaps}`}>{t('friendChat.todayCalTitle')}</h5>
-          <p className={insetCard}>{t('friendChat.todayCalEmpty')}</p>
+        <div className={hairlineT}>
+          <button type="button" className={quickRow} onClick={openRemindersModal}>
+            <Clock className="h-5 w-5 shrink-0 opacity-70" />
+            <span className="min-w-0 flex-1">{t('friendChat.remindersList')}</span>
+            <ChevronRight className="h-4 w-4 shrink-0 opacity-50" />
+          </button>
         </div>
 
-        {tab === 'chung' && (
-          <>
-            <section className={hairlineT}>
-              <button type="button" onClick={() => setOpenMedia((o) => !o)} className={sectionBtn}>
-                {t('friendChat.mediaSection')}
-                <span className={labelCaps}>{openMedia ? '▾' : '▸'}</span>
-              </button>
-              {openMedia && (
-                <div className="px-3 pb-3">
-                  {images.length === 0 ? (
-                    <p className={`py-2 text-xs ${labelCaps}`}>{t('friendChat.mediaEmpty')}</p>
-                  ) : (
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {images.map((img) => (
-                        <div
-                          key={img.id}
-                          className={`flex aspect-square items-center justify-center overflow-hidden rounded-lg text-[10px] ${thumbBg} ${labelCaps}`}
-                        >
-                          {img.preview?.startsWith('http') ? (
-                            <img src={img.preview} alt="" className="h-full w-full object-cover" />
+        <section className={hairlineT}>
+          <button type="button" onClick={() => setOpenMedia((o) => !o)} className={sectionBtn}>
+            {t('friendChat.mediaSection')}
+            <span className={labelMuted}>{openMedia ? '▾' : '▸'}</span>
+          </button>
+          {openMedia && (
+            <div className="px-4 pb-3">
+              {mediaItems.length === 0 ? (
+                <p className={`py-2 text-xs ${labelMuted}`}>{t('friendChat.mediaEmpty')}</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {gridMedia.map((img, idx) => (
+                      <button
+                        key={img.id}
+                        type="button"
+                        onClick={() => onOpenMediaAt?.(idx)}
+                        onContextMenu={(e) => openMediaMenu(e, img)}
+                        className={`aspect-square overflow-hidden rounded-md ${thumbBg} transition hover:opacity-90`}
+                      >
+                        {isAvatarImageUrl(img.preview || img.url) ? (
+                          img.kind === 'video' ? (
+                            <video src={img.url} className="h-full w-full object-cover" muted />
                           ) : (
-                            <span>🖼️</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                            <img src={img.preview || img.url} alt="" className="h-full w-full object-cover" />
+                          )
+                        ) : (
+                          <span className="flex h-full items-center justify-center text-lg">
+                            {img.kind === 'video' ? '🎬' : '🖼️'}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onViewAllMedia}
+                    className={`mt-3 w-full rounded-lg py-2.5 text-center text-sm font-medium ${
+                      isDarkMode
+                        ? 'bg-white/[0.06] text-gray-300 hover:bg-white/[0.1]'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    {t('friendChat.viewAllMedia')}
+                  </button>
+                </>
               )}
-            </section>
-
-            <section className={hairlineT}>
-              <button type="button" onClick={() => setOpenFiles((o) => !o)} className={sectionBtn}>
-                {t('friendChat.filesSection')}
-                <span className={labelCaps}>{openFiles ? '▾' : '▸'}</span>
-              </button>
-              {openFiles && (
-                <div className="space-y-2 px-3 pb-3">
-                  {files.length === 0 ? (
-                    <p className={`py-2 text-xs ${labelCaps}`}>{t('friendChat.filesEmpty')}</p>
-                  ) : (
-                    files.map((f) => (
-                      <div key={f.id} className={fileRow}>
-                        <span className="text-lg">📄</span>
-                        <div className="min-w-0 flex-1">
-                          <div className={`truncate text-xs font-medium ${titleMain}`}>{f.name}</div>
-                          <div className={`text-[10px] ${labelCaps}`}>{formatShortDate(f.at, locale)}</div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </section>
-          </>
-        )}
-
-        {tab === 'files' && (
-          <div className={`px-3 py-3 text-xs ${hairlineT} ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
-            {files.length === 0 ? t('friendChat.filesTabEmpty') : (
-              <ul className="space-y-2">
-                {files.map((f) => (
-                  <li key={f.id} className={`truncate ${bodyText}`}>
-                    {f.name}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {tab === 'links' && (
-          <div className={`px-3 py-3 ${hairlineT}`}>
-            {links.length === 0 ? (
-              <p className={`text-xs ${labelCaps}`}>{t('friendChat.linksEmpty')}</p>
-            ) : (
-              links.map((l) => (
-                <a
-                  key={l.id}
-                  href={l.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={`mb-2 block rounded-lg border p-2 text-xs ${
-                    isDarkMode ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white shadow-sm'
-                  } ${linkAccent}`}
-                >
-                  <div className={`truncate font-medium ${titleMain}`}>{l.title}</div>
-                  <div className={`truncate text-[11px] ${labelCaps}`}>{hostFromUrl(l.url)}</div>
-                </a>
-              ))
-            )}
-          </div>
-        )}
-
-        {tab === 'cal' && (
-          <div className={`px-3 py-4 text-center text-xs ${hairlineT} ${labelCaps}`}>
-            {t('friendChat.calTabEmpty')}
-          </div>
-        )}
-
-        <div className={`mt-auto grid grid-cols-2 gap-2 px-3 py-4 ${hairlineT}`}>
-          <div className={statBox}>
-            <div className={`text-[9px] font-bold uppercase tracking-wider ${labelCaps}`}>{t('friendChat.statChatStart')}</div>
-            <div className={`mt-1 text-lg font-bold ${titleMain}`}>
-              {daysSinceFirstMsg != null ? `${daysSinceFirstMsg}d` : '—'}
             </div>
-          </div>
-          <div className={statBox}>
-            <div className={`text-[9px] font-bold uppercase tracking-wider ${labelCaps}`}>{t('friendChat.statChannel')}</div>
-            <div className={`mt-1 text-lg font-bold ${titleMain}`}>1</div>
-          </div>
-        </div>
+          )}
+        </section>
 
-        <div className={`flex flex-wrap justify-center gap-2 px-2 py-3 ${hairlineT}`}>
-          {isInFriendsContext && (
-            <>
-              <button type="button" onClick={onMute} className={footerBtn}>
-                {isMuted ? 'Bật thông báo' : t('friendChat.footerMute')}
-              </button>
-              <button type="button" onClick={onPin} className={footerBtn}>
-                {isPinned ? 'Bỏ ghim' : t('friendChat.footerPin')}
-              </button>
-              <button type="button" onClick={onCreateGroup} className={footerBtn}>
-                {t('friendChat.footerGroup')}
-              </button>
-            </>
+        <section className={hairlineT}>
+          <button type="button" onClick={() => setOpenFiles((o) => !o)} className={sectionBtn}>
+            {t('friendChat.filesSection')}
+            <span className={labelMuted}>{openFiles ? '▾' : '▸'}</span>
+          </button>
+          {openFiles && (
+            <div className="pb-3">
+              {files.length === 0 ? (
+                <p className={`px-4 py-2 text-xs ${labelMuted}`}>{t('friendChat.filesEmpty')}</p>
+              ) : (
+                files.map((f) => renderFileRow(f))
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <ChatAttachmentContextMenu
+        open={Boolean(ctxMenu)}
+        x={ctxMenu?.x}
+        y={ctxMenu?.y}
+        items={ctxMenu?.items || []}
+        onClose={closeMenu}
+        isDarkMode={isDarkMode}
+      />
+
+      <Modal
+        isOpen={remindersOpen}
+        onClose={() => setRemindersOpen(false)}
+        title={t('friendChat.remindersList')}
+        size="md"
+      >
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => {
+              setRemindersOpen(false);
+              onOpenCalendarForFriend?.({ prefillType: 'reminder' });
+            }}
+            className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ${
+              isDarkMode
+                ? 'bg-cyan-600 text-white hover:bg-cyan-500'
+                : 'bg-cyan-600 text-white hover:bg-cyan-700'
+            }`}
+          >
+            <Plus className="h-4 w-4" />
+            {t('friendChat.remindersAdd')}
+          </button>
+          {remindersLoading ? (
+            <div className={`flex justify-center py-8 ${labelMuted}`}>
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          ) : peerReminders.length === 0 ? (
+            <p className={`py-6 text-center text-sm ${labelMuted}`}>{t('friendChat.remindersEmpty')}</p>
+          ) : (
+            <ul className="max-h-[min(50vh,360px)] space-y-2 overflow-y-auto">
+              {peerReminders.map((ev) => (
+                <li key={`${ev.source || 'local'}-${ev.id}`}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRemindersOpen(false);
+                      onOpenCalendarForFriend?.({ highlightEventId: ev.id });
+                    }}
+                    className={`flex w-full flex-col rounded-xl border px-3 py-2.5 text-left transition ${
+                      isDarkMode
+                        ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
+                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className={`text-sm font-semibold ${titleMain}`}>{ev.title}</span>
+                    <span className={`mt-0.5 text-xs ${labelMuted}`}>
+                      {formatDmEventWhen(ev, locale)}
+                      {ev.type === 'meeting' && ev.source === 'api' ? ' · Meeting' : ''}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
-      </div>
+      </Modal>
+
+      <Modal
+        isOpen={mutualOpen}
+        onClose={() => setMutualOpen(false)}
+        title={t('friendChat.mutualGroups', { count: mutualOrgs.count })}
+        size="md"
+      >
+        <div className="mb-3 flex justify-end">
+          <button
+            type="button"
+            disabled={mutualOrgs.loading}
+            onClick={() => loadMutualOrgs(true)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+              isDarkMode
+                ? 'bg-white/10 text-slate-200 hover:bg-white/15 disabled:opacity-50'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50'
+            }`}
+          >
+            {t('friendChat.mutualOrgsRefresh')}
+          </button>
+        </div>
+        {mutualOrgs.loading ? (
+          <div className={`flex justify-center py-10 ${labelMuted}`}>
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : mutualOrgs.organizations.length === 0 ? (
+          <p className={`py-8 text-center text-sm ${labelMuted}`}>{t('friendChat.mutualGroupsEmpty')}</p>
+        ) : (
+          <ul className="max-h-[min(50vh,400px)] space-y-2 overflow-y-auto">
+            {mutualOrgs.organizations.map((org) => (
+              <li key={String(org._id)}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMutualOpen(false);
+                    onOpenMutualOrganization?.(org);
+                  }}
+                  className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${
+                    isDarkMode
+                      ? 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
+                      : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                  }`}
+                >
+                  <div
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold ${
+                      isDarkMode ? 'bg-cyan-500/20 text-cyan-200' : 'bg-cyan-100 text-cyan-800'
+                    }`}
+                  >
+                    {(org.name || 'O').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className={`truncate text-sm font-semibold ${titleMain}`}>{org.name}</div>
+                    {org.myRole && (
+                      <div className={`truncate text-xs ${labelMuted}`}>
+                        {t('friendChat.mutualGroupsOpen')} · {org.myRole}
+                      </div>
+                    )}
+                  </div>
+                  <ChevronRight className={`h-4 w-4 shrink-0 ${labelMuted}`} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </aside>
   );
 }

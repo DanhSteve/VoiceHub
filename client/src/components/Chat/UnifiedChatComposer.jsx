@@ -35,7 +35,14 @@ function UnifiedChatComposer({
   showAiToggle = false,
   aiEnabled = false,
   onAiToggle,
+  /** Hiện nút Gửi (Enter vẫn gửi được khi tắt) */
+  showSendButton = true,
+  /** Ô nhập phẳng, không viền/nền bọc trong */
+  flatInner = false,
+  /** Một dòng (input text) thay vì textarea */
+  singleLine = false,
   mentionItems = [],
+  onPaste,
 }) {
   const { isDarkMode } = useTheme();
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -46,6 +53,7 @@ function UnifiedChatComposer({
   const mentionButtonRef = useRef(null);
   const mentionMenuRef = useRef(null);
   const inputRef = useRef(null);
+  const selectionRef = useRef({ start: 0, end: 0 });
 
   const safePlusItems = useMemo(
     () => (Array.isArray(plusItems) ? plusItems.filter((item) => item && item.label) : []),
@@ -95,28 +103,43 @@ function UnifiedChatComposer({
     onSend?.();
   };
 
-  const insertWrap = (before, after = before) => {
+  const syncSelection = () => {
+    const el = inputRef.current;
+    if (!el || typeof el.selectionStart !== 'number') return;
+    selectionRef.current = {
+      start: el.selectionStart,
+      end: el.selectionEnd ?? el.selectionStart,
+    };
+  };
+
+  const insertWrap = (before, after = before, selectRange) => {
     if (disabled) return;
     const el = inputRef.current;
     const cur = value ?? '';
-    if (el && typeof el.selectionStart === 'number') {
-      const start = el.selectionStart;
-      const end = el.selectionEnd ?? start;
-      const sel = cur.slice(start, end);
-      const next = `${cur.slice(0, start)}${before}${sel}${after}${cur.slice(end)}`;
-      onChange?.(next);
-      requestAnimationFrame(() => {
-        try {
-          el.focus();
-          const pos = start + before.length + sel.length + after.length;
-          el.setSelectionRange(pos, pos);
-        } catch {
-          /* ignore */
+    const saved = selectionRef.current;
+    const start =
+      el && typeof el.selectionStart === 'number' ? el.selectionStart : saved.start;
+    const end = el && typeof el.selectionEnd === 'number' ? el.selectionEnd ?? start : saved.end;
+    const sel = cur.slice(start, end);
+    const next = `${cur.slice(0, start)}${before}${sel}${after}${cur.slice(end)}`;
+    onChange?.(next);
+    requestAnimationFrame(() => {
+      try {
+        el?.focus();
+        if (!el) return;
+        if (typeof selectRange === 'function') {
+          const range = selectRange({ start, end, sel, before, after, next });
+          if (range) {
+            el.setSelectionRange(range.start, range.end);
+            return;
+          }
         }
-      });
-      return;
-    }
-    onChange?.(`${cur}${before}${after}`);
+        const pos = start + before.length + sel.length + after.length;
+        el.setSelectionRange(pos, pos);
+      } catch {
+        /* ignore */
+      }
+    });
   };
 
   const insertMention = (label) => {
@@ -166,7 +189,12 @@ function UnifiedChatComposer({
       } else {
         insertWrap('@');
       }
-    } else if (kind === 'link') insertWrap('[', '](url)');
+    }     else if (kind === 'link') {
+      insertWrap('[', '](url)', ({ start, sel, before }) => {
+        const urlStart = start + before.length + sel.length + 2;
+        return { start: urlStart, end: urlStart + 3 };
+      });
+    }
   };
 
   const defaultWrapper = isDarkMode
@@ -176,9 +204,11 @@ function UnifiedChatComposer({
   const fmtBtn = isDarkMode
     ? 'rounded-md p-2 text-gray-400 transition hover:bg-white/10 hover:text-white disabled:opacity-40'
     : 'rounded-md p-2 text-slate-500 transition hover:bg-slate-200 hover:text-slate-900 disabled:opacity-40';
-  const composerInner = isDarkMode
-    ? 'relative flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-[#12141c] px-2 py-2 shadow-inner'
-    : 'relative flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 shadow-inner';
+  const composerInner = flatInner
+    ? 'relative flex flex-col gap-1.5'
+    : isDarkMode
+      ? 'relative flex flex-col gap-2 rounded-2xl border border-white/[0.08] bg-[#171B24] px-2.5 py-2 shadow-inner'
+      : 'relative flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-2.5 py-2 shadow-inner';
   const plusBtnClass = isDarkMode
     ? 'h-9 w-9 shrink-0 rounded-lg text-2xl leading-none text-gray-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50'
     : 'h-9 w-9 shrink-0 rounded-lg text-2xl leading-none text-slate-600 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50';
@@ -189,8 +219,50 @@ function UnifiedChatComposer({
     ? 'flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-white transition hover:bg-slate-800/80 disabled:cursor-not-allowed disabled:opacity-40'
     : 'flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-800 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40';
   const textareaClass = isDarkMode
-    ? 'max-h-40 min-h-[44px] flex-1 resize-y bg-transparent px-2 py-2 text-sm leading-relaxed text-white outline-none placeholder:text-gray-500 disabled:opacity-60'
-    : 'max-h-40 min-h-[44px] flex-1 resize-y bg-transparent px-2 py-2 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60';
+    ? `scrollbar-composer max-h-40 flex-1 resize-none overflow-y-auto overflow-x-hidden bg-transparent px-2 pr-1 text-sm text-white outline-none placeholder:text-gray-500 disabled:opacity-60 ${
+        richToolbar
+          ? 'min-h-[36px] py-1.5 leading-normal'
+          : 'min-h-[44px] py-2 leading-relaxed'
+      }`
+    : `scrollbar-composer max-h-40 flex-1 resize-none overflow-y-auto overflow-x-hidden bg-transparent px-2 pr-1 text-sm text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60 ${
+        richToolbar
+          ? 'min-h-[36px] py-1.5 leading-normal'
+          : 'min-h-[44px] py-2 leading-relaxed'
+      }`;
+  const inputClass = isDarkMode
+    ? 'h-9 min-w-0 flex-1 bg-transparent px-2 text-sm text-white outline-none placeholder:text-gray-500 disabled:opacity-60'
+    : 'h-9 min-w-0 flex-1 bg-transparent px-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60';
+
+  const handleInputChange = (nextRaw) => {
+    const nextValue = singleLine ? String(nextRaw).replace(/[\r\n]+/g, ' ') : nextRaw;
+    onChange?.(nextValue);
+    if (!safeMentionItems.length) return;
+    const el = inputRef.current;
+    const cursor =
+      el && typeof el.selectionStart === 'number' ? el.selectionStart : nextValue.length;
+    const head = nextValue.slice(0, cursor);
+    const match = head.match(/(?:^|\s)@([^\s@]*)$/);
+    if (match) {
+      setMentionQuery(match[1] || '');
+      setShowPlusMenu(false);
+      setShowMentionMenu(true);
+    } else if (showMentionMenu) {
+      setShowMentionMenu(false);
+      setMentionQuery('');
+    }
+  };
+
+  const handleInputKeyDown = (event) => {
+    if (showMentionMenu && filteredMentionItems.length > 0 && event.key === 'Enter') {
+      event.preventDefault();
+      insertMention(filteredMentionItems[0].label);
+      return;
+    }
+    if (event.key === 'Enter' && (!singleLine ? !event.shiftKey : true)) {
+      event.preventDefault();
+      handleSend();
+    }
+  };
   const actionBtn = isDarkMode
     ? 'h-9 rounded-md text-gray-300 transition hover:bg-white/10 hover:text-white disabled:opacity-50'
     : 'h-9 rounded-md text-slate-600 transition hover:bg-slate-200 hover:text-slate-900 disabled:opacity-50';
@@ -213,6 +285,10 @@ function UnifiedChatComposer({
               disabled={disabled}
               title={title}
               ref={k === 'mention' ? mentionButtonRef : undefined}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                syncSelection();
+              }}
               onClick={() => fmt(k)}
               className={fmtBtn}
             >
@@ -251,7 +327,7 @@ function UnifiedChatComposer({
             </div>
           </div>
         )}
-        <div className="flex items-end gap-2">
+        <div className={`flex gap-2 ${singleLine || richToolbar ? 'items-center' : 'items-end'}`}>
         {safePlusItems.length > 0 && (
           <>
             <button
@@ -292,43 +368,38 @@ function UnifiedChatComposer({
           </>
         )}
 
-        <textarea
-          ref={inputRef}
-          value={value}
-          rows={richToolbar ? 3 : 1}
-          onChange={(event) => {
-            const nextValue = event.target.value;
-            onChange?.(nextValue);
-            if (!safeMentionItems.length) return;
-            const cursor = event.target.selectionStart ?? nextValue.length;
-            const head = nextValue.slice(0, cursor);
-            const match = head.match(/(?:^|\s)@([^\s@]*)$/);
-            if (match) {
-              setMentionQuery(match[1] || '');
-              setShowPlusMenu(false);
-              setShowMentionMenu(true);
-            } else if (showMentionMenu) {
-              setShowMentionMenu(false);
-              setMentionQuery('');
-            }
-          }}
-          onKeyDown={(event) => {
-            if (showMentionMenu && filteredMentionItems.length > 0 && event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              insertMention(filteredMentionItems[0].label);
-              return;
-            }
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              handleSend();
-            }
-          }}
-          disabled={disabled}
-          placeholder={placeholder}
-          className={textareaClass}
-        />
 
-        <div className="flex shrink-0 flex-col items-end gap-2">
+        {singleLine ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={value}
+            onChange={(event) => handleInputChange(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            disabled={disabled}
+            placeholder={placeholder}
+            className={inputClass}
+            autoComplete="off"
+          />
+        ) : (
+          <textarea
+            ref={inputRef}
+            value={value}
+            rows={1}
+            onChange={(event) => handleInputChange(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            disabled={disabled}
+            placeholder={placeholder}
+            className={textareaClass}
+          />
+        )}
+
+
+        <div
+          className={`flex shrink-0 ${
+            showSendButton ? 'flex-col items-end gap-2' : 'items-center'
+          }`}
+        >
           <div className="flex items-center gap-1">
             {resolvedActionItems.map((item) => (
               <button
@@ -363,14 +434,16 @@ function UnifiedChatComposer({
               </button>
             )}
           </div>
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={disabled || sendDisabled}
-            className="rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-cyan-900/25 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {sendLabel}
-          </button>
+          {showSendButton && (
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={disabled || sendDisabled}
+              className="rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-cyan-900/25 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {sendLabel}
+            </button>
+          )}
         </div>
         </div>
       </div>

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   AtSign,
+  Calendar,
+  ChevronDown,
   Hash,
   History,
   Loader2,
@@ -23,47 +25,34 @@ import {
   serializeQueryState,
 } from '../searchTypes';
 import { fetchOrgMessageSearch, formatOrgMessageSearchError } from '../orgChatSearchConfig';
+import { enrichMessagesBusinessCards } from '../businessCardDisplay';
+import { formatMessagePreview } from '../formatMessagePreview';
 import { organizationAPI } from '../../../services/api/organizationAPI';
 import { enrichMembershipsForSearch } from '../enrichOrgMembers';
+import { getSearchFieldClasses } from '../searchFieldTheme';
 
 function unwrap(payload) {
   return payload?.data ?? payload;
-}
-
-function formatMessagePreview(message) {
-  const mt = String(message?.messageType || 'text').toLowerCase();
-  const raw = String(message?.content || '');
-  if (mt === 'business_card') {
-    try {
-      const card = JSON.parse(raw);
-      const name = String(card?.fullName || card?.name || '—').trim() || '—';
-      const phone = String(card?.phone || '').trim() || '-';
-      const email = String(card?.email || '').trim() || '-';
-      return `Danh thiếp · Tên: ${name} · SĐT: ${phone} · Email: ${email}`;
-    } catch {
-      return 'Danh thiếp';
-    }
-  }
-  if (mt === 'image') return 'Hình ảnh';
-  if (mt === 'file') return `Tệp: ${raw || 'Đính kèm'}`;
-  if (mt === 'system') return raw || 'Tin nhắn hệ thống';
-  return raw;
 }
 
 /**
  * Thanh tìm kiếm workspace tổ chức (Discord-style): bộ lọc + lịch sử + gợi ý + kết quả.
  */
 export default function OrgWorkspaceSearch({
+  variant = 'bar',
   organizationId,
   serverId,
   channels = [],
   isDarkMode,
   onJumpToResult,
+  onClose,
 }) {
   const { t } = useAppStrings();
+  const isSidebar = variant === 'sidebar';
   const scopeKey = useMemo(() => `org-chat:${organizationId || 'none'}`, [organizationId]);
 
   const [open, setOpen] = useState(false);
+  const effectiveOpen = isSidebar || open;
   const [menuMode, setMenuMode] = useState(null);
   const [inputValue, setInputValue] = useState('');
   const [tokens, setTokens] = useState([]);
@@ -81,9 +70,13 @@ export default function OrgWorkspaceSearch({
     320
   );
 
-  const historyEntries = useMemo(() => loadSearchHistory(scopeKey), [scopeKey, open, historyVersion]);
+  const historyEntries = useMemo(
+    () => loadSearchHistory(scopeKey),
+    [scopeKey, effectiveOpen, historyVersion]
+  );
 
   useEffect(() => {
+    if (isSidebar) return undefined;
     function onDoc(e) {
       if (rootRef.current && !rootRef.current.contains(e.target)) {
         setOpen(false);
@@ -92,10 +85,10 @@ export default function OrgWorkspaceSearch({
     }
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
+  }, [isSidebar]);
 
   useEffect(() => {
-    if (!organizationId || !open || (menuMode !== 'from' && menuMode !== 'mentions')) return;
+    if (!organizationId || !effectiveOpen || (menuMode !== 'from' && menuMode !== 'mentions')) return;
     let cancelled = false;
     setLoadingMembers(true);
     organizationAPI
@@ -116,7 +109,7 @@ export default function OrgWorkspaceSearch({
     return () => {
       cancelled = true;
     };
-  }, [organizationId, open, menuMode]);
+  }, [organizationId, effectiveOpen, menuMode]);
 
   const runSearch = useCallback(async () => {
     if (!organizationId) return;
@@ -133,7 +126,8 @@ export default function OrgWorkspaceSearch({
         signal: ac.signal,
       });
       const msgs = data?.messages ?? data?.data?.messages ?? [];
-      const list = Array.isArray(msgs) ? msgs : [];
+      let list = Array.isArray(msgs) ? msgs : [];
+      list = await enrichMessagesBusinessCards(list);
       setResults(list);
       pushSearchHistory(scopeKey, serializeQueryState(inputValue.trim(), tokens));
     } catch (e) {
@@ -146,10 +140,10 @@ export default function OrgWorkspaceSearch({
   }, [organizationId, tokens, inputValue, scopeKey]);
 
   useEffect(() => {
-    if (!open || !organizationId) return;
+    if (!effectiveOpen || !organizationId) return;
     JSON.parse(debouncedKey || '{}');
     runSearch();
-  }, [debouncedKey, open, organizationId, runSearch]);
+  }, [debouncedKey, effectiveOpen, organizationId, runSearch]);
 
   const addToken = (key, value, label, avatar) => {
     setTokens((prev) => {
@@ -190,9 +184,7 @@ export default function OrgWorkspaceSearch({
     }
   };
 
-  const surface = isDarkMode
-    ? 'border-white/[0.08] bg-[#12151f] text-[#e3e5e8]'
-    : 'border-slate-200 bg-white text-slate-900';
+  const fieldCls = getSearchFieldClasses({ isDarkMode, size: 'md', variant: 'default', fullWidth: true });
 
   const muted = isDarkMode ? 'text-[#949ba4]' : 'text-slate-500';
   const titleCls = isDarkMode ? 'text-white' : 'text-slate-900';
@@ -220,9 +212,9 @@ export default function OrgWorkspaceSearch({
   };
 
   return (
-    <div ref={rootRef} className="relative min-w-0 flex-1 md:max-w-md">
-      <div className={`flex items-center gap-2 rounded-xl border px-2 py-1.5 ${surface}`}>
-        <Search className={`h-4 w-4 shrink-0 ${muted}`} />
+    <div ref={rootRef} className="relative mx-auto min-w-0 w-full max-w-2xl flex-1">
+      <div className={`flex items-center gap-2 px-2 py-1 ${fieldCls.shell}`}>
+        <Search className={`pointer-events-none h-4 w-4 shrink-0 opacity-50 ${muted}`} aria-hidden />
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
           {tokens.map((tok) => (
             <span
@@ -385,7 +377,7 @@ export default function OrgWorkspaceSearch({
                 )}
                 {results.map((m) => {
                   const id = m._id || m.id;
-                  const preview = formatMessagePreview(m).slice(0, 140);
+                  const preview = formatMessagePreview(m, t).slice(0, 140);
                   const rid = m.roomId?._id || m.roomId;
                   return (
                     <li key={id}>

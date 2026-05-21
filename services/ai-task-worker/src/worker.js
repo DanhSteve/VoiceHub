@@ -6,6 +6,14 @@ const axios = require('axios');
 const { connectDB, disconnectDB } = require('/shared');
 const AiTaskExtraction = require('./models/AiTaskExtraction');
 const SyncSuggestion = require('./models/SyncSuggestion');
+const {
+  parseMentionLabelsFromText,
+  fetchAiTaskContext,
+  buildEnrichedPrompt,
+  pickAssigneeFromContext,
+  applyPlacementFromContext,
+  safeParseJsonFromOllama,
+} = require('./taskExtractEnrichment');
 
 const EXTRACT_QUEUE = process.env.RABBITMQ_TASK_AI_EXTRACT_QUEUE || 'task-ai.extract';
 const SYNC_QUEUE = process.env.RABBITMQ_TASK_AI_SYNC_QUEUE || 'task-ai.sync';
@@ -67,7 +75,17 @@ async function runOcrByUrl(imageUrl) {
 
 async function callOllama(prompt) {
   if (String(process.env.LLM_PROVIDER || 'ollama').toLowerCase() === 'mock') {
-    return { response: JSON.stringify({ title: 'Mock task', description: prompt.slice(0, 200), priority: 'medium', dueDate: null }) };
+    return {
+      response: JSON.stringify({
+        title: 'Mock task',
+        summary: 'Tóm tắt mock',
+        description: prompt.slice(0, 400),
+        priority: 'medium',
+        dueDate: null,
+        tags: ['mock'],
+        assigneeUserId: null,
+      }),
+    };
   }
   const baseUrl = (process.env.OLLAMA_BASE_URL || 'http://ollama:11434').replace(/\/$/, '');
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:3b-instruct';
@@ -100,33 +118,14 @@ async function callOllama(prompt) {
   return res.data;
 }
 
-function buildHardcodedPrompt(messageText) {
-  return [
-    'Bạn là AI trích xuất task từ chat. Trả về DUY NHẤT JSON hợp lệ.',
-    'Schema JSON:',
-    '{ "title": string, "description": string, "priority": "low"|"medium"|"high"|"urgent", "dueDate": "YYYY-MM-DD"|null, "assigneeName": string|null, "tags": string[] }',
-    '',
-    'Chat:',
-    messageText || '',
-  ].join('\n');
-}
-
-function safeParseJsonFromOllama(data) {
-  // Ollama thường trả { response: "...", ... }
-  const text = typeof data?.response === 'string' ? data.response : JSON.stringify(data || {});
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) throw new Error('Model output has no JSON object');
-  const jsonText = text.slice(start, end + 1);
-  return JSON.parse(jsonText);
-}
-
 function computeConfidence(draft) {
-  let score = 0.2;
-  if (draft?.title && String(draft.title).trim().length >= 4) score += 0.35;
-  if (draft?.description && String(draft.description).trim().length >= 10) score += 0.2;
-  if (draft?.priority) score += 0.1;
-  if (draft?.dueDate) score += 0.15;
+  let score = 0.15;
+  if (draft?.title && String(draft.title).trim().length >= 4) score += 0.25;
+  if (draft?.summary && String(draft.summary).trim().length >= 8) score += 0.15;
+  if (draft?.description && String(draft.description).trim().length >= 20) score += 0.15;
+  if (draft?.priority) score += 0.05;
+  if (draft?.dueDate) score += 0.1;
+  if (draft?.assigneeId) score += 0.15;
   return Math.max(0, Math.min(1, score));
 }
 
@@ -168,12 +167,94 @@ async function resolveAssigneeId(assigneeName) {
 function buildPatchFromDraft(nextDraft) {
   const patch = {};
   if (nextDraft.title) patch.title = nextDraft.title;
+  if (nextDraft.summary != null) patch.summary = nextDraft.summary;
   if (nextDraft.description != null) patch.description = nextDraft.description;
   if (nextDraft.priority) patch.priority = nextDraft.priority;
   if (nextDraft.dueDate !== undefined) patch.dueDate = nextDraft.dueDate;
   if (Array.isArray(nextDraft.tags)) patch.tags = nextDraft.tags;
   if (nextDraft.assigneeId) patch.assigneeId = nextDraft.assigneeId;
+  if (nextDraft.departmentId) patch.departmentId = nextDraft.departmentId;
+  if (nextDraft.teamId) patch.teamId = nextDraft.teamId;
+  if (nextDraft.departmentName) patch.departmentName = nextDraft.departmentName;
   return patch;
+}
+
+async function buildDraftFromMessage({ messageText, organizationId, generatedBy, payload, extraction }) {
+  const hintMentions = payload?.mentions?.length
+    ? payload.mentions
+    : extraction?.contextHints?.mentions || [];
+  const userIds = hintMentions.map((m) => String(m.userId || m.id)).filter((id) => /^[a-f0-9]{24}$/i.test(id));
+  const hintLabels = hintMentions.flatMap((m) => [m.displayName, m.mentionLabel].filter(Boolean));
+  const mentionLabels = [
+    ...new Set([...hintLabels, ...parseMentionLabelsFromText(messageText, hintLabels)]),
+  ];
+  const channelId =
+    payload?.channelId || extraction?.contextHints?.channelId || '';
+
+  const systemContext = await fetchAiTaskContext({
+    organizationId,
+    userIds,
+    mentionLabels,
+    channelId: channelId || undefined,
+  });
+
+  const nowIso = new Date().toISOString();
+  const prompt = buildEnrichedPrompt({
+    messageText,
+    systemContext: systemContext || {
+      organization: { id: String(organizationId), name: '' },
+      mentionedUsers: [],
+      channel: null,
+    },
+    nowIso,
+  });
+
+  const modelData = await callOllama(prompt);
+  const parsed = safeParseJsonFromOllama(modelData);
+
+  let draft = {
+    title: parsed.title || '',
+    summary: parsed.summary || '',
+    description: parsed.description || parsed.detailedDescription || '',
+    priority: parsed.priority || 'medium',
+    dueDate: parsed.dueDate ? new Date(parsed.dueDate) : null,
+    tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+  };
+
+  if (!draft.description && draft.summary) {
+    draft.description = draft.summary;
+  }
+
+  const assignee = pickAssigneeFromContext(systemContext, parsed.assigneeUserId, userIds);
+  draft = applyPlacementFromContext(draft, assignee, systemContext?.channel);
+
+  if (!draft.assigneeId && userIds.length) {
+    const primaryId = userIds[0];
+    draft.assigneeId = primaryId;
+    const hint = hintMentions.find((m) => String(m.userId || m.id) === String(primaryId));
+    if (hint?.displayName) draft.assigneeName = hint.displayName;
+    else {
+      const fromCtx = (systemContext?.mentionedUsers || []).find(
+        (u) => String(u.userId) === String(primaryId)
+      );
+      if (fromCtx) {
+        draft.assigneeName = fromCtx.displayName || fromCtx.username || '';
+        if (fromCtx.departmentId && !draft.departmentId) draft.departmentId = fromCtx.departmentId;
+        if (fromCtx.teamId && !draft.teamId) draft.teamId = fromCtx.teamId;
+        if (fromCtx.departmentName && !draft.departmentName) draft.departmentName = fromCtx.departmentName;
+      }
+    }
+  }
+
+  if (!draft.assigneeId && !userIds.length && parsed.assigneeName) {
+    const fallback = await resolveAssigneeId(parsed.assigneeName);
+    if (fallback.assigneeId) {
+      draft.assigneeId = fallback.assigneeId;
+      draft.assigneeName = parsed.assigneeName;
+    }
+  }
+
+  return { draft, modelData, systemContext };
 }
 
 async function createSyncSuggestion({ extraction, messageId, changeType, proposedPatch }) {
@@ -210,6 +291,7 @@ async function fetchTask(taskId, userId) {
 
 async function processExtractJob(payload) {
   const { extractionId } = payload || {};
+  // payload còn mentions, channelId từ queue
   if (!extractionId) throw new Error('Missing extractionId');
 
   const extraction = await AiTaskExtraction.findById(extractionId);
@@ -231,22 +313,16 @@ async function processExtractJob(payload) {
       ocrText = ocr.text ? `\nOCR:\n${ocr.text}` : '';
     }
 
-    const prompt = buildHardcodedPrompt(`${messageText}${attachmentHint}${ocrText}`);
-    const modelData = await callOllama(prompt);
-    const parsed = safeParseJsonFromOllama(modelData);
+    const { draft, modelData } = await buildDraftFromMessage({
+      messageText: `${messageText}${attachmentHint}${ocrText}`,
+      organizationId: extraction.organizationId,
+      generatedBy: extraction.generatedBy,
+      payload,
+      extraction,
+    });
 
-    const draft = {
-      title: parsed.title || extraction.draft?.title || '',
-      description: parsed.description || '',
-      priority: parsed.priority || 'medium',
-      dueDate: parsed.dueDate ? new Date(parsed.dueDate) : null,
-      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-      assigneeName: parsed.assigneeName || null,
-    };
-
-    const assignee = await resolveAssigneeId(draft.assigneeName);
-    if (assignee.assigneeId) {
-      draft.assigneeId = assignee.assigneeId;
+    if (!draft.title && extraction.draft?.title) {
+      draft.title = extraction.draft.title;
     }
 
     const validation = validateDraft(draft);
@@ -306,20 +382,16 @@ async function processSyncJob(payload) {
       ocrText = ocr.text ? `\nOCR:\n${ocr.text}` : '';
     }
 
-    const prompt = buildHardcodedPrompt(`${messageText}${attachmentHint}${ocrText}`);
-    const modelData = await callOllama(prompt);
-    const parsed = safeParseJsonFromOllama(modelData);
-
-    const draft = {
-      title: parsed.title || '',
-      description: parsed.description || '',
-      priority: parsed.priority || 'medium',
-      dueDate: parsed.dueDate ? new Date(parsed.dueDate) : null,
-      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-      assigneeName: parsed.assigneeName || null,
-    };
-    const assignee = await resolveAssigneeId(draft.assigneeName);
-    if (assignee.assigneeId) draft.assigneeId = assignee.assigneeId;
+    const { draft } = await buildDraftFromMessage({
+      messageText: `${messageText}${attachmentHint}${ocrText}`,
+      organizationId: extraction.organizationId,
+      generatedBy: extraction.generatedBy,
+      payload: {
+        mentions: extraction?.contextHints?.mentions,
+        channelId: extraction?.contextHints?.channelId,
+      },
+      extraction,
+    });
 
     const validation = validateDraft(draft);
     if (!validation.ok) continue;
@@ -352,6 +424,34 @@ async function publishToDlq(ch, sourceQueue, msg, err) {
   });
 }
 
+function isAmqpConnectRetryable(err) {
+  const code = err && err.code;
+  return code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ECONNRESET' || code === 'EAI_AGAIN';
+}
+
+async function connectAmqpWithRetry(url) {
+  const maxAttempts = Math.max(1, parseInt(process.env.RABBITMQ_CONNECT_MAX_ATTEMPTS || '45', 10) || 45);
+  const delayMs = Math.max(500, parseInt(process.env.RABBITMQ_CONNECT_RETRY_MS || '2000', 10) || 2000);
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const conn = await amqp.connect(url);
+      if (attempt > 1) {
+        console.log(`[ai-task-worker] RabbitMQ connected (attempt ${attempt}/${maxAttempts})`);
+      }
+      return conn;
+    } catch (err) {
+      lastErr = err;
+      if (!isAmqpConnectRetryable(err) || attempt >= maxAttempts) throw err;
+      console.warn(
+        `[ai-task-worker] RabbitMQ not ready (attempt ${attempt}/${maxAttempts}): ${err.message}. Retry in ${delayMs}ms…`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 function isTransientJobError(err) {
   const code = err && err.code;
   if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED') return true;
@@ -369,7 +469,7 @@ async function start() {
   const url = process.env.RABBITMQ_URL;
   if (!url) throw new Error('RABBITMQ_URL is not set');
 
-  const conn = await amqp.connect(url);
+  const conn = await connectAmqpWithRetry(url);
   const ch = await conn.createChannel();
   await ch.assertQueue(EXTRACT_QUEUE, { durable: true });
   await ch.assertQueue(SYNC_QUEUE, { durable: true });

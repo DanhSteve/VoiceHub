@@ -24,6 +24,19 @@ function sendProxyError(res, statusCode, message, err = null, meta = {}) {
   return res.status(statusCode).json(body);
 }
 
+function isUpstreamUnavailableError(err) {
+  const code = String(err?.code || '').toUpperCase();
+  return [
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+  ].includes(code);
+}
+
 /**
  * Middleware proxy request đến microservice
  */
@@ -107,18 +120,18 @@ const proxyMiddleware = (req, res, next) => {
       console.error(`[API-Gateway] Request method:`, req.method);
       console.error(`[API-Gateway] Request URL:`, req.url);
       
-      // Xử lý timeout error
+      // Xử lý timeout / upstream unreachable error
       const errMeta = { serviceName: svcName, upstreamUrl: svcUrl };
-      if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.message?.includes('timeout')) {
+      if (isUpstreamUnavailableError(err) || err.message?.includes('timeout')) {
         console.error(`[API-Gateway] ❌ Timeout connecting to ${svcUrl}`);
         if (res && !res.headersSent) {
           return sendProxyError(res, 504, 'Gateway timeout', err, errMeta);
         }
       }
       
-      // Xử lý connection refused
-      if (err.code === 'ECONNREFUSED' || err.message?.includes('ECONNREFUSED')) {
-        console.error(`[API-Gateway] ❌ Connection refused to ${svcUrl}`);
+      // Xử lý service unreachable / DNS resolve fail
+      if (isUpstreamUnavailableError(err)) {
+        console.error(`[API-Gateway] ❌ Cannot reach ${svcUrl}`);
         if (res && !res.headersSent) {
           return sendProxyError(res, 503, 'Service unavailable', err, errMeta);
         }
@@ -196,10 +209,9 @@ const proxyMiddleware = (req, res, next) => {
         console.error(`[API-Gateway] Error message:`, err.message);
         console.error(`[API-Gateway] Error code:`, err.code);
         
-        // Xử lý ECONNREFUSED - service không chạy
-        if (err.code === 'ECONNREFUSED') {
-          console.error(`[API-Gateway] ❌ Cannot connect to ${serviceName} at ${targetUrl}`);
-          console.error(`[API-Gateway] Please check if ${serviceName} is running on port ${new URL(targetUrl).port}`);
+        // Xử lý service không chạy / DNS không resolve được
+        if (isUpstreamUnavailableError(err)) {
+          console.error(`[API-Gateway] ❌ Cannot reach ${serviceName} at ${targetUrl}`);
           if (!res.headersSent) {
             return sendProxyError(res, 503, 'Service unavailable', err, {
               serviceName,

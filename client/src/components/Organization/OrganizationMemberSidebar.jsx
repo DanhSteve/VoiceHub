@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } fr
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import api from '../../services/api';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import roleAPI from '../../services/api/roleAPI';
 import userService from '../../services/userService';
@@ -9,10 +10,41 @@ import friendService from '../../services/friendService';
 import { ConfirmDialog } from '../Shared';
 import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
+import OrgWorkspaceSearchSidebar from '../../features/search/components/OrgWorkspaceSearchSidebar';
+import OrgMemberSidebarAttachments from '../../features/orgAttachments/OrgMemberSidebarAttachments';
 
 const unwrapBody = (payload) => payload?.data ?? payload;
 
 const MEMBERSHIP_ROLE_ORDER = ['owner', 'admin', 'member'];
+
+function canOrgResourceAction(permissions, resource, action = 'read') {
+  if (!Array.isArray(permissions)) return false;
+  for (const perm of permissions) {
+    const res = perm?.resource;
+    const actions = Array.isArray(perm?.actions) ? perm.actions : [];
+    if (res !== resource && res !== '*') continue;
+    if (
+      actions.includes(action) ||
+      actions.includes('*') ||
+      actions.includes('admin')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Fallback khi chưa lấy được RBAC từ role-permission-service */
+function fallbackOrgTabFlags(myRole) {
+  const role = String(myRole || 'member').toLowerCase();
+  if (role === 'owner' || role === 'admin') {
+    return { tasks: true, files: true };
+  }
+  if (role === 'hr') {
+    return { tasks: true, files: false };
+  }
+  return { tasks: true, files: false };
+}
 
 function memberUserId(m) {
   const u = m?.user;
@@ -141,6 +173,13 @@ function OrganizationMemberSidebar({
   memberDockOpen,
   onMemberMenuOpenChange,
   onMemberMenuClosed,
+  selectedChannelId = '',
+  channelPermissionMatrix = {},
+  workspaceSearchOpen = false,
+  onWorkspaceSearchOpenChange,
+  searchChannels = [],
+  serverId,
+  onWorkspaceSearchJump,
 }) {
   const { t } = useAppStrings();
   const { isDarkMode } = useTheme();
@@ -149,7 +188,7 @@ function OrganizationMemberSidebar({
   const [error, setError] = useState('');
   const [rows, setRows] = useState([]);
   const [organizationRoles, setOrganizationRoles] = useState([]);
-  const [groupMode, setGroupMode] = useState('presence'); // 'presence' | 'role'
+  const [groupMode, setGroupMode] = useState('role'); // 'presence' | 'role'
   const [menu, setMenu] = useState({
     open: false,
     x: 0,
@@ -184,11 +223,80 @@ function OrganizationMemberSidebar({
   const [friendIdsSet, setFriendIdsSet] = useState(null);
   /** Xóa thành viên / Chặn — dùng modal thay cho window.confirm (tránh tiêu đề localhost) */
   const [memberConfirm, setMemberConfirm] = useState(null);
-  /** Tab panel phải — khớp mockup workspace tổ chức */
-  const [sidebarTab, setSidebarTab] = useState('context');
+  /** Tab panel phải — mặc định danh sách thành viên */
+  const [sidebarTab, setSidebarTab] = useState('people');
+  const [orgPermissions, setOrgPermissions] = useState([]);
+  const [orgPermissionsLoaded, setOrgPermissionsLoaded] = useState(false);
   const pendingReviewCount = canReviewJoinApplications ? joinApplicationsToReview.length : 0;
   const joinReviewKey = (orgId, applicationId) => `${orgId}:${applicationId}`;
   const [selectedJoinApplication, setSelectedJoinApplication] = useState(null);
+
+  useEffect(() => {
+    if (!organizationId || !currentUserId) {
+      setOrgPermissions([]);
+      setOrgPermissionsLoaded(false);
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      setOrgPermissionsLoaded(false);
+      try {
+        const payload = await api.get(
+          `/permissions/user/${encodeURIComponent(String(currentUserId))}/server/${encodeURIComponent(String(organizationId))}`
+        );
+        const body = unwrapBody(payload);
+        const list = Array.isArray(body?.data)
+          ? body.data
+          : Array.isArray(body)
+            ? body
+            : [];
+        if (!cancelled) setOrgPermissions(list);
+      } catch {
+        if (!cancelled) setOrgPermissions([]);
+      } finally {
+        if (!cancelled) setOrgPermissionsLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId, currentUserId]);
+
+  const hasReadableChannel = useMemo(() => {
+    const matrix = channelPermissionMatrix || {};
+    return Object.values(matrix).some((p) => p?.canRead || p?.canSee);
+  }, [channelPermissionMatrix]);
+
+  const { canShowTasksTab, canShowFilesTab } = useMemo(() => {
+    const fallback = fallbackOrgTabFlags(myRole);
+    if (!orgPermissionsLoaded || !orgPermissions.length) {
+      return {
+        canShowTasksTab: fallback.tasks,
+        canShowFilesTab: fallback.files || hasReadableChannel,
+      };
+    }
+    return {
+      canShowTasksTab: canOrgResourceAction(orgPermissions, 'task', 'read'),
+      canShowFilesTab:
+        canOrgResourceAction(orgPermissions, 'document', 'read') || hasReadableChannel,
+    };
+  }, [orgPermissions, orgPermissionsLoaded, myRole, hasReadableChannel]);
+
+  const showSidebarTabs = true;
+  const activityFeedItems = useMemo(
+    () => [
+      { id: 'a1', kind: 'join', label: t('organizations.memberActivityJoined', { name: rows[0]?.displayName || '—' }) },
+      { id: 'a2', kind: 'task', label: t('organizations.memberActivityTask') },
+      { id: 'a3', kind: 'file', label: t('organizations.memberActivityFile') },
+      { id: 'a4', kind: 'meet', label: t('organizations.memberActivityMeeting') },
+    ],
+    [rows, t]
+  );
+
+  useEffect(() => {
+    if (sidebarTab === 'tasks' && !canShowTasksTab) setSidebarTab('people');
+    if (sidebarTab === 'files' && !canShowFilesTab) setSidebarTab('people');
+  }, [sidebarTab, canShowTasksTab, canShowFilesTab]);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -271,9 +379,9 @@ function OrganizationMemberSidebar({
 
   const groupedByMembershipRole = useMemo(() => {
     const roleLabel = {
-      owner: t('organizations.roleOwner'),
-      admin: t('organizations.roleAdmin'),
-      member: t('organizations.roleMember'),
+      owner: t('organizations.memberGroupManagement'),
+      admin: t('organizations.memberGroupLeads'),
+      member: t('organizations.memberGroupMembers'),
     };
     const buckets = { owner: [], admin: [], member: [] };
     for (const r of rows) {
@@ -1142,8 +1250,8 @@ function OrganizationMemberSidebar({
       className={`min-w-0 flex-1 rounded-lg px-1.5 py-2 text-[10px] font-semibold leading-tight transition sm:text-[11px] ${
         sidebarTab === id
           ? isDarkMode
-            ? 'bg-[#5865F2]/25 text-white ring-1 ring-[#5865F2]/40'
-            : 'bg-cyan-100 text-cyan-950 ring-1 ring-cyan-300/70'
+            ? 'bg-[#4F6BED]/15 text-[#F3F4F6] ring-1 ring-[#4F6BED]/30'
+            : 'bg-indigo-50 text-indigo-900 ring-1 ring-indigo-200'
           : isDarkMode
             ? 'text-[#8e9297] hover:bg-white/[0.04] hover:text-white'
             : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
@@ -1164,12 +1272,32 @@ function OrganizationMemberSidebar({
     </button>
   );
 
+  if (workspaceSearchOpen && organizationId) {
+    return (
+      <div
+        className={`flex h-full min-h-0 flex-col ${isDarkMode ? 'bg-[#11141C]' : 'bg-slate-50'}`}
+      >
+        <OrgWorkspaceSearchSidebar
+          organizationId={organizationId}
+          serverId={serverId}
+          channels={searchChannels}
+          isDarkMode={isDarkMode}
+          onClose={() => onWorkspaceSearchOpenChange?.(false)}
+          onJumpToResult={(payload) => {
+            onWorkspaceSearchJump?.(payload);
+            onWorkspaceSearchOpenChange?.(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
-      className={`flex h-full min-h-0 flex-col ${isDarkMode ? 'bg-[#0a0c12]' : 'bg-sky-50/95'}`}
+      className={`flex h-full min-h-0 flex-col overflow-hidden rounded-xl ${isDarkMode ? 'bg-[#11141C]' : 'bg-white'}`}
     >
       <div
-        className={`shrink-0 border-b px-3 py-2.5 ${isDarkMode ? 'border-white/[0.06]' : 'border-sky-200/80'}`}
+        className={`shrink-0 rounded-t-xl border-b px-3 py-2.5 ${isDarkMode ? 'border-white/[0.06]' : 'border-slate-200/80'}`}
       >
         <div
           className={`truncate text-sm font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
@@ -1184,54 +1312,58 @@ function OrganizationMemberSidebar({
         </p>
       </div>
 
-      <div
-        className={`grid shrink-0 grid-cols-2 gap-1 border-b px-2 py-2 sm:grid-cols-4 ${
-          isDarkMode ? 'border-white/[0.06] bg-[#0d1118]' : 'border-sky-200/80 bg-sky-50/70'
-        }`}
-      >
-        {tabBtn('context', t('organizations.memberSidebarTabContext'))}
-        {tabBtn('tasks', t('organizations.memberSidebarTabTasks'))}
-        {tabBtn('files', t('organizations.memberSidebarTabFiles'))}
-        {tabBtn('people', 'Người', pendingReviewCount)}
-      </div>
+      {showSidebarTabs ? (
+        <div
+          className={`grid shrink-0 grid-cols-2 gap-1 border-b px-2 py-2 sm:grid-cols-4 ${
+            isDarkMode ? 'border-white/[0.06] bg-[#0F1117]' : 'border-slate-200 bg-slate-50'
+          }`}
+        >
+          {tabBtn('people', t('organizations.memberSidebarTabPeople'), pendingReviewCount)}
+          {tabBtn('activity', t('organizations.memberSidebarTabActivity'))}
+          {canShowTasksTab && tabBtn('tasks', t('organizations.memberSidebarTabTasks'))}
+          {canShowFilesTab && tabBtn('files', t('organizations.memberSidebarTabFiles'))}
+        </div>
+      ) : null}
 
-      <div className="scrollbar-overlay min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {sidebarTab === 'context' && (
-          <div
-            className={`mb-4 rounded-xl border p-3 text-xs ${
-              isDarkMode ? 'border-white/[0.08] bg-white/[0.02] text-[#b4b8c4]' : 'border-slate-200 bg-white text-slate-700'
-            }`}
-          >
-            <div className={`text-[11px] font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-              Bối cảnh tổ chức
-            </div>
-            <div className="mt-2 space-y-1">
-              <div>Tổ chức: {organizationName || t('organizations.memberSidebarOrgFallback')}</div>
-              <div>Vai trò của bạn: {roleLabelMap[String(myRole || '').toLowerCase()] || myRole || 'member'}</div>
-              <div>Trạng thái socket: {socketConnected ? t('organizations.presenceOnline') : t('organizations.presenceOffline')}</div>
-            </div>
-          </div>
+      <div className="scrollbar-overlay min-h-0 flex-1 overflow-y-auto rounded-b-xl px-2 py-2 pb-4">
+        {sidebarTab === 'activity' && (
+          <ul className="space-y-2 px-1">
+            {activityFeedItems.map((item) => (
+              <li
+                key={item.id}
+                className={`rounded-lg border px-2.5 py-2 text-xs ${
+                  isDarkMode
+                    ? 'border-white/[0.06] bg-[#171B24] text-[#A1A8B3]'
+                    : 'border-slate-200 bg-white text-slate-600'
+                }`}
+              >
+                {item.label}
+              </li>
+            ))}
+          </ul>
         )}
-
-        {sidebarTab === 'tasks' && (
+        {sidebarTab === 'tasks' && canShowTasksTab && (
           <p
             className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
           >
             {t('organizations.memberSidebarTasksEmpty')}
           </p>
         )}
-        {sidebarTab === 'files' && (
-          <p
-            className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
-          >
-            {t('organizations.memberSidebarFilesEmpty')}
-          </p>
+        {sidebarTab === 'files' && canShowFilesTab && organizationId && (
+          <OrgMemberSidebarAttachments
+            organizationId={organizationId}
+            channels={searchChannels}
+            selectedChannelId={selectedChannelId}
+            channelPermissionMatrix={channelPermissionMatrix}
+            isDarkMode={isDarkMode}
+            onJumpToChannel={({ organizationId: orgId, roomId }) => {
+              if (orgId && roomId) {
+                onWorkspaceSearchJump?.({ organizationId: orgId, roomId });
+              }
+            }}
+          />
         )}
-        {sidebarTab === 'people' && (
-          <div className="mb-2" />
-        )}
-
-        {loading && (
+        {sidebarTab === 'people' && loading && (
           <div className="space-y-2">
             <div
               className={`h-9 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/10' : 'bg-slate-200/90'}`}
@@ -1244,8 +1376,10 @@ function OrganizationMemberSidebar({
             />
           </div>
         )}
-        {!loading && error && <p className="px-1 text-xs text-rose-300">{error}</p>}
-        {!loading && !error && rows.length === 0 && (
+        {sidebarTab === 'people' && !loading && error && (
+          <p className="px-1 text-xs text-rose-300">{error}</p>
+        )}
+        {sidebarTab === 'people' && !loading && !error && rows.length === 0 && (
           <p className="px-1 text-xs text-gray-500">{t('organizations.membersEmpty')}</p>
         )}
         {!loading &&
@@ -1256,8 +1390,8 @@ function OrganizationMemberSidebar({
               <div
                 className={`sticky top-0 z-[1] px-1 pb-1 pt-1 text-[11px] font-bold uppercase tracking-wide backdrop-blur-sm ${
                   isDarkMode
-                    ? 'bg-[#0a0c12]/95 text-[#6d7380]'
-                    : 'bg-sky-50/95 text-slate-500'
+                    ? 'bg-[#11141C]/95 text-[#6B7280]'
+                    : 'bg-slate-50/95 text-slate-500'
                 }`}
               >
                 {section.key === 'on'
@@ -1291,13 +1425,13 @@ function OrganizationMemberSidebar({
                             className="h-9 w-9 rounded-lg object-cover"
                           />
                         ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-fuchsia-700 text-xs font-bold text-white">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-semibold text-white">
                             {(m.displayName || '?').charAt(0).toUpperCase()}
                           </div>
                         )}
                         <span
                           className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 ${
-                            isDarkMode ? 'border-[#0a0c12]' : 'border-white'
+                            isDarkMode ? 'border-[#11141C]' : 'border-white'
                           } ${online ? 'bg-emerald-400' : 'bg-gray-600'}`}
                           aria-hidden
                         />

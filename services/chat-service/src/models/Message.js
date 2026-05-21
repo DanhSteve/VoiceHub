@@ -69,6 +69,14 @@ const messageSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /** Phản hồi emoji (DM / kênh) */
+    reactions: [
+      {
+        emoji: { type: String, required: true },
+        userId: { type: mongoose.Schema.Types.ObjectId, required: true },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     /** Metadata file/hình (Firebase Storage); TTL & cleanup */
     fileMeta: {
       storagePath: { type: String },

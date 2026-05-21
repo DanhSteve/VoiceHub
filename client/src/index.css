@@ -307,6 +307,94 @@ html.light .text-gradient {
       scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
     }
   }
+
+  /* Khung chat: thanh cuộn luôn hiện nhẹ để dễ kéo xem tin cũ */
+  .scrollbar-chat::-webkit-scrollbar {
+    width: 8px;
+  }
+  .scrollbar-chat::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-chat::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+  }
+  .scrollbar-chat::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.28);
+  }
+  @supports (scrollbar-width: thin) {
+    .scrollbar-chat {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+    }
+  }
+  html.light .scrollbar-chat::-webkit-scrollbar-thumb {
+    background: rgba(15, 23, 42, 0.18);
+  }
+  html.light .scrollbar-chat::-webkit-scrollbar-thumb:hover {
+    background: rgba(15, 23, 42, 0.32);
+  }
+  @supports (scrollbar-width: thin) {
+    html.light .scrollbar-chat {
+      scrollbar-color: rgba(15, 23, 42, 0.22) transparent;
+    }
+  }
+
+  /* Ô nhập tin nhắn (composer): thanh cuộn mảnh, bo tròn, hiện nhẹ khi hover/focus */
+  .scrollbar-composer {
+    scroll-behavior: smooth;
+    scrollbar-gutter: stable;
+  }
+  .scrollbar-composer::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-composer::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 4px 0;
+  }
+  .scrollbar-composer::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+    transition: background-color 0.2s ease;
+  }
+  .scrollbar-composer:hover::-webkit-scrollbar-thumb,
+  .scrollbar-composer:focus::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.26);
+  }
+  .scrollbar-composer::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.38);
+  }
+  @supports (scrollbar-width: thin) {
+    .scrollbar-composer {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+    }
+    .scrollbar-composer:hover,
+    .scrollbar-composer:focus {
+      scrollbar-color: rgba(255, 255, 255, 0.32) transparent;
+    }
+  }
+  html.light .scrollbar-composer::-webkit-scrollbar-thumb {
+    background-color: rgba(15, 23, 42, 0.16);
+  }
+  html.light .scrollbar-composer:hover::-webkit-scrollbar-thumb,
+  html.light .scrollbar-composer:focus::-webkit-scrollbar-thumb {
+    background-color: rgba(15, 23, 42, 0.28);
+  }
+  html.light .scrollbar-composer::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(15, 23, 42, 0.4);
+  }
+  @supports (scrollbar-width: thin) {
+    html.light .scrollbar-composer {
+      scrollbar-color: rgba(15, 23, 42, 0.2) transparent;
+    }
+    html.light .scrollbar-composer:hover,
+    html.light .scrollbar-composer:focus {
+      scrollbar-color: rgba(15, 23, 42, 0.32) transparent;
+    }
+  }
 }
 
 /* Glassmorphism utilities */
