@@ -20,9 +20,14 @@ export default defineConfig(({ mode }) => {
   const devHost = String(env.VITE_HOST || '0.0.0.0').trim();
   const fixedDevPort = 5173;
   const rawAllowedHosts = String(env.VITE_ALLOWED_HOSTS || '').trim();
-  const allowedHosts = rawAllowedHosts
-    ? rawAllowedHosts.split(',').map((h) => String(h || '').trim()).filter(Boolean)
-    : true;
+  // Dev: cho phép mọi Host (voicehub.local + IP trong hosts) — tránh lỗi khi đổi WiFi/DHCP.
+  const allowedHostsStrict = String(env.VITE_ALLOWED_HOSTS_STRICT || '').trim() === 'true';
+  const allowedHosts =
+    mode === 'development' && !allowedHostsStrict
+      ? true
+      : rawAllowedHosts
+        ? rawAllowedHosts.split(',').map((h) => String(h || '').trim()).filter(Boolean)
+        : true;
   const hmrHost = String(env.VITE_HMR_HOST || '').trim();
   const hmrProtocol = String(env.VITE_HMR_PROTOCOL || '').trim();
   const hmrClientPort = Number(String(env.VITE_HMR_CLIENT_PORT || '').trim());
@@ -35,6 +40,13 @@ export default defineConfig(({ mode }) => {
           ...(Number.isFinite(hmrClientPort) ? { clientPort: hmrClientPort } : {}),
           ...(Number.isFinite(hmrPort) ? { port: hmrPort } : {}),
         }
+      : undefined;
+
+  const devServerOrigin =
+    hmrHost && hmrProtocol
+      ? `${hmrProtocol === 'wss' ? 'https' : 'http'}://${hmrHost}${
+          Number.isFinite(hmrClientPort) ? `:${hmrClientPort}` : ''
+        }`
       : undefined;
 
   return {
@@ -74,6 +86,7 @@ export default defineConfig(({ mode }) => {
     port: fixedDevPort,
     strictPort: true,
     allowedHosts,
+    ...(devServerOrigin ? { origin: devServerOrigin } : {}),
     ...(hmr ? { hmr } : {}),
     proxy: {
       '/api': {

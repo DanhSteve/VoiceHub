@@ -15,6 +15,9 @@ import {
   X,
 } from 'lucide-react';
 import { useAppStrings } from '../../../locales/appStrings';
+import UserAvatar from '../../../components/Shared/UserAvatar';
+import { AVATAR_RADIUS_CLASS } from '../../../utils/avatarDisplay';
+import { resolveMediaUrl } from '../../../utils/helpers';
 import { useDebouncedValue } from '../useDebouncedValue';
 import {
   clearSearchHistory,
@@ -224,7 +227,7 @@ export default function OrgWorkspaceSearch({
               }`}
             >
               {tok.key === 'from' && tok.avatar && (
-                <img src={tok.avatar} alt="" className="h-4 w-4 rounded-full object-cover" />
+                <img src={resolveMediaUrl(tok.avatar)} alt="" className={`h-4 w-4 object-cover ${AVATAR_RADIUS_CLASS}`} />
               )}
               <span className="truncate">
                 {tok.key === 'from' && 'từ'}
@@ -429,13 +432,7 @@ export default function OrgWorkspaceSearch({
                           )
                         }
                       >
-                        <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-white/10 text-lg">
-                          {row.avatar && String(row.avatar).startsWith('http') ? (
-                            <img src={row.avatar} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            '👤'
-                          )}
-                        </span>
+                        <UserAvatar avatar={row.avatar} name={row.displayName} size="chip" />
                         <span>
                           <span className={`block font-medium ${titleCls}`}>{row.displayName}</span>
                           <span className={`text-xs ${muted}`}>{row.username || ''}</span>

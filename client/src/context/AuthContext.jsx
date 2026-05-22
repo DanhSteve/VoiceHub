@@ -18,12 +18,13 @@ import toast from 'react-hot-toast';
 // Import authService để call API authentication
 // File: ../services/authService.js - chứa login(), register(), logout()
 import authService from '../services/authService';
+import { restoreAuthSession, restoreAuthSessionAfterLogin } from '../services/authSessionRestore';
 
 // Import userService để update user status
 import userService from '../services/userService';
 import { getToken, setToken, removeToken } from '../utils/tokenStorage';
 import { isAutoLogoutDisabled } from '../utils/devAuth';
-
+import { resolveApiBaseUrl } from '../utils/browserOrigin';
 /* ========================================
    CONTEXT: đối tượng React Context được tạo trong ./auth-context.js (tách file để HMR ổn định).
 ======================================== */
@@ -85,17 +86,9 @@ function AuthProvider({ children }) {
     const checkAuth = async () => {
       setLoading(true);
       try {
-        // Lấy token từ localStorage (được lưu khi login)
-        const token = getToken();
-        
-        // Nếu có token → nghĩa là user đã login trước đó
-        if (token) {
-          // Gọi API để lấy thông tin user hiện tại
-          // authService.getCurrentUser() → GET /api/auth/me
-          const userData = await authService.getCurrentUser();
-          
-          // Set user data vào state
-          setUser(userData?.data || userData);
+        const { user: restored } = await restoreAuthSession();
+        if (restored) {
+          setUser(restored);
         }
       } catch (error) {
         // Chỉ xóa token khi server xác nhận 401 — lỗi mạng/503 không được logout oan
@@ -147,10 +140,9 @@ function AuthProvider({ children }) {
       // Token này sẽ được gửi kèm mọi API request
       setToken(token);
 
-      // Cập nhật user state: ưu tiên profile từ user-service (displayName/avatar)
       try {
-        const me = await authService.getCurrentUser();
-        setUser(me?.data || me);
+        const merged = await restoreAuthSessionAfterLogin(userData);
+        setUser(merged);
       } catch (e) {
         setUser(userData);
       }
@@ -194,10 +186,11 @@ function AuthProvider({ children }) {
         lastName: userData.lastName,
         email: userData.email,
         hasPassword: !!userData.password,
+        hasDateOfBirth: !!userData.dateOfBirth,
       });
       
       // Log API endpoint để debug
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+      const API_URL = resolveApiBaseUrl();
       console.log('[AuthContext] API Base URL:', API_URL);
       console.log('[AuthContext] Register endpoint:', `${API_URL}/auth/register`);
       
@@ -270,7 +263,7 @@ function AuthProvider({ children }) {
       // Xử lý timeout - request vượt quá 60 giây
       if (error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
         const duration = Date.now() - startTime;
-        const API_URL = import.meta.env.VITE_API_URL || '/api';
+        const API_URL = resolveApiBaseUrl();
         const message = `Yêu cầu quá thời gian chờ (60s). Backend không phản hồi.\n\nVui lòng kiểm tra:\n1. API Gateway có đang chạy tại ${API_URL}?\n2. Auth Service có đang chạy không?\n3. Kiểm tra logs backend để xem có lỗi không`;
         toast.error(message, { duration: 7000 });
         console.error('[AuthContext] ❌ Request timeout - backend may be slow or unresponsive');

@@ -22,11 +22,12 @@ function normalize(s) {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
+/** Ưu tiên `department.teams` từ cây đã lọc theo RBAC; không ghi đè bằng list team phẳng của cả org. */
 function teamsForDepartment(teams, departmentId, divisionDepartments) {
-  const fromProp = teams.filter((t) => String(t.department || '') === String(departmentId));
-  if (fromProp.length) return fromProp;
   const dept = (divisionDepartments || []).find((d) => String(d._id) === String(departmentId));
-  return Array.isArray(dept?.teams) ? dept.teams : [];
+  const fromStructure = Array.isArray(dept?.teams) ? dept.teams : [];
+  if (fromStructure.length) return fromStructure;
+  return teams.filter((t) => String(t.department || '') === String(departmentId));
 }
 
 /**
@@ -96,35 +97,59 @@ export default function OrganizationWorkspaceStructureSidebar({
     [getChannelPerm]
   );
 
+  const scopedTeamIdSet = useMemo(
+    () => new Set((membershipScope?.scopedTeamIds || []).map(String)),
+    [membershipScope?.scopedTeamIds]
+  );
+  const scopedDeptIdSet = useMemo(
+    () => new Set((membershipScope?.scopedDepartmentIds || []).map(String)),
+    [membershipScope?.scopedDepartmentIds]
+  );
+  const scopedDivIdSet = useMemo(
+    () => new Set((membershipScope?.scopedDivisionIds || []).map(String)),
+    [membershipScope?.scopedDivisionIds]
+  );
+
   const canAccessTeam = useCallback(
     (teamId) => {
       if (canSeeAllStructure) return true;
-      if (canTeamReadAnyChannel(teamId)) return true;
-      return false;
+      const id = String(teamId);
+      if (scopedTeamIdSet.has(id)) return true;
+      return canTeamReadAnyChannel(id);
     },
-    [canSeeAllStructure, canTeamReadAnyChannel]
+    [canSeeAllStructure, canTeamReadAnyChannel, scopedTeamIdSet]
   );
 
   const canAccessDepartment = useCallback(
     (departmentId, divisionDepartments) => {
       if (canSeeAllStructure) return true;
+      const id = String(departmentId);
+      if (scopedDeptIdSet.has(id)) return true;
       const deptTeams = teamsForDepartment(teams, departmentId, divisionDepartments);
       if (deptTeams.some((team) => canAccessTeam(team._id))) return true;
       const deptScope = channelsForDepartment(channels, departmentId).filter((ch) => !ch.team);
-      if (canReadScopeChannels(deptScope)) return true;
-      return false;
+      return canReadScopeChannels(deptScope);
     },
-    [canSeeAllStructure, teams, channels, canAccessTeam, canReadScopeChannels]
+    [canSeeAllStructure, scopedDeptIdSet, teams, channels, canAccessTeam, canReadScopeChannels]
   );
 
   const departmentVisibleInTree = useCallback(
-    (departmentId, _divisionId, deptTeams) => {
+    (departmentId, divisionId, deptTeams) => {
       if (canSeeAllStructure) return true;
+      if (scopedDeptIdSet.has(String(departmentId))) return true;
+      if (scopedDivIdSet.has(String(divisionId))) return true;
       if ((deptTeams || []).some((team) => canAccessTeam(team._id))) return true;
       const deptScope = channelsForDepartment(channels, departmentId).filter((ch) => !ch.team);
       return canReadScopeChannels(deptScope);
     },
-    [canSeeAllStructure, canAccessTeam, channels, canReadScopeChannels]
+    [
+      canSeeAllStructure,
+      scopedDeptIdSet,
+      scopedDivIdSet,
+      canAccessTeam,
+      channels,
+      canReadScopeChannels,
+    ]
   );
 
   useEffect(() => {
@@ -216,17 +241,20 @@ export default function OrganizationWorkspaceStructureSidebar({
               .map((team) => {
                 const canReadTeam = canAccessTeam(team._id);
                 const teamChannels = channelsForTeam(channels, team._id);
-                const readableChannels = canReadTeam
+                const visibleChannels = canReadTeam
                   ? teamChannels.filter(
                       (ch) => getChannelPerm(ch._id).canSee || getChannelPerm(ch._id).canRead
                     )
                   : [];
-                const { chat, voice } = splitChatVoiceChannels(readableChannels);
-                const teamUnread = sumUnreadForChannels(readableChannels);
+                const { chat, voice } = splitChatVoiceChannels(visibleChannels);
+                const teamUnread = sumUnreadForChannels(
+                  visibleChannels.filter((ch) => getChannelPerm(ch._id).canRead)
+                );
                 const channelMatch = [...chat, ...voice].some((ch) =>
                   matchesQuery(ch.name, channelNameToDisplaySlug(ch.name, locale))
                 );
                 const teamMatch = matchesQuery(team.name) || channelMatch || !q;
+                if (!canReadTeam) return null;
                 if (!teamMatch && q) return null;
                 return { team, chat, voice, teamUnread, canReadTeam };
               })

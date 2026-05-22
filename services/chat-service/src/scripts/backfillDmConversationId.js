@@ -1,4 +1,5 @@
 const path = require('path');
+require('./registerShared').registerShared();
 require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
 
 const { connectDB, disconnectDB } = require('/shared');

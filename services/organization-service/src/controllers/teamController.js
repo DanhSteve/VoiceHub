@@ -1,4 +1,11 @@
 const Channel = require('../models/Channel');
+const { invalidateOrgReadCache } = require('../services/orgReadCache.service');
+const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
+
+const bumpOrgReadCache = (orgId) =>
+  invalidateOrgReadCache(orgId, { eventType: ORG_EVENT_TYPES.CHANNEL_PROVISIONED }).catch(
+    () => null
+  );
 const Team = require('../models/Team');
 
 const buildScope = (req) => ({
@@ -39,6 +46,7 @@ exports.createTeam = async (req, res, next) => {
       leader,
     });
 
+    await bumpOrgReadCache(req.params.orgId);
     res.status(201).json({ status: 'success', data: { team, defaultChannel: channel } });
   } catch (error) {
     next(error);
@@ -54,6 +62,7 @@ exports.updateTeam = async (req, res, next) => {
       { new: true }
     );
 
+    await bumpOrgReadCache(req.params.orgId);
     res.json({ status: 'success', data: team });
   } catch (error) {
     next(error);
@@ -71,6 +80,7 @@ exports.deleteTeam = async (req, res, next) => {
       { organization: req.params.orgId, department: req.params.deptId, team: req.params.id, isActive: true },
       { isActive: false }
     );
+    await bumpOrgReadCache(req.params.orgId);
     res.json({ status: 'success', message: 'Team deleted' });
   } catch (error) {
     next(error);
@@ -97,6 +107,7 @@ exports.createChannel = async (req, res, next) => {
       team: team || null,
       leader,
     });
+    await bumpOrgReadCache(req.params.orgId);
     res.status(201).json({ status: 'success', data: channel });
   } catch (error) {
     next(error);
@@ -111,6 +122,7 @@ exports.updateChannel = async (req, res, next) => {
       { name, description, leader, type },
       { new: true }
     );
+    await bumpOrgReadCache(req.params.orgId);
     res.json({ status: 'success', data: channel });
   } catch (error) {
     next(error);
@@ -124,6 +136,7 @@ exports.deleteChannel = async (req, res, next) => {
       { isActive: false },
       { new: true }
     );
+    await bumpOrgReadCache(req.params.orgId);
     res.json({ status: 'success', message: 'Channel deleted' });
   } catch (error) {
     next(error);

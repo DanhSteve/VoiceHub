@@ -51,6 +51,9 @@ import { FriendCallSessionProvider } from './context/FriendCallSessionContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { LocaleProvider } from './context/LocaleContext';
 import { WorkspaceProvider } from './context/WorkspaceContext';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './lib/queryClient';
+import QueryRealtimeSync from './components/Query/QueryRealtimeSync';
 
 /* ========================================
    RENDER ỨNG DỤNG VÀO DOM
@@ -104,6 +107,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             - Auto refresh khi reload page
             - File: ./context/AuthContext.jsx */}
         <AuthProvider>
+          <QueryClientProvider client={queryClient}>
           <FriendCallSessionProvider>
             <WorkspaceProvider>
             {/* SocketProvider: quản lý Socket.IO connection
@@ -112,6 +116,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 - Provide: socket, onlineUsers, emit(), on()
                 - File: ./context/SocketContext.jsx */}
             <SocketProvider>
+              <QueryRealtimeSync />
               {/* App component: chứa tất cả routes và pages
                   - File: ./App.jsx
                   - Có thể access tất cả contexts ở trên */}
@@ -125,6 +130,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             </SocketProvider>
             </WorkspaceProvider>
           </FriendCallSessionProvider>
+          </QueryClientProvider>
         </AuthProvider>
         </LocaleProvider>
       </ThemeProvider>

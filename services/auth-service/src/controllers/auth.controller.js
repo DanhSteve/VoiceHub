@@ -1,21 +1,5 @@
 const authService = require('../services/auth.service');
-
-function resolveFrontendUrl(req) {
-  // Ưu tiên origin của request (browser gọi từ http://<ip>:5173).
-  const origin = req?.headers?.origin;
-  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
-
-  const referer = req?.headers?.referer;
-  if (referer && String(referer).trim()) {
-    try {
-      return new URL(String(referer)).origin;
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return String(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
-}
+const { resolveFrontendUrl } = require('/shared');
 
 class AuthController {
   // Đăng ký

@@ -35,9 +35,10 @@ function isAuthPublicUrl(url) {
   return AUTH_PUBLIC_PATHS.some((p) => u.includes(p));
 }
 
-// Đồng bộ với services/api.js: dev dùng '/api' → Vite proxy; prod dùng VITE_API_URL
-// Tránh hardcode http://localhost:3000 khi mở UI qua IP LAN.
-const API_URL = import.meta.env.DEV ? '/api' : import.meta.env.VITE_API_URL || '/api';
+import { resolveApiBaseUrl } from '../../utils/browserOrigin';
+
+// Đồng bộ với services/api.js — https://voicehub.local luôn dùng /api same-origin.
+const API_URL = resolveApiBaseUrl();
 
 const normalizeToken = (rawToken) => {
   if (!rawToken) return null;
@@ -135,6 +136,10 @@ apiClient.interceptors.response.use(
 
     if (isLandingEmbedActive()) {
       return rejectLandingEmbedSilent(error);
+    }
+
+    if (config?.skipGlobalErrorHandling) {
+      return Promise.reject(error);
     }
 
     const message = error.response?.data?.message || error.message || 'Đã xảy ra lỗi';

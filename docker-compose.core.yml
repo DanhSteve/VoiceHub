@@ -16,8 +16,17 @@ services:
     env_file:
       - .env
       - ./api-gateway/.env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BFF_CACHE_ENABLED=${BFF_CACHE_ENABLED:-true}
+      - BFF_BOOTSTRAP_CACHE_TTL_SEC=${BFF_BOOTSTRAP_CACHE_TTL_SEC:-45}
+      - BFF_SHELL_CACHE_TTL_SEC=${BFF_SHELL_CACHE_TTL_SEC:-60}
+      - BFF_DASHBOARD_CACHE_TTL_SEC=${BFF_DASHBOARD_CACHE_TTL_SEC:-45}
+      - BFF_DOCUMENTS_OVERVIEW_CACHE_TTL_SEC=${BFF_DOCUMENTS_OVERVIEW_CACHE_TTL_SEC:-45}
     # GATEWAY_INTERNAL_TOKEN: chỉ từ .env gốc + api-gateway/.env (tránh environment: ghi đè bằng chuỗi rỗng khi biến host trống trên Windows)
     depends_on:
+      - redis
       - auth-service
       - user-service
       - friend-service
@@ -106,13 +115,18 @@ services:
       - AUTH_SERVICE_URL=http://auth-service:3001
       - CHAT_SERVICE_URL=http://chat-service:3006
       - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN:-dev-shared-chat-internal-token-change-me}
+      - USER_SERVICE_URL=http://user-service:3004
       - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN}
+      - GATEWAY_INTERNAL_TOKEN=${GATEWAY_INTERNAL_TOKEN}
+      - SOCKET_SERVICE_URL=http://socket-service:3017
+      - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN:-dev-shared-realtime-token-change-me}
     depends_on:
       - mongodb
       - redis
       - auth-service
       - user-service
       - chat-service
+      - socket-service
     networks:
       - enterprise-network
     volumes:
@@ -150,6 +164,11 @@ services:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-voicehub}:${RABBITMQ_PASS:-voicehub-dev-change-me}@rabbitmq:5672
       - FRIEND_DM_USE_QUEUE=${FRIEND_DM_USE_QUEUE:-true}
       - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN:-dev-shared-realtime-token-change-me}
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-voicehub-meili-dev-change-me}
+      - MESSAGE_SEARCH_ENGINE=${MESSAGE_SEARCH_ENGINE:-meilisearch}
+      - MESSAGE_SEARCH_INDEXER_ENABLED=${MESSAGE_SEARCH_INDEXER_ENABLED:-true}
+      - MESSAGE_SEARCH_PUBLISH_ENABLED=${MESSAGE_SEARCH_PUBLISH_ENABLED:-true}
     depends_on:
       mongodb:
         condition: service_started
@@ -157,6 +176,8 @@ services:
         condition: service_started
       rabbitmq:
         condition: service_healthy
+      meilisearch:
+        condition: service_started
       user-service:
         condition: service_started
       organization-service:
@@ -283,19 +304,23 @@ services:
       - "3005:3005"
       - "40000-40100:40000-40100/udp"
       - "40000-40100:40000-40100/tcp"
+    # Chỉ .env của service — tránh root .env ghi đè MEDIASOUP_* rỗng; restart không reload env → cần recreate khi đổi .env.
     env_file:
-      - .env
       - ./services/voice-service/.env
+    environment:
+      - SOCKET_SERVICE_URL=http://socket-service:3017
+      - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN:-dev-shared-realtime-token-change-me}
     depends_on:
       - mongodb
       - redis
+      - socket-service
     networks:
       - enterprise-network
     volumes:
       - ./services/voice-service:/app
       - ./shared:/shared
       - /app/node_modules
-    command: ["sh", "-c", "npm ci || npm install; node src/server.js"]
+    # ENTRYPOINT docker-entrypoint.sh: copy mediasoup da build san tu image neu volume trong.
 
   notification-service:
     build: ./services/notification-service

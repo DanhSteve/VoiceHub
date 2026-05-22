@@ -5,6 +5,10 @@ const {
   startNotificationDispatchWorker,
   stopNotificationDispatchWorker,
 } = require('./workers/notificationDispatch.worker');
+const {
+  startOrgEventsConsumer,
+  stopOrgEventsConsumer,
+} = require('./workers/orgEventsConsumer');
 
 const PORT = process.env.PORT || 3003;
 
@@ -16,6 +20,10 @@ connectDB()
 
     startNotificationDispatchWorker().catch((err) => {
       logger.error('notificationDispatchWorker failed:', err.message);
+    });
+
+    startOrgEventsConsumer().catch((err) => {
+      logger.error('orgEventsConsumer failed:', err.message);
     });
 
     // Khởi động server
@@ -30,6 +38,11 @@ connectDB()
           await stopNotificationDispatchWorker();
         } catch (e) {
           logger.error('stopNotificationDispatchWorker', e.message);
+        }
+        try {
+          await stopOrgEventsConsumer();
+        } catch (e) {
+          logger.error('stopOrgEventsConsumer', e.message);
         }
         try {
           await disconnectDB();

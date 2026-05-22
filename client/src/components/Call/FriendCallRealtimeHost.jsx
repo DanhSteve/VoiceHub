@@ -12,7 +12,7 @@ import { useAppStrings } from '../../locales/appStrings';
  * Lắng nghe call:* trên socket /chat (toàn app) — cuộc gọi đến từ bạn bè.
  */
 export default function FriendCallRealtimeHost() {
-  const { openFriendCall } = useFriendCallSession();
+  const { session, openFriendCall, closeFriendCall } = useFriendCallSession();
   const navigate = useNavigate();
   const { on, off, connected } = useSocket();
   const { user, isAuthenticated } = useAuth();
@@ -64,6 +64,21 @@ export default function FriendCallRealtimeHost() {
       off('call:timeout', onInviteRevoked);
     };
   }, [isAuthenticated, connected, meStr, on, off, onInvite, onInviteRevoked]);
+
+  /** Đối phương gác máy → đóng modal + cleanup mediasoup (modal nằm ngoài SocketProvider). */
+  useEffect(() => {
+    const activeCallId = session?.callId;
+    if (!isAuthenticated || !connected || !activeCallId) return undefined;
+
+    const onRemoteEnded = (payload) => {
+      if (String(payload?.callId || '') !== String(activeCallId)) return;
+      closeFriendCall();
+      toast(t('friendChat.callEndedRemote'));
+    };
+
+    on('call:ended', onRemoteEnded);
+    return () => off('call:ended', onRemoteEnded);
+  }, [isAuthenticated, connected, session?.callId, on, off, closeFriendCall, t]);
 
   const handleAccept = async () => {
     if (!incoming || busy) return;

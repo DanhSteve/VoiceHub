@@ -14,8 +14,32 @@ const { syncUserOrgRole } = require('../services/rolePermissionOrgSync');
 const { syncHierarchyRoles } = require('../services/hierarchyRoleSync');
 const { purgeOrganizationEverywhere } = require('../services/organizationCascadePurge');
 const { resolveTaskWorkspaceScope } = require('../services/taskWorkspaceScope.service');
+const {
+  buildOrganizationStructureData,
+  buildAccessibleChannelData,
+  fetchOrgNotificationUnread,
+} = require('../services/orgShellData.service');
+const {
+  getCachedAccessibleChannelData,
+  getCachedOrganizationStructureData,
+  invalidateOrgReadCache,
+  invalidateOrgAcl,
+} = require('../services/orgReadCache.service');
+const { publishOrgEvent, ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
+const { getOrgShellVersion } = require('../services/orgShellRealtime.service');
+const { buildDocumentsOverview } = require('../services/documentsOverview.service');
+const { fetchUserRolesInOrg } = require('../utils/orgRoles');
+const { resolveOrgAccess, toObjectId } = require('../utils/orgAccess');
+const {
+  normalizeRoleChannelPermissions,
+  hasAnyRoleChannelPermission,
+} = require('../utils/orgChannelAclHelpers');
 
-const getUserId = (req) => req.user?.id || req.user?.userId || req.user?._id;
+const getUserId = (req) => {
+  const raw = req.user?.id || req.user?.userId || req.user?._id;
+  const s = raw != null ? String(raw).trim() : '';
+  return s || null;
+};
 const MAX_OWNED_ORGS_PER_USER = 3;
 const RESERVED_SLUGS = new Set(['admin', 'system', 'support', 'api', 'workspace', 'root']);
 const STRUCTURE_PROVISION = {
@@ -24,10 +48,6 @@ const STRUCTURE_PROVISION = {
   READY: 'ready',
   FAILED: 'failed',
 };
-const ROLE_PERMISSION_BASE = String(
-  process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015'
-).replace(/\/$/, '');
-const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 const DEFAULT_STRUCTURE_BLUEPRINT = {
   branches: [
     {
@@ -111,138 +131,9 @@ const buildDefaultChannels = ({ organizationId, branchId, divisionId, department
 
 const shortId = (id) => String(id || '').slice(-6);
 
-function roleInternalHeaders() {
-  const h = { 'Content-Type': 'application/json' };
-  if (GATEWAY_INTERNAL_TOKEN) h['x-gateway-internal-token'] = GATEWAY_INTERNAL_TOKEN;
-  return h;
-}
-
-async function fetchUserRolesInOrg(userId, orgId) {
-  if (!userId || !orgId) return [];
-  try {
-    const res = await axios.get(
-      `${ROLE_PERMISSION_BASE}/api/roles/user/${encodeURIComponent(String(userId))}/server/${encodeURIComponent(
-        String(orgId)
-      )}`,
-      {
-        headers: roleInternalHeaders(),
-        timeout: 8000,
-        validateStatus: () => true,
-      }
-    );
-    if (res.status !== 200 || !Array.isArray(res.data?.data)) return [];
-    return res.data.data
-      .map((r) => ({
-        id: String(r?._id || r?.id || '').trim(),
-        name: String(r?.name || '').trim(),
-      }))
-      .filter((r) => r.id);
-  } catch {
-    return [];
-  }
-}
-
 async function fetchUserRoleNamesInOrg(userId, orgId) {
   const roles = await fetchUserRolesInOrg(userId, orgId);
   return roles.map((r) => r.name).filter(Boolean);
-}
-
-function normalizeRoleChannelPermissions(raw = {}) {
-  return {
-    canSee: Boolean(raw.canSee),
-    canRead: Boolean(raw.canRead),
-    canWrite: Boolean(raw.canWrite),
-    canDelete: Boolean(raw.canDelete),
-    canVoice: Boolean(raw.canVoice),
-  };
-}
-
-function mergeRoleChannelPermissions(acc, next) {
-  return {
-    canSee: acc.canSee || next.canSee,
-    canRead: acc.canRead || next.canRead,
-    canWrite: acc.canWrite || next.canWrite,
-    canDelete: acc.canDelete || next.canDelete,
-    canVoice: acc.canVoice || next.canVoice,
-  };
-}
-
-function hasAnyRoleChannelPermission(permissions) {
-  const p = normalizeRoleChannelPermissions(permissions);
-  return p.canSee || p.canRead || p.canWrite || p.canDelete || p.canVoice;
-}
-
-function buildScopeRoleAclMap(rows, userRoleIds) {
-  const byScopeId = new Map();
-  for (const row of rows || []) {
-    if (!userRoleIds.has(String(row.roleId))) continue;
-    const scopeKey = String(row.scopeId);
-    const roleKey = String(row.roleId);
-    if (!byScopeId.has(scopeKey)) byScopeId.set(scopeKey, new Map());
-    const roleMap = byScopeId.get(scopeKey);
-    const prev = roleMap.get(roleKey) || {
-      canSee: false,
-      canRead: false,
-      canWrite: false,
-      canDelete: false,
-      canVoice: false,
-    };
-    roleMap.set(
-      roleKey,
-      mergeRoleChannelPermissions(prev, normalizeRoleChannelPermissions(row.permissions))
-    );
-  }
-  return byScopeId;
-}
-
-function buildChannelRoleAclMap(rows, userRoleIds) {
-  const byChannelId = new Map();
-  for (const row of rows || []) {
-    if (!userRoleIds.has(String(row.roleId))) continue;
-    const channelKey = String(row.channel);
-    const roleKey = String(row.roleId);
-    if (!byChannelId.has(channelKey)) byChannelId.set(channelKey, new Map());
-    const roleMap = byChannelId.get(channelKey);
-    const prev = roleMap.get(roleKey) || {
-      canSee: false,
-      canRead: false,
-      canWrite: false,
-      canDelete: false,
-      canVoice: false,
-    };
-    roleMap.set(
-      roleKey,
-      mergeRoleChannelPermissions(prev, normalizeRoleChannelPermissions(row.permissions))
-    );
-  }
-  return byChannelId;
-}
-
-function resolveEffectiveRolePerm(
-  channelRoleMap,
-  divisionRoleMap,
-  departmentRoleMap,
-  teamRoleMap,
-  channel,
-  roleId
-) {
-  const channelKey = String(channel._id);
-  const fromChannel = channelRoleMap.get(channelKey)?.get(roleId);
-  if (fromChannel && hasAnyRoleChannelPermission(fromChannel)) return fromChannel;
-
-  const teamKey = String(channel.team || '');
-  const fromTeam = teamKey ? teamRoleMap.get(teamKey)?.get(roleId) : null;
-  if (fromTeam && hasAnyRoleChannelPermission(fromTeam)) return fromTeam;
-
-  const depKey = String(channel.department || '');
-  const fromDept = depKey ? departmentRoleMap.get(depKey)?.get(roleId) : null;
-  if (fromDept && hasAnyRoleChannelPermission(fromDept)) return fromDept;
-
-  const divKey = String(channel.division || '');
-  const fromDiv = divKey ? divisionRoleMap.get(divKey)?.get(roleId) : null;
-  if (fromDiv && hasAnyRoleChannelPermission(fromDiv)) return fromDiv;
-
-  return null;
 }
 
 async function persistScopeRoleAccess(orgId, scopeType, scopeId, entries, actorId) {
@@ -288,19 +179,6 @@ async function persistScopeRoleAccess(orgId, scopeType, scopeId, entries, actorI
     roleId: String(row.roleId),
     permissions: normalizeRoleChannelPermissions(row.permissions),
   }));
-}
-
-function hasExecutiveRbacRole(roleNames) {
-  return (roleNames || []).some((name) => {
-    const n = String(name || '').trim().toLowerCase();
-    if (!n) return false;
-    if (n.includes('quản trị') || n.includes('quan tri') || n.includes('administrator')) {
-      return true;
-    }
-    if (n === 'admin' || n.includes('owner') || n.includes('chủ sở')) return true;
-    if (n === 'hr' || n.includes('nhân sự') || n.includes('nhan su')) return true;
-    return false;
-  });
 }
 
 const seedHierarchyStructure = async ({ organizationId, ownerId, blueprint }) => {
@@ -472,6 +350,12 @@ const runStructureSeedInBackground = ({ organizationId, ownerId, normalizedBluep
         }
       );
 
+      await invalidateOrgReadCache(organizationId, {
+        eventType: ORG_EVENT_TYPES.CHANNEL_PROVISIONED,
+      });
+
+      const { emitOrgShellUpdated } = require('../services/orgShellRealtime.service');
+      emitOrgShellUpdated(organizationId).catch(() => null);
       emitRealtimeEvent({
         event: 'organization:structure_ready',
         userId: String(ownerId),
@@ -509,7 +393,11 @@ exports.getMyOrganizations = async (req, res, next) => {
     if (!userId) {
       return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
     }
-    const memberships = await Membership.find({ user: userId, status: 'active' })
+    const userRef = toObjectId(userId);
+    if (!userRef) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+    const memberships = await Membership.find({ user: userRef, status: 'active' })
       .populate({ path: 'organization', match: { isActive: true } })
       .select('organization role');
 
@@ -635,18 +523,15 @@ exports.getOrganizationBySlug = async (req, res, next) => {
     if (!organization) {
       return res.status(404).json({ status: 'fail', message: 'Organization not found' });
     }
-    const membership = await Membership.findOne({
-      user: userId,
-      organization: organization._id,
-      status: 'active',
-    });
-    if (!membership) {
-      return res.status(403).json({ status: 'fail', message: 'Access denied' });
+    const access = await resolveOrgAccess(userId, organization._id);
+    if (!access.ok) {
+      return res.status(403).json({ status: 'fail', message: 'Access denied', code: 'ORG_ACCESS_DENIED' });
     }
+    const myRole = access.membership?.role || 'member';
 
     res.json({
       status: 'success',
-      data: { ...organization.toObject(), myRole: membership.role },
+      data: { ...organization.toObject(), myRole },
     });
   } catch (error) {
     next(error);
@@ -664,17 +549,13 @@ exports.getOrganization = async (req, res, next) => {
       return res.status(404).json({ status: 'fail', message: 'Organization not found' });
     }
 
-    // Check membership
-    const membership = await Membership.findOne({
-      user: userId,
-      organization: organization._id,
-    });
-
-    if (!membership) {
-      return res.status(403).json({ status: 'fail', message: 'Access denied' });
+    const access = await resolveOrgAccess(userId, organization._id);
+    if (!access.ok) {
+      return res.status(403).json({ status: 'fail', message: 'Access denied', code: 'ORG_ACCESS_DENIED' });
     }
+    const myRole = access.membership?.role || 'member';
 
-    res.json({ status: 'success', data: { ...organization.toObject(), myRole: membership.role } });
+    res.json({ status: 'success', data: { ...organization.toObject(), myRole } });
   } catch (error) {
     next(error);
   }
@@ -720,6 +601,12 @@ exports.deleteOrganization = async (req, res, next) => {
 
     await purgeOrganizationEverywhere(orgId);
 
+    publishOrgEvent({
+      type: ORG_EVENT_TYPES.ORG_DELETED,
+      organizationId: String(orgId),
+      userId: userId ? String(userId) : null,
+    }).catch(() => null);
+
     await emitRealtimeEvent({
       event: 'organization:deleted',
       userId: String(userId || ''),
@@ -741,102 +628,17 @@ exports.getOrganizationStructure = async (req, res, next) => {
     if (!userId) {
       return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
     }
-    const membership = await Membership.findOne({
-      user: userId,
-      organization: orgId,
-      status: 'active',
-    }).select('_id');
-    if (!membership) {
-      return res.status(403).json({ status: 'fail', message: 'Access denied' });
-    }
-
-    const [branches, divisions, departments, teams, channels, organization] = await Promise.all([
-      Branch.find({ organization: orgId, isActive: true }).sort({ createdAt: 1 }).lean(),
-      Division.find({ organization: orgId, isActive: true }).sort({ createdAt: 1 }).lean(),
-      Department.find({ organization: orgId }).sort({ createdAt: 1 }).lean(),
-      Team.find({ organization: orgId, isActive: true }).sort({ createdAt: 1 }).lean(),
-      Channel.find({ organization: orgId, isActive: true }).sort({ createdAt: 1 }).lean(),
-      Organization.findById(orgId).select('provisioning.structure').lean(),
-    ]);
-
-    const channelsByTeam = new Map();
-    const channelsByDepartment = new Map();
-    const channelsByDivision = new Map();
-    for (const channel of channels) {
-      const teamKey = String(channel.team || '');
-      const departmentKey = String(channel.department || '');
-      const divisionKey = String(channel.division || '');
-      if (teamKey) {
-        if (!channelsByTeam.has(teamKey)) channelsByTeam.set(teamKey, []);
-        channelsByTeam.get(teamKey).push(channel);
-        continue;
-      }
-      if (departmentKey) {
-        if (!channelsByDepartment.has(departmentKey)) channelsByDepartment.set(departmentKey, []);
-        channelsByDepartment.get(departmentKey).push(channel);
-        continue;
-      }
-      if (divisionKey) {
-        if (!channelsByDivision.has(divisionKey)) channelsByDivision.set(divisionKey, []);
-        channelsByDivision.get(divisionKey).push(channel);
-      }
-    }
-
-    const teamsByDepartment = new Map();
-    for (const team of teams) {
-      const key = String(team.department || '');
-      if (!key) continue;
-      if (!teamsByDepartment.has(key)) teamsByDepartment.set(key, []);
-      teamsByDepartment.get(key).push({
-        ...team,
-        channels: channelsByTeam.get(String(team._id)) || [],
+    const access = await resolveOrgAccess(userId, orgId);
+    if (!access.ok) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Access denied',
+        code: 'ORG_ACCESS_DENIED',
       });
     }
 
-    const departmentsByDivision = new Map();
-    for (const department of departments) {
-      const key = String(department.division || '');
-      if (!key) continue;
-      if (!departmentsByDivision.has(key)) departmentsByDivision.set(key, []);
-      departmentsByDivision.get(key).push({
-        ...department,
-        channels: channelsByDepartment.get(String(department._id)) || [],
-        teams: teamsByDepartment.get(String(department._id)) || [],
-      });
-    }
-
-    const divisionsByBranch = new Map();
-    for (const division of divisions) {
-      const key = String(division.branch || '');
-      if (!key) continue;
-      if (!divisionsByBranch.has(key)) divisionsByBranch.set(key, []);
-      divisionsByBranch.get(key).push({
-        ...division,
-        channels: channelsByDivision.get(String(division._id)) || [],
-        departments: departmentsByDivision.get(String(division._id)) || [],
-      });
-    }
-
-    const tree = branches.map((branch) => ({
-      ...branch,
-      divisions: divisionsByBranch.get(String(branch._id)) || [],
-    }));
-
-    // Self-heal: mỗi lần load structure sẽ cố sync lại role khối/phòng/team để bù các lần tạo hụt do lỗi mạng tạm thời.
-    syncHierarchyRoles(orgId, { divisions, departments, teams }).catch(() => null);
-
-    return res.json({
-      status: 'success',
-      data: {
-        branches: tree,
-        provisioning: organization?.provisioning?.structure || {
-          status: STRUCTURE_PROVISION.READY,
-          startedAt: null,
-          completedAt: null,
-          error: '',
-        },
-      },
-    });
+    const data = await getCachedOrganizationStructureData(orgId, buildOrganizationStructureData);
+    return res.json({ status: 'success', data });
   } catch (error) {
     return next(error);
   }
@@ -850,193 +652,104 @@ exports.getAccessibleChannelIds = async (req, res, next) => {
     if (!userId) {
       return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
     }
-    const membership = await Membership.findOne({
-      user: userId,
-      organization: orgId,
-      status: 'active',
+    const access = await resolveOrgAccess(userId, orgId);
+    if (!access.ok) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Access denied',
+        code: 'ORG_ACCESS_DENIED',
+      });
+    }
+    const data = await getCachedAccessibleChannelData(
+      userId,
+      orgId,
+      access,
+      buildAccessibleChannelData
+    );
+    res.json({ status: 'success', data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Gom tài liệu org: structure + attachments search + library (wave-2d). */
+exports.getDocumentsOverview = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { orgId } = req.params;
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+    const data = await buildDocumentsOverview(orgId, userId);
+    return res.json({ status: 'success', data });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      status: 'fail',
+      message: error.message || 'Documents overview failed',
+      code: error.code,
     });
-    if (!membership) {
+  }
+};
+
+/** Gom structure + ACL kênh + task scope + badge thông báo org — một request khi vào workspace. */
+exports.getOrgShell = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { orgId } = req.params;
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+    const access = await resolveOrgAccess(userId, orgId);
+    if (!access.ok) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Access denied',
+        code: 'ORG_ACCESS_DENIED',
+      });
+    }
+
+    const orgDoc = await Organization.findById(orgId).select('name slug logo').lean();
+    const [structureSummary, accessData, taskWorkspaceScope, notificationsUnreadOrg, shellVersion] =
+      await Promise.all([
+        getCachedOrganizationStructureData(orgId, buildOrganizationStructureData),
+        getCachedAccessibleChannelData(userId, orgId, access, buildAccessibleChannelData),
+        resolveTaskWorkspaceScope(userId, orgId),
+        fetchOrgNotificationUnread(userId, orgId),
+        getOrgShellVersion(orgId),
+      ]);
+
+    if (!taskWorkspaceScope) {
       return res.status(403).json({ status: 'fail', message: 'Access denied' });
     }
-    const channels = await Channel.find({ organization: orgId, isActive: true })
-      .select('_id members team division department')
-      .lean();
-    const aclRows = await ChannelAccess.find({
-      organization: orgId,
-      user: userId,
-    })
-      .select('channel permissions')
-      .lean();
-    const aclByChannelId = new Map(
-      aclRows.map((row) => [
-        String(row.channel),
-        {
-          canRead: Boolean(row.permissions?.canRead),
-          canWrite: Boolean(row.permissions?.canWrite),
-          canVoice: Boolean(row.permissions?.canVoice),
-        },
-      ])
-    );
-    const userRoles = await fetchUserRolesInOrg(userId, orgId);
-    const userRoleIds = new Set(userRoles.map((r) => r.id));
-    const roleNames = userRoles.map((r) => r.name);
-    const [channelRoleAclRows, scopeRoleAclRows] = await Promise.all([
-      ChannelRoleAccess.find({ organization: orgId }).select('channel roleId permissions').lean(),
-      ScopeRoleAccess.find({ organization: orgId }).select('scopeType scopeId roleId permissions').lean(),
-    ]);
-    const channelRoleByChannelId = buildChannelRoleAclMap(channelRoleAclRows, userRoleIds);
-    const divisionRoleById = buildScopeRoleAclMap(
-      scopeRoleAclRows.filter((r) => r.scopeType === 'division'),
-      userRoleIds
-    );
-    const departmentRoleById = buildScopeRoleAclMap(
-      scopeRoleAclRows.filter((r) => r.scopeType === 'department'),
-      userRoleIds
-    );
-    const teamRoleById = buildScopeRoleAclMap(
-      scopeRoleAclRows.filter((r) => r.scopeType === 'team'),
-      userRoleIds
-    );
-    const membershipRole = Membership.normalizeRole(membership.role);
-    const isOrgAdminScope =
-      membershipRole === 'owner' || membershipRole === 'admin' || membershipRole === 'hr';
-    const isStructureAdmin = isOrgAdminScope || hasExecutiveRbacRole(roleNames);
 
-    const uid = String(userId);
-    const permissionsByChannelId = {};
-    const channelIds = [];
-    const scopedFromVisibleChannels = {
-      divisionIds: new Set(),
-      departmentIds: new Set(),
-      teamIds: new Set(),
-    };
+    const membershipRole = access.membership?.role
+      ? Membership.normalizeRole(access.membership.role)
+      : null;
 
-    for (const ch of channels) {
-      const channelId = String(ch._id);
-      const acl = aclByChannelId.get(channelId) || null;
-      let roleAcl = null;
-      const channelRoleMap = channelRoleByChannelId.get(channelId);
-      if (channelRoleMap) {
-        for (const role of userRoles) {
-          const roleId = String(role.id || '');
-          if (!roleId) continue;
-          const fromChannel = channelRoleMap.get(roleId);
-          if (fromChannel && hasAnyRoleChannelPermission(fromChannel)) {
-            roleAcl = mergeRoleChannelPermissions(
-              roleAcl || normalizeRoleChannelPermissions({}),
-              fromChannel
-            );
-          }
-        }
-      }
-
-      let canSee = false;
-      let canRead = false;
-      let canWrite = false;
-      let canDelete = false;
-      let canVoice = false;
-
-      if (isStructureAdmin) {
-        canSee = true;
-        canRead = true;
-        canWrite = true;
-        canDelete = true;
-        canVoice = true;
-      } else if (roleAcl) {
-        canSee = roleAcl.canSee;
-        canRead = roleAcl.canRead;
-        canWrite = roleAcl.canWrite;
-        canDelete = roleAcl.canDelete;
-        canVoice = roleAcl.canVoice;
-      } else if (acl) {
-        canSee = Boolean(acl.canRead);
-        canRead = Boolean(acl.canRead);
-        canWrite = Boolean(acl.canWrite);
-        canVoice = Boolean(acl.canVoice);
-      }
-
-      if (ch.members && ch.members.length > 0) {
-        const inLegacyMemberList = ch.members.some((m) => String(m) === uid || String(m?._id || m) === uid);
-        if (inLegacyMemberList) {
-          if (!roleAcl) {
-            canSee = true;
-            canRead = true;
-            canWrite = true;
-            canDelete = true;
-            canVoice = true;
-          } else {
-            canSee = canSee || true;
-            canRead = canRead || true;
-          }
-        }
-      }
-
-      const visible = canSee || canRead;
-      permissionsByChannelId[channelId] = {
-        canSee: visible,
-        canRead,
-        canWrite,
-        canDelete,
-        canVoice,
-      };
-      if (visible) {
-        channelIds.push(channelId);
-        if (!isStructureAdmin) {
-          if (ch.division) scopedFromVisibleChannels.divisionIds.add(String(ch.division));
-          if (ch.department) scopedFromVisibleChannels.departmentIds.add(String(ch.department));
-          if (ch.team) scopedFromVisibleChannels.teamIds.add(String(ch.team));
-        }
-      }
-    }
-
-    if (!isStructureAdmin) {
-      const deptIds = [...scopedFromVisibleChannels.departmentIds];
-      const teamIds = [...scopedFromVisibleChannels.teamIds];
-      if (deptIds.length) {
-        const deptRows = await Department.find({
-          _id: { $in: deptIds },
-          organization: orgId,
-        })
-          .select('division branch')
-          .lean();
-        for (const row of deptRows) {
-          if (row.division) scopedFromVisibleChannels.divisionIds.add(String(row.division));
-        }
-      }
-      if (teamIds.length) {
-        const teamRows = await Team.find({
-          _id: { $in: teamIds },
-          organization: orgId,
-          isActive: true,
-        })
-          .select('department division')
-          .lean();
-        for (const row of teamRows) {
-          if (row.department) scopedFromVisibleChannels.departmentIds.add(String(row.department));
-          if (row.division) scopedFromVisibleChannels.divisionIds.add(String(row.division));
-        }
-      }
-    }
-
-    res.json({
+    return res.json({
       status: 'success',
       data: {
-        channelIds,
-        permissionsByChannelId,
-        scope: {
-          branchId: membership.branch ? String(membership.branch) : null,
-          divisionId: membership.division ? String(membership.division) : null,
-          departmentId: membership.department ? String(membership.department) : null,
-          teamId: membership.team ? String(membership.team) : null,
-          canSeeAllStructure: isStructureAdmin,
-          scopedDivisionIds: [...scopedFromVisibleChannels.divisionIds],
-          scopedDepartmentIds: [...scopedFromVisibleChannels.departmentIds],
-          scopedTeamIds: [...scopedFromVisibleChannels.teamIds],
+        organization: {
+          id: String(orgId),
+          name: orgDoc?.name || '',
+          slug: orgDoc?.slug || '',
+          icon: orgDoc?.logo || null,
+          myRole: membershipRole,
         },
+        structureSummary,
+        access: {
+          channelIds: accessData.channelIds,
+          permissionsByChannelId: accessData.permissionsByChannelId,
+          scope: accessData.scope,
+        },
+        taskWorkspaceScope,
+        badges: { notificationsUnreadOrg },
+        shellVersion,
       },
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
@@ -1125,6 +838,7 @@ exports.grantChannelAccess = async (req, res, next) => {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    await invalidateOrgAcl(orgId, String(userId));
     return res.json({ status: 'success', data: row });
   } catch (error) {
     return next(error);
@@ -1143,6 +857,7 @@ exports.revokeChannelAccess = async (req, res, next) => {
       channel: channelId,
       user: userId,
     });
+    await invalidateOrgAcl(orgId, String(userId));
     return res.json({ status: 'success', message: 'Access revoked' });
   } catch (error) {
     return next(error);
@@ -1232,6 +947,7 @@ exports.saveChannelRoleAccess = async (req, res, next) => {
     const rows = await ChannelRoleAccess.find({ organization: orgId, channel: channelId })
       .select('roleId permissions')
       .lean();
+    await invalidateOrgAcl(orgId);
     return res.json({
       status: 'success',
       data: {
@@ -1297,6 +1013,7 @@ exports.saveDivisionRoleAccess = async (req, res, next) => {
       return res.status(404).json({ status: 'fail', message: 'Division not found' });
     }
     const saved = await persistScopeRoleAccess(orgId, 'division', divisionId, entries, actorId);
+    await invalidateOrgAcl(orgId);
     return res.json({ status: 'success', data: { entries: saved } });
   } catch (error) {
     return next(error);
@@ -1352,6 +1069,7 @@ exports.saveDepartmentRoleAccess = async (req, res, next) => {
       return res.status(404).json({ status: 'fail', message: 'Department not found' });
     }
     const saved = await persistScopeRoleAccess(orgId, 'department', departmentId, entries, actorId);
+    await invalidateOrgAcl(orgId);
     return res.json({ status: 'success', data: { entries: saved } });
   } catch (error) {
     return next(error);
@@ -1409,6 +1127,7 @@ exports.saveTeamRoleAccess = async (req, res, next) => {
       return res.status(404).json({ status: 'fail', message: 'Team not found' });
     }
     const saved = await persistScopeRoleAccess(orgId, 'team', teamId, entries, actorId);
+    await invalidateOrgAcl(orgId);
     return res.json({ status: 'success', data: { entries: saved } });
   } catch (error) {
     return next(error);

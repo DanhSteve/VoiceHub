@@ -1,5 +1,7 @@
 const axios = require('axios');
 const { logger } = require('/shared');
+const { invalidateOrgAcl } = require('./orgReadCache.service');
+const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
 
 const ROLE_PERMISSION_BASE =
   String(process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015').replace(/\/$/, '');
@@ -169,9 +171,15 @@ async function syncUserOrgRole(userId, organizationId, membershipRole) {
       { userId: uid, serverId: oid, roleId },
       { headers: internalHeaders(), timeout: 8000, validateStatus: () => true }
     );
-    if (assignRes.status === 201) return;
+    if (assignRes.status === 201) {
+      await invalidateOrgAcl(oid, uid, { eventType: ORG_EVENT_TYPES.ROLE_UPDATED });
+      return;
+    }
     const msg = String(assignRes.data?.message || '');
-    if (msg.includes('already has')) return;
+    if (msg.includes('already has')) {
+      await invalidateOrgAcl(oid, uid, { eventType: ORG_EVENT_TYPES.ROLE_UPDATED });
+      return;
+    }
     logger.warn('[rolePermissionOrgSync] assign failed', { status: assignRes.status, message: msg });
   } catch (e) {
     logger.warn('[rolePermissionOrgSync] syncUserOrgRole', e.message);

@@ -17,14 +17,16 @@ function encText(val) {
   return encryptField(String(val));
 }
 
-function toClientNotification(doc) {
-  if (!doc) return null;
-  const o = doc.toObject ? doc.toObject() : { ...doc };
-  o.title = unwrapPlaintext(o.title);
-  o.content = unwrapPlaintext(o.content);
-  if (o.actionUrl) o.actionUrl = unwrapPlaintext(o.actionUrl);
-  return o;
-}
+const { toClientNotification } = require('../utils/notificationDto');
+const {
+  getCachedUnreadCount,
+  setCachedUnreadCount,
+  invalidateUnreadBadgeCache,
+} = require('../cache/notificationReadCache');
+const {
+  emitUnreadSnapshots,
+  targetsFromNotificationDoc,
+} = require('./notificationUnreadPush');
 
 async function maybeMigrateNotification(doc) {
   if (!doc || !isEncryptionEnabled()) return;
@@ -109,6 +111,12 @@ class NotificationService {
         },
       });
 
+      await invalidateUnreadBadgeCache(userId, 'personal', '');
+      const orgFromData = data?.organizationId || data?.workspaceId;
+      if (orgFromData) {
+        await invalidateUnreadBadgeCache(userId, 'organization', String(orgFromData));
+      }
+
       logger.info(`Notification created: ${notification._id} for user: ${userId}`);
       return clientN;
     } catch (error) {
@@ -145,6 +153,21 @@ class NotificationService {
         },
       });
 
+      const orgFromData = data?.organizationId || data?.workspaceId;
+      await Promise.all(
+        userIds.map((uid) =>
+          emitUnreadSnapshots(
+            uid,
+            orgFromData
+              ? [
+                  { scope: 'personal' },
+                  { scope: 'organization', organizationId: String(orgFromData) },
+                ]
+              : [{ scope: 'personal' }]
+          )
+        )
+      );
+
       logger.info(`Bulk notifications created: ${created.length} notifications`);
       return clientList;
     } catch (error) {
@@ -155,7 +178,17 @@ class NotificationService {
 
   async getUserNotifications(userId, options = {}) {
     try {
-      const { isRead, type, organizationId, scope, page = 1, limit = 50 } = options;
+      const {
+        isRead,
+        type,
+        organizationId,
+        scope,
+        page = 1,
+        limit = 50,
+        before,
+        fields = 'summary',
+      } = options;
+      const dtoOpts = { fields: fields === 'full' ? 'full' : 'summary' };
 
       const filter = { userId };
       if (isRead !== undefined) filter.isRead = isRead;
@@ -180,25 +213,69 @@ class NotificationService {
         filter.$and = andParts;
       }
 
-      const notifications = await Notification.find(filter)
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+      const beforeRaw = before != null && before !== '' ? String(before).trim() : '';
+      const beforeDate = beforeRaw ? new Date(beforeRaw) : null;
+      const useBeforePagination =
+        beforeDate && !Number.isNaN(beforeDate.getTime());
+
+      const listFilter = { ...filter };
+      if (useBeforePagination) {
+        listFilter.createdAt = { $lt: beforeDate };
+      }
+
+      const notifications = await Notification.find(listFilter)
         .sort({ createdAt: -1 })
-        .limit(limit * 1)
-        .skip((page - 1) * limit);
+        .limit(limitNum)
+        .skip(
+          useBeforePagination
+            ? 0
+            : (Math.max(1, parseInt(page, 10) || 1) - 1) * limitNum
+        );
 
       for (const n of notifications) {
         await maybeMigrateNotification(n);
       }
 
-      const total = await Notification.countDocuments(filter);
+      const total = useBeforePagination
+        ? null
+        : await Notification.countDocuments(filter);
       const unreadFilter = { ...filter, isRead: false };
-      const unreadCount = await Notification.countDocuments(unreadFilter);
+      const canCacheUnread =
+        !useBeforePagination &&
+        isRead === undefined &&
+        !type &&
+        (parseInt(page, 10) || 1) === 1;
+
+      let unreadCount = null;
+      if (canCacheUnread) {
+        unreadCount = await getCachedUnreadCount(userId, scope, organizationId);
+      }
+      if (unreadCount == null) {
+        unreadCount = await Notification.countDocuments(unreadFilter);
+        if (canCacheUnread) {
+          await setCachedUnreadCount(userId, scope, organizationId, unreadCount);
+        }
+      }
+
+      const mapped = notifications.map((n) => toClientNotification(n, dtoOpts));
+      const hasMore = mapped.length >= limitNum;
+      /** Giá trị gửi lại param `before` để lấy trang cũ hơn (sort createdAt desc). */
+      const nextBefore =
+        hasMore && mapped.length > 0
+          ? mapped[mapped.length - 1].createdAt
+          : null;
 
       return {
-        notifications: notifications.map((n) => toClientNotification(n)),
-        totalPages: Math.ceil(total / limit),
-        currentPage: page,
+        notifications: mapped,
+        totalPages: useBeforePagination ? null : Math.ceil(total / limitNum),
+        currentPage: useBeforePagination
+          ? null
+          : Math.max(1, parseInt(page, 10) || 1),
         total,
         unreadCount,
+        hasMore,
+        nextBefore,
       };
     } catch (error) {
       logger.error('Error getting user notifications:', error);
@@ -224,6 +301,8 @@ class NotificationService {
       }
 
       await maybeMigrateNotification(notification);
+
+      await emitUnreadSnapshots(userId, targetsFromNotificationDoc(notification));
 
       logger.info(`Notification marked as read: ${notificationId}`);
       await emitRealtimeEvent({
@@ -254,6 +333,7 @@ class NotificationService {
       );
 
       logger.info(`All notifications marked as read for user: ${userId}`);
+      await emitUnreadSnapshots(userId, [{ scope: 'personal' }]);
       await emitRealtimeEvent({
         event: 'notification:read_all',
         userId: String(userId),
@@ -320,6 +400,8 @@ class NotificationService {
         },
       });
 
+      await emitUnreadSnapshots(userId, [{ scope: 'personal' }]);
+
       return { modifiedCount: ids.length, notificationIds: ids };
     } catch (error) {
       logger.error('Error marking friend-related notifications read:', error);
@@ -339,6 +421,9 @@ class NotificationService {
       }
 
       logger.info(`Notification deleted: ${notificationId}`);
+      if (!notification.isRead) {
+        await emitUnreadSnapshots(userId, targetsFromNotificationDoc(notification));
+      }
       await emitRealtimeEvent({
         event: 'notification:deleted',
         userId: String(userId),

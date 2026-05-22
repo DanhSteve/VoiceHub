@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 
 import { Modal } from '../Shared';
+import UserAvatar from '../Shared/UserAvatar';
 import UnifiedChatComposer from '../Chat/UnifiedChatComposer';
 import ChatUploadProgressBar from '../Chat/ChatUploadProgressBar';
 import { ChatMessageAttachmentBody } from '../Chat/ChatFileAttachment';
@@ -121,6 +122,9 @@ const OrganizationMainPanel = ({
   onChangeMessageInput,
   onSendMessage,
   loadingMessages = false,
+  hasMoreOlderMessages = false,
+  loadingOlderMessages = false,
+  onLoadOlderMessages,
   sendingMessage = false,
   currentUserId,
   currentUser = null,
@@ -246,7 +250,8 @@ const OrganizationMainPanel = ({
     departmentId: '',
   });
   const [voiceConnectionState, setVoiceConnectionState] = useState('idle'); // idle | connecting | connected | error
-  const initialVoiceTogglePrefs = loadVoiceAudioPrefs();
+  const orgVoiceUserId = String(currentUserId || currentUser?.id || currentUser?._id || '').trim();
+  const initialVoiceTogglePrefs = loadVoiceAudioPrefs(orgVoiceUserId);
   const [voiceAudioState, setVoiceAudioState] = useState({
     isMuted: Boolean(initialVoiceTogglePrefs.micMuted),
     isSpeakerOff: Boolean(initialVoiceTogglePrefs.speakerOff),
@@ -257,7 +262,7 @@ const OrganizationMainPanel = ({
     toggleMute: null,
     toggleSpeaker: null,
   });
-  const initialOrgVoiceAudio = loadVoiceAudioPrefs();
+  const initialOrgVoiceAudio = loadVoiceAudioPrefs(orgVoiceUserId);
   const [orgVoiceSettingsOpen, setOrgVoiceSettingsOpen] = useState(false);
   const [orgMicId, setOrgMicId] = useState(initialOrgVoiceAudio.micDeviceId);
   const [orgSpeakerId, setOrgSpeakerId] = useState(initialOrgVoiceAudio.speakerDeviceId);
@@ -348,7 +353,7 @@ const OrganizationMainPanel = ({
   useEffect(() => {
     if (!isVoiceChannel || !canVoiceChannel) {
       setVoiceConnectionState('idle');
-      const prefs = loadVoiceAudioPrefs();
+      const prefs = loadVoiceAudioPrefs(orgVoiceUserId);
       setVoiceAudioState((prev) => ({
         isMuted: prefs.micMuted,
         isSpeakerOff: prefs.speakerOff,
@@ -951,6 +956,7 @@ const OrganizationMainPanel = ({
             <OrganizationSidebarAudioBar
               isDarkMode={isDarkMode}
               t={t}
+              voiceUserId={orgVoiceUserId}
               voiceInChannel={voiceConnVisible}
               voiceAudioState={voiceAudioState}
               onToggleMute={() => voiceControlActionsRef.current.toggleMute?.()}
@@ -1200,6 +1206,9 @@ const OrganizationMainPanel = ({
                     channelLabel={selectedChannel?.name || ''}
                     isDarkMode={isDarkMode}
                     canVoice={canVoiceChannel}
+                    micDeviceId={orgMicId}
+                    speakerDeviceId={orgSpeakerId}
+                    speakerVolume={orgSpeakerVolume}
                     landingDemo={landingDemo}
                     onConnectionStateChange={setVoiceConnectionState}
                     onAudioStateChange={setVoiceAudioState}
@@ -1218,6 +1227,24 @@ const OrganizationMainPanel = ({
               <div className="flex min-h-full flex-col px-4 py-3">
               <div className="mt-auto flex flex-col gap-3">
               <>
+              {hasMoreOlderMessages && onLoadOlderMessages && (
+                <div className="flex justify-center pb-1">
+                  <button
+                    type="button"
+                    disabled={loadingOlderMessages}
+                    onClick={onLoadOlderMessages}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      isDarkMode
+                        ? 'border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 disabled:opacity-50'
+                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50'
+                    }`}
+                  >
+                    {loadingOlderMessages
+                      ? t('friendChat.loadingOlder')
+                      : t('friendChat.loadOlder')}
+                  </button>
+                </div>
+              )}
               {loadingMessages && (
                 <div
                   className={`rounded-xl p-4 text-sm ${
@@ -1785,6 +1812,7 @@ const OrganizationMainPanel = ({
           onMicVolumeChange={setOrgMicVolume}
           onSpeakerVolumeChange={setOrgSpeakerVolume}
           active={orgVoiceSettingsOpen}
+          voiceSessionActive={voiceConnConnected}
         />
       </Modal>
 
@@ -2077,9 +2105,7 @@ const OrganizationMainPanel = ({
                         onChange={() => setSelectedContactId(contact.id)}
                         className="h-4 w-4"
                       />
-                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500/60 to-violet-500/60 text-xs font-bold text-white">
-                        {(contact.name || 'U').charAt(0)}
-                      </div>
+                      <UserAvatar name={contact.name || 'U'} size="sm" />
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-white">{contact.name}</div>
                         <div className="truncate text-xs text-gray-400">{contact.phone || contact.email || '-'}</div>

@@ -44,5 +44,6 @@ module.exports = {
   ...require('./utils/migration'),
   firebaseStorage: require('./utils/firebaseStorage'),
   ...require('./utils/userServiceInternal'),
+  resolveFrontendUrl: require('./utils/resolveFrontendUrl').resolveFrontendUrl,
 };
 

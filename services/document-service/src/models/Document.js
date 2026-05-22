@@ -71,6 +71,7 @@ const documentSchema = new mongoose.Schema(
 // Indexes
 documentSchema.index({ uploadedBy: 1 });
 documentSchema.index({ organizationId: 1 });
+documentSchema.index({ organizationId: 1, createdAt: -1 });
 documentSchema.index({ serverId: 1 });
 documentSchema.index({ name: 1 });
 documentSchema.index({ tags: 1 });

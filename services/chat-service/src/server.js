@@ -5,6 +5,11 @@ const app = require('./app');
 const { connectDB, connectRedis, disconnectDB, disconnectRedis } = require('/shared');
 const initializeSocket = require('./socket/index');
 const { startFriendDmConsumer, stopFriendDmConsumer } = require('./workers/friendDmConsumer');
+const { startOrgAclConsumer, stopOrgAclConsumer } = require('./workers/orgAclConsumer');
+const {
+  startMessageSearchIndexer,
+  stopMessageSearchIndexer,
+} = require('./workers/messageSearchIndexer');
 const { startStorageGcScheduler } = require('./jobs/storageGc');
 
 const PORT = process.env.PORT || 3006;
@@ -28,6 +33,14 @@ connectDB(mongoUri)
       console.error('[chat-service] friendDmConsumer failed to start:', err.message);
     });
 
+    startOrgAclConsumer().catch((err) => {
+      console.error('[chat-service] orgAclConsumer failed to start:', err.message);
+    });
+
+    startMessageSearchIndexer().catch((err) => {
+      console.error('[chat-service] messageSearchIndexer failed to start:', err.message);
+    });
+
     startStorageGcScheduler();
 
     // Khởi động server
@@ -45,8 +58,10 @@ process.on('SIGTERM', async () => {
   console.log('SIGTERM signal received: closing HTTP server');
   try {
     await stopFriendDmConsumer();
+    await stopOrgAclConsumer();
+    await stopMessageSearchIndexer();
   } catch (e) {
-    console.error('[chat-service] stopFriendDmConsumer', e.message);
+    console.error('[chat-service] stop consumers', e.message);
   }
   server.close(async () => {
     console.log('HTTP server closed');

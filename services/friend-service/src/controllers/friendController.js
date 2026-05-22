@@ -158,7 +158,8 @@ exports.searchByPhone = async (req, res, next) => {
     }
 
     // get relationship to requesting user
-    const relationship = await friendService.getRelationship(req.user._id, userData.userId || userData._id);
+    const actorId = req.user?.id || req.user?._id;
+    const relationship = await friendService.getRelationship(actorId, userData.userId || userData._id);
 
     res.json({
       status: 'success',

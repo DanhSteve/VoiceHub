@@ -8,6 +8,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import UserAvatar from '../Shared/UserAvatar';
 
 function UnifiedChatComposer({
   value = '',
@@ -318,9 +319,7 @@ function UnifiedChatComposer({
                     ? 'flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-white transition hover:bg-slate-800/80'
                     : 'flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-slate-800 transition hover:bg-slate-100'}
                 >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-cyan-500/20 text-sm font-semibold text-cyan-200">
-                    {item.avatar && String(item.avatar).startsWith('http') ? <img src={item.avatar} alt="" className="h-full w-full object-cover" /> : (item.label || '?').slice(0, 1).toUpperCase()}
-                  </span>
+                  <UserAvatar avatar={item.avatar} name={item.label} size="chip" />
                   <span className="min-w-0 flex-1 truncate font-medium">{item.label}</span>
                 </button>
               ))}

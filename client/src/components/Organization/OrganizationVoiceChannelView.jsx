@@ -3,24 +3,21 @@ import { io } from 'socket.io-client';
 import toast from 'react-hot-toast';
 import { MicOff } from 'lucide-react';
 import api from '../../services/api';
-import { loadVoiceAudioPrefs, saveVoiceAudioPrefs } from '../../pages/Voice/voiceAudioPrefs';
+import {
+  acquireMicStream,
+  loadVoiceAudioPrefs,
+  saveVoiceAudioPrefs,
+} from '../../pages/Voice/voiceAudioPrefs';
 import { useAuth } from '../../context/AuthContext';
 import { useLocale } from '../../context/LocaleContext';
 import { useAppStrings } from '../../locales/appStrings';
 import { getToken } from '../../utils/tokenStorage';
-import { getUserDisplayName } from '../../utils/helpers';
+import { getUserDisplayName, resolveMediaUrl } from '../../utils/helpers';
+import { resolveAppOrigin } from '../../utils/browserOrigin';
+import UserAvatar from '../Shared/UserAvatar';
+import { isAvatarImageUrl, voiceSpeakingRingClass } from '../../utils/avatarDisplay';
 
-const getSignalBaseUrl = () => {
-  const explicit = import.meta.env.VITE_VOICE_SIGNAL_URL;
-  if (explicit) return explicit;
-  // Dev: dùng cùng origin (Vite) để tránh hardcode gateway localhost:
-  // client sẽ proxy /voice-socket về API Gateway trong vite.config.js.
-  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
-  }
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-  return apiUrl.replace(/\/api\/?$/, '');
-};
+const getSignalBaseUrl = () => resolveAppOrigin() || 'http://127.0.0.1:3000';
 
 const getSignalPath = () => import.meta.env.VITE_VOICE_SIGNAL_PATH || '/voice-socket';
 
@@ -49,17 +46,82 @@ function formatCallDuration(totalSec) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-function buildInitials(name) {
-  const words = String(name || '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (!words.length) return '?';
-  return words
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() || '')
-    .join('');
+function clampVolumePct(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 100;
 }
+
+async function applyRemoteAudioElement(el, { speakerOff, speakerVolume, speakerDeviceId }) {
+  if (!el) return;
+  el.muted = Boolean(speakerOff);
+  el.volume = clampVolumePct(speakerVolume) / 100;
+  const sinkId = String(speakerDeviceId || '').trim();
+  if (sinkId && typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype) {
+    try {
+      await el.setSinkId(sinkId);
+    } catch {
+      /* BT/device đổi → fallback loa mặc định */
+    }
+  }
+}
+
+async function bindAndPlayRemoteAudio(el, stream, outputOpts) {
+  if (!el || !stream) return;
+  await applyRemoteAudioElement(el, outputOpts);
+  if (el.srcObject !== stream) {
+    el.srcObject = stream;
+  }
+  try {
+    await el.play();
+  } catch (err) {
+    console.warn('[org-voice] remote play failed', err?.message || err);
+  }
+}
+
+function collectRtcStatsRows(stats) {
+  if (!stats) return [];
+  if (Array.isArray(stats)) return stats;
+  if (typeof stats.forEach === 'function') {
+    const rows = [];
+    stats.forEach((v) => rows.push(v));
+    return rows;
+  }
+  return Object.values(stats);
+}
+
+/** Dev: kiểm tra có RTP vào consumer sau vài giây (lỗi ICE im lặng). */
+async function warnIfNoInboundRtp(consumer, label, { recvState } = {}) {
+  if (!import.meta.env.DEV || !consumer?.getStats) return;
+  await new Promise((r) => setTimeout(r, 4500));
+  try {
+    const stats = await consumer.getStats();
+    const rows = collectRtcStatsRows(stats);
+    const inbound = rows.find(
+      (s) =>
+        s &&
+        s.type === 'inbound-rtp' &&
+        (s.kind === 'audio' || !s.kind) &&
+        (Number(s.bytesReceived) > 0 || Number(s.packetsReceived) > 0)
+    );
+    if (!inbound) {
+      const hints = [
+        'MEDIASOUP_ANNOUNCED_IP = IP WiFi máy dev (không 127.0.0.1 trong Docker)',
+        'firewall UDP/TCP 40000-40100',
+        'hosts: chi 1 dong voicehub.local (may dev=127.0.0.1; may LAN=IP WiFi dev)',
+        'hai tab: bật mic từng tài khoản (mute không dùng chung nữa)',
+      ];
+      if (recvState && recvState !== 'connected') {
+        hints.unshift(`recv transport: ${recvState}`);
+      }
+      console.warn(`[org-voice] Không có RTP từ "${label}" — ${hints.join('; ')}`);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+const LOCAL_SPEAKING_RMS = 0.04;
+const REMOTE_SPEAKING_RMS = 0.018;
 
 /**
  * Kênh thoại workspace tổ chức: danh sách avatar + tên, mediasoup audio-only, viền sáng khi đang nói.
@@ -77,17 +139,36 @@ export default function OrganizationVoiceChannelView({
   onControlActionsReady,
   onRoomSessionEnd,
   onDisconnect,
+  micDeviceId: micDeviceIdProp = '',
+  speakerDeviceId: speakerDeviceIdProp = '',
+  speakerVolume: speakerVolumeProp,
 }) {
   const { user } = useAuth();
   const { locale } = useLocale();
   const { t } = useAppStrings();
+  const voiceUserId = user?.id || user?._id || user?.userId || '';
 
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState('');
   const [participants, setParticipants] = useState([]);
-  const initialAudioPrefs = loadVoiceAudioPrefs();
+  const initialAudioPrefs = loadVoiceAudioPrefs(voiceUserId);
   const [isMuted, setIsMuted] = useState(Boolean(initialAudioPrefs.micMuted));
   const [isSpeakerOff, setIsSpeakerOff] = useState(Boolean(initialAudioPrefs.speakerOff));
+  const speakerDeviceId = String(speakerDeviceIdProp || initialAudioPrefs.speakerDeviceId || '').trim();
+  const micDeviceId = String(micDeviceIdProp || initialAudioPrefs.micDeviceId || '').trim();
+  const speakerVolume =
+    speakerVolumeProp !== undefined && speakerVolumeProp !== null
+      ? clampVolumePct(speakerVolumeProp)
+      : clampVolumePct(initialAudioPrefs.speakerVolume);
+
+  const remoteOutputOpts = useMemo(
+    () => ({ speakerOff: isSpeakerOff, speakerVolume, speakerDeviceId }),
+    [isSpeakerOff, speakerVolume, speakerDeviceId]
+  );
+  const remoteOutputOptsRef = useRef(remoteOutputOpts);
+  useEffect(() => {
+    remoteOutputOptsRef.current = remoteOutputOpts;
+  }, [remoteOutputOpts]);
   /** Năng lượng tín hiệu mic local (luôn theo track); UI chỉ sáng viền khi !isMuted */
   const [localVoiceEnergy, setLocalVoiceEnergy] = useState(false);
   const [remoteSpeakingMap, setRemoteSpeakingMap] = useState({});
@@ -142,15 +223,17 @@ export default function OrganizationVoiceChannelView({
     audioLevelMonitorsRef.current.delete(key);
   };
 
-  const startAudioLevelMonitor = (key, stream, onSpeakingChange) => {
-    if (!stream || audioLevelMonitorsRef.current.has(key)) return;
+  const startAudioLevelMonitor = (key, stream, onSpeakingChange, rmsThreshold = LOCAL_SPEAKING_RMS) => {
+    if (!stream) return;
     const audioTracks = stream.getAudioTracks();
     if (!audioTracks.length) return;
+    stopAudioLevelMonitor(key);
 
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) return;
       const audioContext = new AudioContextClass();
+      void audioContext.resume?.().catch?.(() => {});
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 1024;
       analyser.smoothingTimeConstant = 0.8;
@@ -169,7 +252,7 @@ export default function OrganizationVoiceChannelView({
           sumSquares += v * v;
         }
         const rms = Math.sqrt(sumSquares / data.length);
-        const speaking = rms > 0.04;
+        const speaking = rms > rmsThreshold;
         if (speaking !== lastSpeaking) {
           lastSpeaking = speaking;
           onSpeakingChange(speaking);
@@ -230,12 +313,17 @@ export default function OrganizationVoiceChannelView({
     participants.forEach((participant) => {
       const key = `remote:${participant.socketId}`;
       if (participant.stream) {
-        startAudioLevelMonitor(key, participant.stream, (speaking) => {
-          setRemoteSpeakingMap((prev) => {
-            if (prev[participant.socketId] === speaking) return prev;
-            return { ...prev, [participant.socketId]: speaking };
-          });
-        });
+        startAudioLevelMonitor(
+          key,
+          participant.stream,
+          (speaking) => {
+            setRemoteSpeakingMap((prev) => {
+              if (prev[participant.socketId] === speaking) return prev;
+              return { ...prev, [participant.socketId]: speaking };
+            });
+          },
+          REMOTE_SPEAKING_RMS
+        );
       }
     });
 
@@ -251,28 +339,35 @@ export default function OrganizationVoiceChannelView({
     participants.forEach((p) => {
       if (!p.stream) return;
       const el = audioElsRef.current.get(p.socketId);
-      if (el && el.srcObject !== p.stream) {
-        el.srcObject = p.stream;
-        el.play?.().catch(() => {});
+      if (el) {
+        void bindAndPlayRemoteAudio(el, p.stream, remoteOutputOpts);
       }
     });
-  }, [participants]);
+  }, [participants, remoteOutputOpts]);
 
   useEffect(() => {
     audioElsRef.current.forEach((el) => {
-      if (el) el.muted = isSpeakerOff;
+      void applyRemoteAudioElement(el, remoteOutputOpts);
     });
-  }, [isSpeakerOff]);
+  }, [remoteOutputOpts]);
 
   useEffect(() => {
     if (!channelId || landingDemo || !canVoice) return undefined;
 
     let cancelled = false;
+    /** Socket của phiên join hiện tại — không đọc ref sau teardown (tránh "No socket"). */
+    let voiceSocket = null;
+    let recvPipelineReady = false;
+    const pendingAudioProducers = [];
 
     const requestSocket = (eventName, payload) =>
       new Promise((resolve, reject) => {
-        const socket = mediasoupRef.current.socket;
-        if (!socket) {
+        if (cancelled) {
+          reject(new Error('Voice join cancelled'));
+          return;
+        }
+        const socket = voiceSocket ?? mediasoupRef.current.socket;
+        if (!socket?.connected) {
           reject(new Error('No socket'));
           return;
         }
@@ -284,6 +379,12 @@ export default function OrganizationVoiceChannelView({
           resolve(response);
         });
       });
+
+    const abortIfCancelled = () => {
+      if (cancelled) {
+        throw new Error('Voice join cancelled');
+      }
+    };
 
     const ensureRemoteParticipant = (producerMeta) => {
       addOrUpdateParticipant({
@@ -342,6 +443,87 @@ export default function OrganizationVoiceChannelView({
         roomId: currentRoomRef.current,
         consumerId: consumer.id,
       });
+      // mediasoup-demo: resume server + client — track remote mặc định có thể disabled.
+      consumer.resume();
+      if (consumer.track) {
+        consumer.track.enabled = true;
+      }
+
+      const el = audioElsRef.current.get(producerMeta.socketId);
+      if (el) {
+        void bindAndPlayRemoteAudio(el, currentStream, remoteOutputOptsRef.current);
+      } else {
+        // Participant row + <audio> có thể chưa mount — effect/ref callback sẽ play sau.
+        requestAnimationFrame(() => {
+          const lateEl = audioElsRef.current.get(producerMeta.socketId);
+          if (lateEl) {
+            void bindAndPlayRemoteAudio(lateEl, currentStream, remoteOutputOptsRef.current);
+          }
+        });
+      }
+
+      const speakKey = `remote:${producerMeta.socketId}`;
+      startAudioLevelMonitor(
+        speakKey,
+        currentStream,
+        (speaking) => {
+          setRemoteSpeakingMap((prev) => {
+            if (prev[producerMeta.socketId] === speaking) return prev;
+            return { ...prev, [producerMeta.socketId]: speaking };
+          });
+        },
+        REMOTE_SPEAKING_RMS
+      );
+
+      if (consumer.track) {
+        consumer.track.addEventListener('mute', () => {
+          if (consumer.track.muted) {
+            setRemoteSpeakingMap((prev) => ({ ...prev, [producerMeta.socketId]: false }));
+          }
+        });
+      }
+
+      void warnIfNoInboundRtp(consumer, producerMeta.displayName || producerMeta.socketId, {
+        recvState: mediasoupRef.current.recvTransport?.connectionState,
+      });
+    };
+
+    const ingestRemoteProducer = async (producerMeta) => {
+      if (producerMeta?.kind !== 'audio') return;
+      if (!recvPipelineReady || !mediasoupRef.current.recvTransport) {
+        pendingAudioProducers.push(producerMeta);
+        return;
+      }
+      try {
+        await consumeProducer(producerMeta);
+      } catch (e) {
+        const msg = String(e?.message || '');
+        if (msg.includes('Router cannot consume producer')) {
+          try {
+            await new Promise((r) => setTimeout(r, 500));
+            const latest = await requestSocket('voice:getProducers', {
+              roomId: currentRoomRef.current,
+            });
+            const hit = (latest?.producers || []).find(
+              (p) => String(p?.producerId || '') === String(producerMeta?.producerId || '')
+            );
+            if (hit?.kind === 'audio') {
+              await consumeProducer(hit);
+              return;
+            }
+          } catch (retryErr) {
+            console.error('[org-voice] consume retry failed', retryErr);
+          }
+        }
+        console.error('[org-voice] consume producer failed', e);
+      }
+    };
+
+    const flushPendingProducers = async () => {
+      while (pendingAudioProducers.length > 0) {
+        const meta = pendingAudioProducers.shift();
+        await ingestRemoteProducer(meta);
+      }
     };
 
     const teardown = async () => {
@@ -378,8 +560,16 @@ export default function OrganizationVoiceChannelView({
       setLocalVoiceEnergy(false);
       setParticipants([]);
       mediasoupRef.current.remoteStreams.clear();
-      socket?.disconnect();
-      mediasoupRef.current.socket = null;
+      if (socket) {
+        socket.removeAllListeners();
+        socket.disconnect();
+      }
+      if (mediasoupRef.current.socket === socket) {
+        mediasoupRef.current.socket = null;
+      }
+      if (voiceSocket === socket) {
+        voiceSocket = null;
+      }
       setJoinedAtMs(null);
       setElapsedSec(0);
       onConnectionStateChange?.('idle');
@@ -404,8 +594,8 @@ export default function OrganizationVoiceChannelView({
         if (!mediaDevices?.getUserMedia) {
           throw new Error(t('orgPanel.voiceMediaUnsupported'));
         }
-        const joinPrefs = loadVoiceAudioPrefs();
-        const localStream = await mediaDevices.getUserMedia({ audio: true, video: false });
+        const joinPrefs = loadVoiceAudioPrefs(voiceUserId);
+        const localStream = await acquireMicStream(micDeviceId);
         const joinAudioTrack = localStream.getAudioTracks()[0];
         if (joinAudioTrack && joinPrefs.micMuted) {
           joinAudioTrack.enabled = false;
@@ -425,6 +615,7 @@ export default function OrganizationVoiceChannelView({
           auth: token ? { token } : {},
         });
         mediasoupRef.current.socket = socket;
+        voiceSocket = socket;
 
         if (cancelled) {
           teardown();
@@ -432,6 +623,7 @@ export default function OrganizationVoiceChannelView({
         }
 
         socket.on('voice:peerJoined', (payload) => {
+          if (cancelled || !voiceSocket?.connected) return;
           addOrUpdateParticipant({
             socketId: payload.socketId,
             userId: payload.userId,
@@ -441,6 +633,7 @@ export default function OrganizationVoiceChannelView({
         });
 
         socket.on('voice:peerLeft', (payload) => {
+          if (cancelled || !voiceSocket?.connected) return;
           removeParticipant(payload.socketId);
           stopAudioLevelMonitor(`remote:${payload.socketId}`);
           setRemoteSpeakingMap((prev) => {
@@ -457,7 +650,12 @@ export default function OrganizationVoiceChannelView({
         });
 
         socket.on('voice:roomClosed', (payload) => {
+          if (cancelled || !voiceSocket?.connected) return;
           onRoomSessionEnd?.(payload);
+        });
+
+        socket.on('voice:newProducer', (producerMeta) => {
+          void ingestRemoteProducer(producerMeta);
         });
 
         await new Promise((resolve, reject) => {
@@ -465,8 +663,16 @@ export default function OrganizationVoiceChannelView({
             resolve();
             return;
           }
-          socket.once('connect', resolve);
-          socket.once('connect_error', reject);
+          const onConnect = () => {
+            socket.off('connect_error', onError);
+            resolve();
+          };
+          const onError = (err) => {
+            socket.off('connect', onConnect);
+            reject(err);
+          };
+          socket.once('connect', onConnect);
+          socket.once('connect_error', onError);
         });
 
         if (cancelled) {
@@ -475,6 +681,7 @@ export default function OrganizationVoiceChannelView({
         }
 
         const mediasoupModule = await import('mediasoup-client');
+        abortIfCancelled();
         const DeviceClass = mediasoupModule.Device;
 
         const joinResp = await requestSocket('voice:joinRoom', {
@@ -486,6 +693,11 @@ export default function OrganizationVoiceChannelView({
         const device = new DeviceClass();
         await device.load({ routerRtpCapabilities: joinResp.rtpCapabilities });
         mediasoupRef.current.device = device;
+        if (!device.canProduce('audio')) {
+          throw new Error(
+            'Trình duyệt không hỗ trợ codec audio của phòng voice (opus). Thử reload hoặc restart voice-service.'
+          );
+        }
 
         const sendTransportData = await requestSocket('voice:createTransport', {
           roomId: String(channelId),
@@ -516,14 +728,6 @@ export default function OrganizationVoiceChannelView({
             .catch(errback);
         });
 
-        const audioTrack = localStream.getAudioTracks()[0];
-        if (audioTrack) {
-          mediasoupRef.current.audioProducer = await sendTransport.produce({
-            track: audioTrack,
-            appData: { mediaTag: 'audio' },
-          });
-        }
-
         const recvTransportData = await requestSocket('voice:createTransport', {
           roomId: String(channelId),
           direction: 'recv',
@@ -541,41 +745,33 @@ export default function OrganizationVoiceChannelView({
             .catch(errback);
         });
 
-        const producersResp = await requestSocket('voice:getProducers', { roomId: String(channelId) });
-        for (const producerMeta of producersResp.producers || []) {
-          if (producerMeta.kind !== 'audio') continue;
-          await consumeProducer(producerMeta);
-        }
-
-        socket.on('voice:newProducer', async (producerMeta) => {
-          if (producerMeta.kind !== 'audio') return;
-          try {
-            await consumeProducer(producerMeta);
-          } catch (e) {
-            const msg = String(e?.message || '');
-            // Producer vừa được tạo có thể cần một nhịp để router/transport đồng bộ.
-            if (msg.includes('Router cannot consume producer')) {
-              try {
-                await new Promise((r) => setTimeout(r, 500));
-                const latest = await requestSocket('voice:getProducers', {
-                  roomId: String(channelId),
-                });
-                const hit = (latest?.producers || []).find(
-                  (p) => String(p?.producerId || '') === String(producerMeta?.producerId || '')
-                );
-                if (hit && hit.kind === 'audio') {
-                  await consumeProducer(hit);
-                  return;
-                }
-              } catch (retryErr) {
-                console.error('consume new producer retry failed', retryErr);
-              }
-            }
-            console.error('consume new producer failed', e);
+        recvTransport.on('connectionstatechange', (state) => {
+          if (import.meta.env.DEV) {
+            console.info('[org-voice] recv transport:', state);
+          }
+          if (state === 'failed') {
+            toast.error(t('orgPanel.voiceConnectError'));
+            setError(t('orgPanel.voiceConnectError'));
           }
         });
 
-        const wantMuted = loadVoiceAudioPrefs().micMuted;
+        recvPipelineReady = true;
+
+        const producersResp = await requestSocket('voice:getProducers', { roomId: String(channelId) });
+        for (const producerMeta of producersResp.producers || []) {
+          await ingestRemoteProducer(producerMeta);
+        }
+        await flushPendingProducers();
+
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (audioTrack) {
+          mediasoupRef.current.audioProducer = await sendTransport.produce({
+            track: audioTrack,
+            appData: { mediaTag: 'audio' },
+          });
+        }
+
+        const wantMuted = loadVoiceAudioPrefs(voiceUserId).micMuted;
         if (mediasoupRef.current.audioProducer) {
           if (wantMuted) {
             await mediasoupRef.current.audioProducer.pause();
@@ -587,12 +783,15 @@ export default function OrganizationVoiceChannelView({
           audioTrack.enabled = !wantMuted;
         }
         setIsMuted(wantMuted);
+        if (import.meta.env.DEV && wantMuted) {
+          console.info('[org-voice] Mic đang mute (prefs tài khoản này) — bật mic để gửi RTP.');
+        }
         // Chỉ bắt đầu đồng hồ khi join/produce thành công và room đã vào trạng thái connected.
         setJoinedAtMs(Date.now());
         setElapsedSec(0);
         onConnectionStateChange?.('connected');
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled || e?.message === 'Voice join cancelled') return;
         console.error(e);
         const msg = e?.message || t('orgPanel.voiceConnectError');
         setError(msg);
@@ -612,6 +811,50 @@ export default function OrganizationVoiceChannelView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnect khi đổi kênh; tên hiển thị lấy lúc mount
   }, [channelId, landingDemo, canVoice]);
+
+  /** Đổi mic trong Cài đặt giọng nói khi đang ở kênh — thay track producer thay vì chờ rời/vào lại. */
+  useEffect(() => {
+    if (!joinedAtMs || landingDemo || !canVoice || !micDeviceId) return undefined;
+    const producer = mediasoupRef.current.audioProducer;
+    if (!producer) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await acquireMicStream(micDeviceId);
+        if (cancelled) {
+          stream.getTracks().forEach((tr) => tr.stop());
+          return;
+        }
+        const newTrack = stream.getAudioTracks()[0];
+        if (!newTrack) return;
+        const wantMuted = loadVoiceAudioPrefs(voiceUserId).micMuted;
+        newTrack.enabled = !wantMuted;
+        await producer.replaceTrack({ track: newTrack });
+        const old = mediasoupRef.current.localStream;
+        old?.getTracks?.().forEach((tr) => {
+          try {
+            tr.stop();
+          } catch {
+            /* ignore */
+          }
+        });
+        mediasoupRef.current.localStream = stream;
+        stopAudioLevelMonitor('local');
+        startAudioLevelMonitor('local', stream, (speaking) => {
+          setLocalVoiceEnergy(speaking);
+        });
+      } catch (e) {
+        console.warn('[org-voice] mic device switch failed', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Chỉ khi user đổi mic trong settings — không chạy lúc mount producer null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micDeviceId]);
 
   const handleLeaveVoice = async () => {
     try {
@@ -639,7 +882,7 @@ export default function OrganizationVoiceChannelView({
     if (localTrack) {
       localTrack.enabled = !next;
     }
-    saveVoiceAudioPrefs({ micMuted: next });
+    saveVoiceAudioPrefs({ micMuted: next }, voiceUserId);
     setIsMuted(next);
   };
 
@@ -684,13 +927,7 @@ export default function OrganizationVoiceChannelView({
                 i === 0 ? (isDarkMode ? 'bg-white/[0.04]' : 'bg-slate-100') : ''
               }`}
             >
-              <div
-                className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-600 text-xs font-bold text-white ${
-                  i === 0 ? 'ring-2 ring-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.45)]' : 'ring-2 ring-transparent'
-                }`}
-              >
-                {buildInitials(name)}
-              </div>
+              <UserAvatar name={name} size="sm" ringClassName={voiceSpeakingRingClass(i === 0)} />
               <span className={`min-w-0 truncate text-sm ${isDarkMode ? 'text-[#dcdee1]' : 'text-slate-800'}`}>
                 {name === 'Bạn' ? `${name} (${t('orgPanel.you')})` : name}
               </span>
@@ -711,19 +948,25 @@ export default function OrganizationVoiceChannelView({
     );
   }
 
+  const unlockAllRemoteAudio = () => {
+    audioElsRef.current.forEach((el) => {
+      if (el?.srcObject) void el.play().catch(() => {});
+    });
+  };
+
   return (
-    <div className={shell}>
-      <div className="pointer-events-none fixed h-0 w-0 overflow-hidden opacity-0" aria-hidden>
+    <div className={shell} onClick={unlockAllRemoteAudio} role="presentation">
+      <div className="sr-only" aria-hidden>
         {sortedRemote.map((p) => (
           <audio
             key={p.socketId}
             ref={(el) => {
               if (el) {
                 audioElsRef.current.set(p.socketId, el);
-                el.muted = isSpeakerOff;
-                if (p.stream && el.srcObject !== p.stream) {
-                  el.srcObject = p.stream;
-                  el.play?.().catch(() => {});
+                if (p.stream) {
+                  void bindAndPlayRemoteAudio(el, p.stream, remoteOutputOpts);
+                } else {
+                  void applyRemoteAudioElement(el, remoteOutputOpts);
                 }
               } else {
                 audioElsRef.current.delete(p.socketId);
@@ -741,7 +984,7 @@ export default function OrganizationVoiceChannelView({
         toggleSpeaker={() => {
           setIsSpeakerOff((prev) => {
             const next = !prev;
-            saveVoiceAudioPrefs({ speakerOff: next });
+            saveVoiceAudioPrefs({ speakerOff: next }, voiceUserId);
             return next;
           });
         }}
@@ -782,19 +1025,12 @@ export default function OrganizationVoiceChannelView({
         <div
           className={`flex items-center gap-2.5 rounded-lg px-2 py-2 ${isDarkMode ? 'bg-white/[0.03]' : 'bg-slate-50'}`}
         >
-          <div
-            className={`relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-sky-500 to-violet-600 text-xs font-bold text-white ${
-              localVoiceEnergy && !isMuted
-                ? 'ring-2 ring-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.5)]'
-                : 'ring-2 ring-transparent'
-            }`}
-          >
-            {localAvatar && String(localAvatar).startsWith('http') ? (
-              <img src={localAvatar} alt="" className="h-full w-full object-cover" />
-            ) : (
-              buildInitials(localDisplayName)
-            )}
-          </div>
+          <UserAvatar
+            avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+            name={localDisplayName}
+            size="sm"
+            ringClassName={voiceSpeakingRingClass(localVoiceEnergy && !isMuted)}
+          />
           <div className="min-w-0 flex-1">
             <div className={`truncate text-sm font-medium ${isDarkMode ? 'text-[#dcdee1]' : 'text-slate-800'}`}>
               {localDisplayName}{' '}
@@ -814,13 +1050,11 @@ export default function OrganizationVoiceChannelView({
           const speaking = Boolean(remoteSpeakingMap[p.socketId]);
           return (
             <div key={p.socketId} className="flex items-center gap-2.5 rounded-lg px-2 py-2">
-              <div
-                className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-600 text-xs font-bold text-white ${
-                  speaking ? 'ring-2 ring-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.45)]' : 'ring-2 ring-transparent'
-                }`}
-              >
-                {buildInitials(p.displayName)}
-              </div>
+              <UserAvatar
+                name={p.displayName}
+                size="sm"
+                ringClassName={voiceSpeakingRingClass(speaking)}
+              />
               <span className={`min-w-0 truncate text-sm ${isDarkMode ? 'text-[#dcdee1]' : 'text-slate-800'}`}>
                 {p.displayName}
               </span>

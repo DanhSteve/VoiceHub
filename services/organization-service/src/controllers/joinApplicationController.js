@@ -2,29 +2,13 @@ const axios = require('axios');
 const Organization = require('../models/Organization');
 const JoinApplication = require('../models/JoinApplication');
 const Membership = require('../models/Membership');
-const { emitRealtimeEvent } = require('/shared');
+const { emitRealtimeEvent, resolveFrontendUrl } = require('/shared');
+const { invalidateOrgReadCache } = require('../services/orgReadCache.service');
+const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
 
 const NOTIFICATION_SERVICE_URL =
   process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3003';
 const NOTIFICATION_INTERNAL_TOKEN = String(process.env.NOTIFICATION_INTERNAL_TOKEN || '').trim();
-const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
-
-function resolveFrontendUrl(req) {
-  // Ưu tiên origin của request để không bị dính localhost khi client mở từ IP LAN.
-  const origin = req?.headers?.origin;
-  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
-
-  const referer = req?.headers?.referer;
-  if (referer && String(referer).trim()) {
-    try {
-      return new URL(String(referer)).origin;
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return FRONTEND_URL;
-}
 
 function notificationServiceAxiosOpts() {
   const opts = { timeout: 8000 };
@@ -615,6 +599,11 @@ exports.reviewJoinApplication = async (req, res, next) => {
           applicationId: String(appDoc._id),
           timestamp: new Date().toISOString(),
         },
+      });
+
+      await invalidateOrgReadCache(orgId, {
+        userId: applicantId,
+        eventType: ORG_EVENT_TYPES.MEMBER_JOINED,
       });
 
       return res.json({

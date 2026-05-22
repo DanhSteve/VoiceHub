@@ -21,6 +21,7 @@ import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 import { getToken } from '../utils/tokenStorage';
 import { isLandingEmbedActive } from '../utils/landingEmbedMode';
+import { resolveAppOrigin } from '../utils/browserOrigin';
 
 // Tạo SocketContext
 const SocketContext = createContext(null);
@@ -80,14 +81,12 @@ function getDevSocketBaseUrl() {
   return window.location.origin;
 }
 
-function getDevGatewayBaseUrl() {
+/** Socket qua gateway — same-origin (Nginx https://voicehub.local), không :3000 trên host LAN. */
+function getAutoGatewayBaseUrl() {
+  const fromBrowser = resolveAppOrigin();
+  if (fromBrowser) return fromBrowser;
   if (typeof window === 'undefined' || !window.location) {
     return `http://127.0.0.1:${DEV_GATEWAY_PORT || '3000'}`;
-  }
-  // Khi truy cập qua HTTPS reverse proxy (vd. https://voicehub.local),
-  // phải dùng cùng origin để tránh gọi nhầm https://host:3000 (gateway nội bộ thường chỉ HTTP).
-  if (window.location.origin && window.location.protocol === 'https:') {
-    return window.location.origin;
   }
   const protocol = window.location.protocol || 'http:';
   const hostname = window.location.hostname || '127.0.0.1';
@@ -96,9 +95,10 @@ function getDevGatewayBaseUrl() {
 
 const SOCKET_BASE_URL =
   DIRECT ||
-  (import.meta.env.DEV && USE_GATEWAY_SOCKET && !GATEWAY_URL ? getDevGatewayBaseUrl() : '') ||
+  (USE_GATEWAY_SOCKET && !GATEWAY_URL ? getAutoGatewayBaseUrl() : '') ||
   (import.meta.env.DEV && !USE_GATEWAY_SOCKET ? getDevSocketBaseUrl() : '') ||
   GATEWAY_URL ||
+  getAutoGatewayBaseUrl() ||
   (import.meta.env.DEV ? 'http://127.0.0.1:3017' : 'http://localhost:3000');
 
 /** Base URL (origin) + namespace `/chat` cho socket-service. */
@@ -306,6 +306,26 @@ function SocketProvider({ children }) {
       newSocket.on('user:disconnected', (userId) => {
         const id = String(userId);
         setOnlineUsers((prev) => prev.map(String).filter((x) => x !== id));
+      });
+
+      // Wave 3c — snapshot presence (Redis vh:presence + in-memory sockets)
+      newSocket.on('presence:batch', (payload = {}) => {
+        const users = Array.isArray(payload.users)
+          ? payload.users
+          : payload.userId
+            ? [{ userId: payload.userId, status: payload.status }]
+            : [];
+        if (!users.length) return;
+        setOnlineUsers((prev) => {
+          const set = new Set(prev.map(String));
+          for (const row of users) {
+            const id = String(row?.userId || '').trim();
+            if (!id) continue;
+            if (row.status === 'online') set.add(id);
+            else set.delete(id);
+          }
+          return [...set];
+        });
       });
 
       // Lưu socket instance vào state

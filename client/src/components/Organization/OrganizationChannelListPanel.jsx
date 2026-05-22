@@ -89,15 +89,19 @@ export default function OrganizationChannelListPanel({
     const active = String(selectedChannelId) === String(channel._id);
     const unread = channelUnreadCount(channel);
     const perm = getChannelPerm(channel._id);
-    const canEnter = perm.canSee || perm.canRead;
+    const canSee = perm.canSee || perm.canRead;
+    const canEnter = perm.canRead;
     const slug = channelNameToDisplaySlug(channel.name, locale);
     const presence = isVoice ? voicePresenceLabel(channel) : '';
 
-    if (!canEnter) {
+    if (!canSee) return null;
+
+    if (canSee && !canEnter) {
       return (
         <div
           key={channel._id}
           className={`group relative flex items-center gap-2 rounded-lg px-2 py-1.5 pr-8 text-sm ${textMuted}`}
+          title={t('orgPanel.channelLocked')}
         >
           {isVoice ? <Volume2 className="h-3.5 w-3.5" /> : <Hash className="h-3.5 w-3.5" />}
           <span className="truncate">{slug}</span>

@@ -109,8 +109,11 @@ class FriendService {
         if (existing.status === 'blocked') {
           throw new Error('Cannot send friend request to blocked user');
         }
-        if (existing.status === 'pending' && existing.requestedBy.toString() === userId.toString()) {
-          throw new Error('Friend request already sent');
+        if (existing.status === 'pending') {
+          if (existing.requestedBy.toString() === userId.toString()) {
+            throw new Error('Friend request already sent');
+          }
+          throw new Error('Friend request already received');
         }
       }
 
@@ -139,9 +142,17 @@ class FriendService {
       logger.info(`Friend request sent: ${userId} -> ${friendId}`);
       return friend;
     } catch (error) {
+      const msg = String(error?.message || '');
+      const business =
+        msg.includes('Friend request already') ||
+        msg.includes('Already friends') ||
+        msg.includes('Cannot send friend request') ||
+        msg.includes('Cannot add yourself') ||
+        msg === 'User not found';
+      if (business) throw error;
       normalizeMongoError(error);
       logger.error('Error sending friend request:', error);
-      throw new Error(`Error sending friend request: ${error.message}`);
+      throw error;
     }
   }
 

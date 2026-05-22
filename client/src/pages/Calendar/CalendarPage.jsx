@@ -9,6 +9,7 @@ import { useCalendarFeed } from '../../hooks/useCalendarFeed';
 import { useTaskDueAlerts } from '../../hooks/useTaskDueAlerts';
 import friendService from '../../services/friendService';
 import { organizationAPI } from '../../services/api/organizationAPI';
+import UserAvatar from '../../components/Shared/UserAvatar';
 import {
   getMeetingJoinState,
   getMonthGridCells,
@@ -940,9 +941,7 @@ function CalendarPage() {
               <div className="grid grid-cols-2 gap-2">
                 {selectedEvent.attendeeNames.map((name, idx) => (
                   <div key={name} className={attendeeRow}>
-                    <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${['from-cyan-600 to-teal-600', 'from-blue-500 to-cyan-500', 'from-green-500 to-emerald-500', 'from-orange-500 to-red-500'][idx % 4]} flex items-center justify-center text-xs font-bold`}>
-                      {String(name).split(' ').map((n) => n[0]).join('')}
-                    </div>
+                    <UserAvatar name={name} size="xs" />
                     <div className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{name}</div>
                   </div>
                 ))}

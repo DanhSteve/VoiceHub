@@ -27,6 +27,20 @@ services:
       - enterprise-network
 
   # Message broker: DM friend async (socket-service → chat-service)
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    container_name: enterprise-meilisearch
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_ENV: ${MEILI_ENV:-development}
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-voicehub-meili-dev-change-me}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch_data:/meili_data
+    networks:
+      - enterprise-network
+
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: enterprise-rabbitmq
@@ -75,6 +89,7 @@ volumes:
   mongodb_data:
   redis_data:
   rabbitmq_data:
+  meilisearch_data:
   ollama_data:
 
 networks:

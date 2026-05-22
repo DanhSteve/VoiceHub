@@ -4,10 +4,9 @@ const { hashPassword, comparePassword, validatePasswordStrength } = require('../
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
 const { getRedisClient } = require('/shared');
 const emailService = require('../utils/email');
+const { bootstrapUserProfile } = require('../utils/bootstrapUserProfile');
 const crypto = require('crypto');
 const { mongoose } = require('/shared/config/mongo');
-const axios = require('axios');
-
 async function ensureMongoReady(scope = 'AUTH') {
   const readyState = mongoose.connection.readyState;
   console.log(
@@ -233,6 +232,9 @@ class AuthService {
         const cacheKey = `refresh_token:${userAuth.userId}`;
         await redis.setex(cacheKey, 30 * 24 * 60 * 60, refreshToken); // 30 days
       }
+
+      // Đảm bảo UserProfile tồn tại (phòng bootstrap verify email lỗi trước đó)
+      void bootstrapUserProfile(userAuth, userAuth.userId);
 
       return {
         accessToken,
@@ -512,48 +514,13 @@ class AuthService {
       userAuth.emailVerificationExpiresAt = null;
       await userAuth.save();
 
-      // Tạo UserProfile trong user-service sau khi verify email thành công
-      try {
-        const userServiceUrl = process.env.USER_SERVICE_URL || 'http://user-service:3004';
-        
-        // username & displayName dựa trên tên thật; email dùng để phân biệt
-        const rawName = `${userAuth.firstName || ''} ${userAuth.lastName || ''}`.trim();
-        const username = rawName || userAuth.email.split('@')[0];
-        const displayName = rawName || username;
-
-        const internalToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
-        if (!internalToken) {
-          console.error(
-            'USER_SERVICE_INTERNAL_TOKEN not set; cannot bootstrap UserProfile. Set in root .env / auth-service env.'
-          );
-        } else {
-          const response = await axios.post(
-            `${userServiceUrl}/api/users/internal/bootstrap`,
-            {
-              userId: userId.toString(),
-              username,
-              email: userAuth.email,
-              displayName,
-              dateOfBirth: userAuth.dateOfBirth,
-            },
-            {
-              headers: {
-                'Content-Type': 'application/json',
-                'x-internal-token': internalToken,
-              },
-              timeout: 5000,
-            }
-          );
-
-          if (response) {
-            console.log('UserProfile created successfully:', response.data);
-          }
-        }
-      } catch (error) {
-        // Log lỗi nhưng không throw - user đã verify email thành công
-        // UserProfile có thể được tạo sau hoặc thủ công
-        console.error('Failed to create UserProfile:', error.message);
-        // Không throw error để không block email verification
+      // Tạo UserProfile trong user-service (HTTP nội bộ — không qua webhook)
+      const bootstrap = await bootstrapUserProfile(userAuth, userId);
+      if (!bootstrap.ok) {
+        console.warn(
+          '[AuthService] verifyEmail: UserProfile bootstrap chưa thành công — user có thể đăng nhập lại để thử tạo profile.',
+          bootstrap.reason
+        );
       }
 
       return {

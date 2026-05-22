@@ -1,5 +1,6 @@
 const userService = require('../services/user.service');
-const { logger, getRedisClient, decryptFieldSafe } = require('/shared');
+const { logger, getRedisClient } = require('/shared');
+const { readPiiFromProfile } = require('../utils/profilePii');
 
 /** Định danh người gọi (chỉ từ userContext sau khi header gateway đã được tin cậy). */
 function actorUserId(req) {
@@ -9,9 +10,10 @@ function actorUserId(req) {
 function safeProfilePayload(profile) {
   if (!profile) return profile;
   const plain = typeof profile.toObject === 'function' ? profile.toObject() : { ...profile };
+  const pii = readPiiFromProfile(plain);
   return {
     ...plain,
-    phone: decryptFieldSafe(plain.phone, plain.phone || ''),
+    ...pii,
   };
 }
 
@@ -34,16 +36,31 @@ class UserController {
         });
       }
 
+      const existing = await userService.getUserProfileById(userId);
+      if (existing) {
+        return res.status(200).json({
+          success: true,
+          created: false,
+          data: safeProfilePayload(existing),
+        });
+      }
+
+      const displayFromBody =
+        displayName && String(displayName).trim()
+          ? String(displayName).trim()
+          : email.trim().toLowerCase().split('@')[0];
+
       const userProfile = await userService.createUserProfile({
         userId,
         username,
         email: email.trim().toLowerCase(),
-        displayName,
+        displayName: displayFromBody,
         dateOfBirth,
       });
 
       res.status(201).json({
         success: true,
+        created: true,
         data: safeProfilePayload(userProfile),
       });
     } catch (error) {
@@ -173,7 +190,27 @@ class UserController {
         // Không throw error, vẫn lấy user profile
       }
 
-      const userProfile = await userService.getUserProfileById(userId);
+      let userProfile = await userService.getUserProfileById(userId);
+
+      if (!userProfile) {
+        const email = String(req.headers['x-user-email'] || req.user?.email || '')
+          .trim()
+          .toLowerCase();
+        if (email) {
+          try {
+            const baseUsername = email.split('@')[0] || `user${String(userId).slice(-6)}`;
+            userProfile = await userService.createUserProfile({
+              userId,
+              username: baseUsername,
+              email,
+              displayName: email.split('@')[0] || baseUsername,
+            });
+            logger.info(`Lazy user profile created for ${userId}`);
+          } catch (bootstrapErr) {
+            logger.warn('Lazy profile bootstrap failed:', bootstrapErr.message);
+          }
+        }
+      }
 
       if (!userProfile) {
         return res.status(404).json({
@@ -381,6 +418,38 @@ class UserController {
       res.status(500).json({
         success: false,
         message: error.message,
+      });
+    }
+  }
+
+  async uploadAvatar(req, res) {
+    try {
+      const userId = actorUserId(req);
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'No file uploaded' });
+      }
+
+      const avatarUrl = `/uploads/${req.file.filename}`;
+      const userProfile = await userService.updateUserProfile(userId, { avatar: avatarUrl });
+      const plain = safeProfilePayload(userProfile);
+      const avatar = plain?.avatar || avatarUrl;
+
+      res.json({
+        success: true,
+        data: {
+          ...plain,
+          avatarUrl: avatar,
+          avatar,
+        },
+      });
+    } catch (error) {
+      logger.error('Upload avatar error:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Upload failed',
       });
     }
   }

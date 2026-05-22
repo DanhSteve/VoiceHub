@@ -1,8 +1,25 @@
 const express = require('express');
+const Organization = require('../models/Organization');
 const { buildAiTaskExtractContext } = require('../services/memberContext.service');
 const { syncMembershipPlacementFromRoles } = require('../services/membershipPlacementSync');
 
 const router = express.Router();
+
+/** Tên tổ chức cho webhook / service nội bộ (serverId RBAC = organizationId). */
+router.get('/org/:organizationId/summary', async (req, res) => {
+  try {
+    const org = await Organization.findById(req.params.organizationId).select('name').lean();
+    if (!org) {
+      return res.status(404).json({ success: false, message: 'Organization not found' });
+    }
+    return res.json({
+      success: true,
+      data: { organizationId: String(req.params.organizationId), name: org.name || 'Organization' },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Internal error' });
+  }
+});
 
 /**
  * POST body: { organizationId, userIds?, mentionLabels?, channelId? }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
@@ -9,6 +10,9 @@ import { useWorkspace } from '../../context/WorkspaceContext';
 import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
 import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
+import { useNotificationsInfinite } from '../../hooks/queries';
+import { useOrgShell } from '../../hooks/queries/useOrgShell';
+import { queryKeys } from '../../lib/queryKeys';
 import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 
@@ -71,9 +75,31 @@ function NotificationsPage() {
   const [filter, setFilter] = useState('all');
   const [notifSearch, setNotifSearch] = useState('');
   const [notifications, setNotifications] = useState([]);
-  const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [deleteNotifConfirmId, setDeleteNotifConfirmId] = useState(null);
   const { on, off } = useSocket();
+  const queryClient = useQueryClient();
+
+  const notifInfiniteQuery = useNotificationsInfinite({
+    scope: notificationScope,
+    organizationId: organizationIdFilter,
+  });
+
+  const { data: orgShellForBadge } = useOrgShell(organizationIdFilter, {
+    enabled: isOrgNotificationsPage && Boolean(organizationIdFilter),
+  });
+
+  useEffect(() => {
+    if (!isOrgNotificationsPage || !organizationIdFilter || !orgShellForBadge) return;
+    const unread = Number(orgShellForBadge?.badges?.notificationsUnreadOrg);
+    if (!Number.isFinite(unread)) return;
+    queryClient.setQueryData(
+      queryKeys.notifications.badge('organization', organizationIdFilter),
+      { unreadCount: Math.max(0, unread) },
+      { updatedAt: Date.now() }
+    );
+  }, [isOrgNotificationsPage, organizationIdFilter, orgShellForBadge, queryClient]);
+
+  const notificationsLoading = notifInfiniteQuery.isLoading;
 
   const getRelativeTime = (input) => {
     if (!input) return t('time.justNow');
@@ -178,40 +204,32 @@ function NotificationsPage() {
     };
   };
 
-  const loadNotifications = useCallback(async () => {
-    setNotificationsLoading(true);
-    try {
-      const response = await api.get('/notifications', {
-        params: {
-          limit: 100,
-          scope: notificationScope,
-          ...(notificationScope === 'organization' && organizationIdFilter
-            ? { organizationId: organizationIdFilter }
-            : {}),
-        },
-      });
-      const payload = response?.data || response;
-      const data = payload?.data || payload;
-      const list = Array.isArray(data?.notifications) ? data.notifications : [];
-      setNotifications(list.map(toViewNotification));
-    } catch (error) {
-      const msg = error?.response?.data?.message || t('notifications.loadFail');
-      toast.error(msg);
-    } finally {
-      setNotificationsLoading(false);
-    }
-  }, [organizationIdFilter, notificationScope, t]);
+  useEffect(() => {
+    const pages = notifInfiniteQuery.data?.pages || [];
+    const list = pages.flatMap((p) => (Array.isArray(p?.notifications) ? p.notifications : []));
+    setNotifications(list.map(toViewNotification));
+  }, [notifInfiniteQuery.data]);
 
   useEffect(() => {
-    loadNotifications();
-  }, [loadNotifications]);
+    if (notifInfiniteQuery.isError) {
+      const err = notifInfiniteQuery.error;
+      const msg = err?.response?.data?.message || t('notifications.loadFail');
+      toast.error(msg);
+    }
+  }, [notifInfiniteQuery.isError, notifInfiniteQuery.error, t]);
+
+  const reloadNotifications = useCallback(() => {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.notifications.infinite(notificationScope, organizationIdFilter),
+    });
+  }, [queryClient, notificationScope, organizationIdFilter]);
 
   /** Đồng bộ sau accept/reject kết bạn (cùng tab hoặc sau markFriendNotificationsResolved) */
   useEffect(() => {
-    const onRefresh = () => loadNotifications();
+    const onRefresh = () => reloadNotifications();
     window.addEventListener(NOTIFICATIONS_REFRESH_EVENT, onRefresh);
     return () => window.removeEventListener(NOTIFICATIONS_REFRESH_EVENT, onRefresh);
-  }, [loadNotifications]);
+  }, [reloadNotifications]);
 
   useEffect(() => {
     if (!on || !off) return;
@@ -607,6 +625,21 @@ function NotificationsPage() {
             </GlassCard>
           ))}
         </div>
+
+        {!notificationsLoading && notifInfiniteQuery.hasNextPage && (
+          <div className="flex justify-center pt-4">
+            <GradientButton
+              type="button"
+              variant="secondary"
+              disabled={notifInfiniteQuery.isFetchingNextPage}
+              onClick={() => notifInfiniteQuery.fetchNextPage()}
+            >
+              {notifInfiniteQuery.isFetchingNextPage
+                ? t('notifications.loading')
+                : t('notifications.loadMore')}
+            </GradientButton>
+          </div>
+        )}
 
         {!notificationsLoading && filteredNotifications.length === 0 && (
           <div className="text-center py-20">

@@ -12,6 +12,8 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import ProfileModal from '../Profile/ProfileModal';
+import UserAvatar from '../Shared/UserAvatar';
+import { getUserDisplayName } from '../../utils/helpers';
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Bảng điều khiển' },
@@ -27,13 +29,7 @@ const Sidebar = ({ onClose }) => {
   const [openProfile, setOpenProfile] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
-  const displayName = user?.fullName || user?.name || user?.displayName || user?.email?.split('@')[0] || 'Người dùng';
-  const initials = (displayName || 'U')
-    .split(' ')
-    .map((n) => n[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
+  const displayName = getUserDisplayName(user) || user?.email?.split('@')[0] || 'Người dùng';
 
   const handleLogout = async () => {
     await logout();
@@ -55,20 +51,7 @@ const Sidebar = ({ onClose }) => {
           onClick={() => setOpenProfile((prev) => !prev)}
           className="flex items-center gap-3 px-2 py-1 rounded-xl hover:bg-dark-700 transition-colors w-full text-left"
         >
-          <div className="relative">
-            {user?.avatar ? (
-              <img
-                src={user.avatar}
-                alt={displayName}
-                className="w-10 h-10 rounded-full object-cover border border-primary-500"
-              />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-sm font-bold text-white">
-                {initials}
-              </div>
-            )}
-            <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-400 border-2 border-dark-800" />
-          </div>
+          <UserAvatar avatar={user?.avatar} name={displayName} size="md" showOnline status="online" />
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm truncate">{displayName}</p>
             <p className="text-xs text-gray-400 truncate">
@@ -93,17 +76,7 @@ const Sidebar = ({ onClose }) => {
         <div className="absolute top-20 left-3 right-3 z-20 animate-slideUp">
           <div className="glass-strong rounded-2xl p-4 shadow-xl border border-white/5 bg-gradient-to-b from-dark-700/95 to-dark-800/95">
             <div className="flex items-center gap-3 mb-4">
-              {user?.avatar ? (
-                <img
-                  src={user.avatar}
-                  alt={displayName}
-                  className="w-12 h-12 rounded-full object-cover border border-primary-500"
-                />
-              ) : (
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-base font-bold text-white">
-                  {initials}
-                </div>
-              )}
+              <UserAvatar avatar={user?.avatar} name={displayName} size="lg" showOnline status="online" />
               <div className="flex-1 min-w-0">
                 <p className="font-bold text-sm truncate">{displayName}</p>
                 <p className="text-xs text-gray-400 truncate">{user?.email}</p>

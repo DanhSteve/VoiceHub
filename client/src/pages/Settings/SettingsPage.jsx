@@ -8,6 +8,7 @@ import userService from '../../services/userService';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
+import UserAvatar from '../../components/Shared/UserAvatar';
 
 const isValidMongoObjectId = (s) =>
   typeof s === 'string' && /^[a-fA-F0-9]{24}$/.test(s);
@@ -999,13 +1000,11 @@ function SettingsPage() {
             <GlassCard className={gc}>
               <h3 className={`text-xl font-bold mb-4 ${st.heading}`}>{t('settingsPage.profileTitle')}</h3>
               <div className="flex items-center gap-6 mb-6">
-                <div className="w-24 h-24 rounded-full bg-gradient-to-br from-cyan-600 to-teal-600 flex items-center justify-center text-5xl overflow-hidden">
-                  {avatarUrl ? (
-                    <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                  ) : (
-                    '👤'
-                  )}
-                </div>
+                <UserAvatar
+                  avatar={avatarUrl || null}
+                  name={userProfileForm.fullName || user?.displayName || user?.name}
+                  size="2xl"
+                />
                 <label className="inline-flex">
                   <input type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
                   <span className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 font-semibold text-white cursor-pointer hover:from-cyan-700 hover:to-teal-700 transition-all">{t('settingsPage.changeAvatar')}</span>

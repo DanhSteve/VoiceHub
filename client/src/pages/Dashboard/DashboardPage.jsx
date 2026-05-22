@@ -11,21 +11,21 @@ import { useSocket } from '../../context/SocketContext';
 import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
 import { meetingAPI } from '../../services/api/meetingAPI';
-import { organizationAPI } from '../../services/api/organizationAPI';
 import { taskAPI } from '../../services/api/taskAPI';
-import friendService from '../../services/friendService';
+import {
+  useDashboardSummary,
+  useFriendPending,
+  useFriendsList,
+  useNotificationsPreview,
+  useOrganizationsMy,
+} from '../../hooks/queries';
 import { appShellBg } from '../../theme/shellTheme';
 import { useLandingSafeNavigate } from '../../hooks/useLandingSafeNavigate';
 import { useAppStrings } from '../../locales/appStrings';
 import { useLocale } from '../../context/LocaleContext';
 import DashboardGlobalSearchModal from '../../components/Dashboard/DashboardGlobalSearchModal';
-
-function initialsFromName(name) {
-  if (!name || typeof name !== 'string') return '?';
-  const p = name.trim().split(/\s+/).filter(Boolean);
-  if (p.length >= 2) return `${p[0][0]}${p[p.length - 1][0]}`.toUpperCase();
-  return name.slice(0, 2).toUpperCase();
-}
+import UserAvatar from '../../components/Shared/UserAvatar';
+import { getUserDisplayName } from '../../utils/helpers';
 
 /** Mini sparkline — thanh nhỏ cho thẻ metric */
 function MiniSparkline({ up = true, className = '' }) {
@@ -84,7 +84,7 @@ async function sumTaskDoneAcrossOrgs(orgIds) {
   return { total, allFailed: failures === orgIds.length };
 }
 
-async function fetchMessagesForDashboardPaged(api, { maxPages = 40, limit = 100 } = {}) {
+async function fetchMessagesForDashboardPaged(api, { maxPages = 3, limit = 50 } = {}) {
   const rows = [];
   for (let page = 1; page <= maxPages; page += 1) {
     const msgRes = await api.get('/messages', { params: { limit, page }, skipGlobalErrorHandling: true }).catch(() => null);
@@ -98,7 +98,7 @@ async function fetchMessagesForDashboardPaged(api, { maxPages = 40, limit = 100 
   return rows;
 }
 
-async function fetchTasksForDashboardPaged({ maxPages = 25, limit = 100 } = {}) {
+async function fetchTasksForDashboardPaged({ maxPages = 3, limit = 50 } = {}) {
   const rows = [];
   for (let page = 1; page <= maxPages; page += 1) {
     const res = await taskAPI.getTasks({ limit, page }).catch(() => null);
@@ -246,6 +246,12 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   const { locale } = useLocale();
   const currentUserKey = String(user?.userId || user?._id || user?.id || '').trim();
 
+  const orgsQuery = useOrganizationsMy({ enabled: !landingDemo });
+  const summaryQuery = useDashboardSummary({ enabled: !landingDemo });
+  const friendsQuery = useFriendsList({ enabled: !landingDemo });
+  const pendingQuery = useFriendPending({ enabled: !landingDemo });
+  const notificationsQuery = useNotificationsPreview({ limit: 8, enabled: !landingDemo });
+
   const displayName =
     user?.fullName ||
     user?.name ||
@@ -358,13 +364,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     let cancelled = false;
     (async () => {
       try {
-        const orgPayload = await organizationAPI.getOrganizations().catch(() => null);
-        let orgList = [];
-        if (orgPayload && Array.isArray(orgPayload.data)) {
-          orgList = orgPayload.data;
-        } else if (Array.isArray(orgPayload)) {
-          orgList = orgPayload;
-        }
+        const orgList = Array.isArray(orgsQuery.data) ? orgsQuery.data : [];
         setWorkspaceEntries(
           orgList.slice(0, 6).map((org) => ({
             id: org?._id || org?.id,
@@ -376,30 +376,24 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         const orgSlugById = new Map(
           orgList.map((org) => [String(org?._id || org?.id || ''), String(org?.slug || '')])
         );
-        const orgCount = orgList.length;
+        const summary = summaryQuery.data;
+        const orgCount = summary?.orgCount ?? orgList.length;
         const orgIds = orgList
           .map((org) => String(org?._id || org?.id || '').trim())
           .filter(isValidObjectId);
 
-        let taskDone = null;
-        if (orgIds.length === 0) {
+        let taskDone = summary?.taskDone ?? null;
+        if (taskDone == null && orgIds.length === 0) {
           taskDone = 0;
-        } else {
+        } else if (taskDone == null && orgIds.length > 0) {
           const taskStats = await sumTaskDoneAcrossOrgs(orgIds);
           taskDone = taskStats.allFailed ? null : taskStats.total;
         }
 
-        const fr = await friendService.getFriends().catch(() => null);
-        let friendsTotal = null;
-        let friendsRaw = [];
-        if (fr) {
-          const inner = fr.data ?? fr;
-          const list = inner?.friends ?? inner?.data?.friends;
-          if (Array.isArray(list)) {
-            friendsRaw = list;
-            friendsTotal = list.length;
-          }
-        }
+        const friendsRaw = Array.isArray(friendsQuery.data) ? friendsQuery.data : [];
+        const friendsTotal =
+          summary?.friendsTotal ??
+          (friendsQuery.isLoading && friendsQuery.data === undefined ? null : friendsRaw.length);
 
         const presence = friendsRaw.slice(0, 12).map((row) => {
           const u = row.friendId && typeof row.friendId === 'object' ? row.friendId : null;
@@ -416,80 +410,89 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         });
         setPresenceFriends(presence);
 
-        const startFrom = new Date();
-        const startTo = new Date(startFrom.getTime() + 7 * 24 * 60 * 60 * 1000);
-        const meetingRes = await meetingAPI
-          .getMeetings({
-            startFrom: startFrom.toISOString(),
-            startTo: startTo.toISOString(),
-            limit: 8,
-          })
-          .catch(() => null);
         let meetingsUi = [];
-        if (meetingRes) {
-          const body = meetingRes?.data ?? meetingRes;
-          const inner = body?.data ?? body;
-          const meetings = inner?.meetings ?? inner?.data?.meetings;
-          if (Array.isArray(meetings)) {
-            meetingsUi = meetings.slice(0, 5).map((m) => {
-              const startDt = m.startTime ? new Date(m.startTime) : null;
-              const timeStr =
-                startDt && !Number.isNaN(startDt.getTime())
-                  ? startDt.toLocaleTimeString(locale === 'en' ? 'en-US' : 'vi-VN', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })
-                  : '—';
-              const parts = Array.isArray(m.participants) ? m.participants.length : 0;
-              return {
-                id: m._id,
-                title: m.title || t('dashboard.meetingFallback'),
-                time: timeStr,
-                attendees: parts || 1,
-                startTime: m.startTime,
-              };
-            });
+        const summaryMeetings = Array.isArray(summary?.upcomingMeetings)
+          ? summary.upcomingMeetings
+          : [];
+        if (summaryMeetings.length > 0) {
+          meetingsUi = summaryMeetings.map((m) => {
+            const startDt = m.startTime ? new Date(m.startTime) : null;
+            const timeStr =
+              startDt && !Number.isNaN(startDt.getTime())
+                ? startDt.toLocaleTimeString(locale === 'en' ? 'en-US' : 'vi-VN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : '—';
+            return {
+              id: m.id || m._id,
+              title: m.title || t('dashboard.meetingFallback'),
+              time: timeStr,
+              attendees: Number(m.participants) || 1,
+              startTime: m.startTime,
+            };
+          });
+        } else {
+          const startFrom = new Date();
+          const startTo = new Date(startFrom.getTime() + 7 * 24 * 60 * 60 * 1000);
+          const meetingRes = await meetingAPI
+            .getMeetings({
+              startFrom: startFrom.toISOString(),
+              startTo: startTo.toISOString(),
+              limit: 8,
+            })
+            .catch(() => null);
+          if (meetingRes) {
+            const body = meetingRes?.data ?? meetingRes;
+            const inner = body?.data ?? body;
+            const meetings = inner?.meetings ?? inner?.data?.meetings;
+            if (Array.isArray(meetings)) {
+              meetingsUi = meetings.slice(0, 5).map((m) => {
+                const startDt = m.startTime ? new Date(m.startTime) : null;
+                const timeStr =
+                  startDt && !Number.isNaN(startDt.getTime())
+                    ? startDt.toLocaleTimeString(locale === 'en' ? 'en-US' : 'vi-VN', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                    : '—';
+                const parts = Array.isArray(m.participants) ? m.participants.length : 0;
+                return {
+                  id: m._id,
+                  title: m.title || t('dashboard.meetingFallback'),
+                  time: timeStr,
+                  attendees: parts || 1,
+                  startTime: m.startTime,
+                };
+              });
+            }
           }
         }
         setUpcomingMeetings(meetingsUi);
 
-        const pend = await friendService
-          .getPendingRequests({ skipGlobalErrorHandling: true })
-          .catch(() => null);
-        let pendingCount = 0;
-        if (pend) {
-          const raw = pend.data ?? pend;
-          const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
-          pendingCount = arr.length;
-        }
-
-        const notif = await api
-          .get('/notifications', { params: { limit: 8 }, skipGlobalErrorHandling: true })
-          .catch(() => null);
-        let unread = 0;
-        let dashboardRecentNotifications = [];
-        if (notif) {
-          const nd = notif.data?.data ?? notif.data ?? notif;
-          unread = Number(nd?.unreadCount) || 0;
-          const rows = Array.isArray(nd?.notifications) ? nd.notifications : [];
-          const nowTs = Date.now();
-          const relTime = (value) => {
-            const ts = value ? new Date(value).getTime() : NaN;
-            if (!Number.isFinite(ts)) return 'Vừa xong';
-            const diffMin = Math.max(1, Math.floor((nowTs - ts) / 60000));
-            if (diffMin < 60) return `${diffMin} phút trước`;
-            const diffHours = Math.floor(diffMin / 60);
-            if (diffHours < 24) return `${diffHours} giờ trước`;
-            const diffDays = Math.floor(diffHours / 24);
-            return `${diffDays} ngày trước`;
-          };
-          dashboardRecentNotifications = rows.slice(0, 3).map((row, idx) => ({
-            id: row?._id || row?.id || `nt-${idx}`,
-            title: row?.title || 'Thông báo',
-            preview: row?.content || row?.message || '',
-            time: relTime(row?.createdAt),
-          }));
-        }
+        const pendingCount = summary?.pendingCount ?? pendingQuery.pendingCount ?? 0;
+        const unread =
+          summary?.unread ?? (Number(notificationsQuery.data?.unreadCount) || 0);
+        const notifRows = Array.isArray(notificationsQuery.data?.notifications)
+          ? notificationsQuery.data.notifications
+          : [];
+        const nowTs = Date.now();
+        const relTime = (value) => {
+          const ts = value ? new Date(value).getTime() : NaN;
+          if (!Number.isFinite(ts)) return 'Vừa xong';
+          const diffMin = Math.max(1, Math.floor((nowTs - ts) / 60000));
+          if (diffMin < 60) return `${diffMin} phút trước`;
+          const diffHours = Math.floor(diffMin / 60);
+          if (diffHours < 24) return `${diffHours} giờ trước`;
+          const diffDays = Math.floor(diffHours / 24);
+          return `${diffDays} ngày trước`;
+        };
+        const dashboardRecentNotifications = notifRows.slice(0, 3).map((row, idx) => ({
+          id: row?._id || row?.id || `nt-${idx}`,
+          title: row?.title || 'Thông báo',
+          preview: row?.content || row?.message || '',
+          time: relTime(row?.createdAt),
+        }));
 
         const dayKey = dayKeyFromDate;
         const getRowId = (value) => String(value?._id || value?.id || value || '').trim();
@@ -578,7 +581,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             });
           }
         });
-        const msgRows = await fetchMessagesForDashboardPaged(api, { maxPages: 40, limit: 100 }).catch(() => []);
+        const msgRows = await fetchMessagesForDashboardPaged(api, { maxPages: 3, limit: 50 }).catch(() => []);
         msgRows.forEach((msg) => {
           const senderId = getRowId(msg.senderId);
           if (currentUserKey && senderId !== currentUserKey) return;
@@ -719,7 +722,19 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     return () => {
       cancelled = true;
     };
-  }, [currentUserKey, metricsTick, landingDemo, demoVariant, locale, t]);
+  }, [
+    currentUserKey,
+    metricsTick,
+    landingDemo,
+    demoVariant,
+    locale,
+    t,
+    orgsQuery.data,
+    summaryQuery.data,
+    friendsQuery.data,
+    pendingQuery.pendingCount,
+    notificationsQuery.data,
+  ]);
 
   /**
    * Presence realtime: khi socket đã kết nối, danh sách `onlineUsers` từ socket-service là nguồn đúng
@@ -1089,7 +1104,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     <>
     <div className={`relative flex ${shellH} overflow-hidden ${shellBg}`}>
       <ShellWaveBackdrop />
-      <div className="relative z-[1] h-full shrink-0">
+      <div className="relative z-[2] h-full shrink-0">
         <NavigationSidebar landingDemo={landingDemo} />
       </div>
 
@@ -1401,9 +1416,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           <div className={`rounded-2xl p-3.5 ${isDarkMode ? 'bg-[#0f1218]' : 'bg-white'}`}>
             <div className={`rounded-2xl p-3 ${isDarkMode ? 'bg-gradient-to-b from-[#1a1f2b] to-[#141821]' : 'bg-slate-50'}`}>
               <div className="flex items-center gap-3">
-                <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-extrabold ${isDarkMode ? 'bg-indigo-500 text-white' : 'bg-indigo-100 text-indigo-700'}`}>
-                  {initialsFromName(displayName)}
-                </div>
+                <UserAvatar avatar={user?.avatar} name={displayName} size="md" />
                 <div className="min-w-0">
                   <div className={`truncate text-base font-bold ${textHeading}`}>{displayName}</div>
                 </div>
@@ -1497,17 +1510,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                     className="relative rounded-full outline-none ring-offset-2 ring-offset-transparent transition hover:ring-2 hover:ring-cyan-500/40 focus-visible:ring-2 focus-visible:ring-cyan-500/50"
                     aria-label={t('friendChat.openChatAria', { name: pf.name })}
                   >
-                    <div
-                      className={`flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br ${
-                        ['from-cyan-600 to-teal-600', 'from-blue-500 to-cyan-500', 'from-emerald-500 to-teal-600'][idx % 3]
-                      } text-xs font-bold text-white`}
-                    >
-                      {pf.avatarUrl ? (
-                        <img src={pf.avatarUrl} alt="" className="h-full w-full rounded-full object-cover" />
-                      ) : (
-                        initialsFromName(pf.name)
-                      )}
-                    </div>
+                    <UserAvatar avatar={pf.avatarUrl} name={pf.name} size="md" />
                     <StatusIndicator status={pf.status} />
                   </button>
                   <span

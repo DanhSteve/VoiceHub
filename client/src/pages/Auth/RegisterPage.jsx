@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import AuthPageLayout from '../../components/Auth/AuthPageLayout';
@@ -8,6 +8,11 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useAppStrings } from '../../locales/appStrings';
 import authService from '../../services/authService';
+import {
+  birthYearOptions,
+  isBirthDateComplete,
+  validateBirthDateParts,
+} from '../../utils/birthDateUtils';
 
 function RegisterPage() {
   const navigate = useNavigate();
@@ -31,9 +36,13 @@ function RegisterPage() {
     firstName: '',
     lastName: '',
     email: '',
+    birthDay: '',
+    birthMonth: '',
+    birthYear: '',
     password: '',
     confirmPassword: '',
   });
+  const yearOptions = useMemo(() => birthYearOptions(), []);
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -101,6 +110,21 @@ function RegisterPage() {
       newErrors.email = t('register.errEmail');
     }
 
+    if (!isBirthDateComplete(formData)) {
+      newErrors.birthDate = t('register.errBirthRequired');
+    } else {
+      const dob = validateBirthDateParts(formData);
+      if (!dob.ok) {
+        const codeMap = {
+          required: 'register.errBirthRequired',
+          invalid: 'register.errBirthInvalid',
+          future: 'register.errBirthFuture',
+          tooYoung: 'register.errBirthTooYoung',
+        };
+        newErrors.birthDate = t(codeMap[dob.code] || 'register.errBirthInvalid');
+      }
+    }
+
     if (!formData.password || formData.password.length < 8) {
       newErrors.password = t('register.errPasswordMin');
     } else if (passwordStrength < 3) {
@@ -133,12 +157,18 @@ function RegisterPage() {
     try {
       const firstName = formData.firstName.trim();
       const lastName = formData.lastName.trim();
+      const dob = validateBirthDateParts(formData);
+      if (!dob.ok) {
+        setErrors({ birthDate: t('register.errBirthInvalid') });
+        return;
+      }
 
       const success = await register({
         firstName,
         lastName,
-        email: formData.email,
+        email: formData.email.trim(),
         password: formData.password,
+        dateOfBirth: dob.iso,
       });
 
       if (success) {
@@ -220,6 +250,72 @@ function RegisterPage() {
             placeholder={t('register.placeholderEmail')}
           />
           {errors.email && <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">{errors.email}</p>}
+        </div>
+
+        <div>
+          <label className={`mb-2.5 block text-base font-semibold ${labelCls}`}>{t('register.birthDate')}</label>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <span className={`mb-1 block text-xs font-medium ${mutedCls}`}>{t('register.birthDay')}</span>
+              <select
+                value={formData.birthDay}
+                onChange={(e) => {
+                  setFormData({ ...formData, birthDay: e.target.value });
+                  if (errors.birthDate) setErrors({ ...errors, birthDate: '' });
+                }}
+                className={errors.birthDate ? inputErr : inputOk}
+                aria-label={t('register.birthDay')}
+              >
+                <option value="">{t('register.birthDayPlaceholder')}</option>
+                {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={String(d)}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <span className={`mb-1 block text-xs font-medium ${mutedCls}`}>{t('register.birthMonth')}</span>
+              <select
+                value={formData.birthMonth}
+                onChange={(e) => {
+                  setFormData({ ...formData, birthMonth: e.target.value });
+                  if (errors.birthDate) setErrors({ ...errors, birthDate: '' });
+                }}
+                className={errors.birthDate ? inputErr : inputOk}
+                aria-label={t('register.birthMonth')}
+              >
+                <option value="">{t('register.birthMonthPlaceholder')}</option>
+                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                  <option key={m} value={String(m)}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <span className={`mb-1 block text-xs font-medium ${mutedCls}`}>{t('register.birthYear')}</span>
+              <select
+                value={formData.birthYear}
+                onChange={(e) => {
+                  setFormData({ ...formData, birthYear: e.target.value });
+                  if (errors.birthDate) setErrors({ ...errors, birthDate: '' });
+                }}
+                className={errors.birthDate ? inputErr : inputOk}
+                aria-label={t('register.birthYear')}
+              >
+                <option value="">{t('register.birthYearPlaceholder')}</option>
+                {yearOptions.map((y) => (
+                  <option key={y} value={String(y)}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {errors.birthDate && (
+            <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">{errors.birthDate}</p>
+          )}
         </div>
 
         <div>
@@ -306,6 +402,7 @@ function RegisterPage() {
             !formData.firstName ||
             !formData.lastName ||
             !formData.email ||
+            !isBirthDateComplete(formData) ||
             !formData.password ||
             !formData.confirmPassword
           }

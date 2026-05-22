@@ -1,5 +1,6 @@
 /**
- * Map FilterToken + ô tự do → query GET /messages/search
+ * Map FilterToken + ô tự do → query GET /messages/search (gateway /api).
+ * Backend dùng Meilisearch khi MESSAGE_SEARCH_ENGINE=meilisearch; contract pageToken giữ nguyên.
  */
 
 import api from '../../services/api';
@@ -58,8 +59,13 @@ export function buildOrgMessageSearchParams(tokens, keyword, ctx) {
     params.set('messageType', String(ctx.messageType));
   }
 
-  params.set('page', String(ctx.page || 1));
   params.set('limit', String(ctx.limit || 20));
+  params.set('fields', 'summary');
+  if (ctx.pageToken) {
+    params.set('pageToken', String(ctx.pageToken));
+  } else if (ctx.page && ctx.page > 1) {
+    params.set('page', String(ctx.page));
+  }
 
   return params;
 }

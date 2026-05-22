@@ -1,15 +1,15 @@
-import { isAvatarImageUrl, displayInitials } from '../../utils/avatarDisplay';
-
-const SIZE_CLASS = {
-  xs: 'h-7 w-7 text-[9px]',
-  sm: 'h-9 w-9 text-[10px]',
-  md: 'h-10 w-10 text-[10px]',
-  lg: 'h-14 w-14 text-sm',
-  xl: 'h-20 w-20 text-2xl',
-};
+import { useEffect, useState } from 'react';
+import {
+  AVATAR_TEXT_CLASS,
+  avatarImageShellClassName,
+  avatarPlaceholderClassName,
+  displayInitials,
+  isAvatarImageUrl,
+  resolveAvatarSrc,
+} from '../../utils/avatarDisplay';
 
 /**
- * Avatar thống nhất: ảnh URL hoặc initials — không dùng emoji làm avatar lớn.
+ * Avatar thống nhất: ảnh (URL/upload) hoặc initials trên nền màu — bo góc rounded-xl.
  */
 export default function UserAvatar({
   avatar,
@@ -21,32 +21,45 @@ export default function UserAvatar({
   showOnline = false,
   status = 'offline',
   title,
+  cacheBust,
 }) {
-  const sizeCls = SIZE_CLASS[size] || SIZE_CLASS.md;
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [avatar, cacheBust]);
+
   const clickable = typeof onClick === 'function';
   const Wrapper = clickable ? 'button' : 'div';
   const isOnline = status === 'online';
+  const hasImage = isAvatarImageUrl(avatar) && !imgFailed;
+  const shellClass = hasImage
+    ? avatarImageShellClassName(size, ringClassName)
+    : avatarPlaceholderClassName(name, size, ringClassName);
 
   return (
     <Wrapper
       type={clickable ? 'button' : undefined}
       onClick={onClick}
       title={title}
-      className={`relative inline-flex shrink-0 ${clickable ? 'cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50' : ''} ${className}`}
+      className={`relative shrink-0 ${clickable ? 'cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50' : ''} ${className}`}
     >
-      <span
-        className={`flex items-center justify-center overflow-hidden rounded-full font-bold tracking-tight ${sizeCls} ${ringClassName}`}
-      >
-        {isAvatarImageUrl(avatar) ? (
-          <img src={avatar.trim()} alt="" className="h-full w-full object-cover" />
+      <span className={shellClass}>
+        {hasImage ? (
+          <img
+            src={resolveAvatarSrc(avatar, cacheBust)}
+            alt=""
+            className="h-full w-full object-cover"
+            onError={() => setImgFailed(true)}
+          />
         ) : (
-          <span className="select-none">{displayInitials(name)}</span>
+          <span className={AVATAR_TEXT_CLASS}>{displayInitials(name)}</span>
         )}
       </span>
       {showOnline && (
         <span
           className={`pointer-events-none absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-inherit ${
-            size === 'xl' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5'
+            size === 'xl' || size === '2xl' ? 'h-3.5 w-3.5' : 'h-2.5 w-2.5'
           } ${isOnline ? 'bg-emerald-500' : 'bg-zinc-500'}`}
           aria-hidden
         />

@@ -5,48 +5,9 @@ const Division = require('../models/Division');
 const {
   fetchUserRoleNamesInOrg,
   resolveUserHierarchyScopes,
+  pickPrimaryPlacement,
 } = require('../utils/memberPlacementScope');
 const { logger } = require('/shared');
-
-function pickPrimaryPlacement(scopes, { teams = [], departments = [] } = {}) {
-  if (!scopes) {
-    return { branchId: null, divisionId: null, departmentId: null, teamId: null };
-  }
-
-  if (scopes.teamIds?.size) {
-    const teamId = [...scopes.teamIds][0];
-    const team = teams.find((t) => String(t._id) === String(teamId));
-    return {
-      branchId: team?.branch ? String(team.branch) : null,
-      divisionId: team?.division ? String(team.division) : null,
-      departmentId: team?.department ? String(team.department) : null,
-      teamId: String(teamId),
-    };
-  }
-
-  if (scopes.departmentIds?.size) {
-    const departmentId = [...scopes.departmentIds][0];
-    const dept = departments.find((d) => String(d._id) === String(departmentId));
-    return {
-      branchId: dept?.branch ? String(dept.branch) : null,
-      divisionId: dept?.division ? String(dept.division) : null,
-      departmentId: String(departmentId),
-      teamId: null,
-    };
-  }
-
-  if (scopes.divisionIds?.size) {
-    const divisionId = [...scopes.divisionIds][0];
-    return {
-      branchId: null,
-      divisionId: String(divisionId),
-      departmentId: null,
-      teamId: null,
-    };
-  }
-
-  return { branchId: null, divisionId: null, departmentId: null, teamId: null };
-}
 
 async function addUserToEntityMembers(Model, entityId, userId) {
   if (!entityId || !userId) return;
@@ -106,7 +67,7 @@ async function syncMembershipPlacementFromRoles(userId, organizationId) {
     departments,
     teams,
   });
-  const placement = pickPrimaryPlacement(scopes, { teams, departments });
+  const placement = pickPrimaryPlacement(scopes, { teams, departments, roleNames });
 
   const prevTeamId = membership.team ? String(membership.team) : null;
   const prevDeptId = membership.department ? String(membership.department) : null;
@@ -151,5 +112,4 @@ async function syncMembershipPlacementFromRoles(userId, organizationId) {
 
 module.exports = {
   syncMembershipPlacementFromRoles,
-  pickPrimaryPlacement,
 };

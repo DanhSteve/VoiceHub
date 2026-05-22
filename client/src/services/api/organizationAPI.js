@@ -36,8 +36,19 @@ export const organizationAPI = {
     return response;
   },
 
+  getOrgShell: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/shell`, {
+      skipPermissionDeniedToast: true,
+      skipNotFoundToast: true,
+      skipGlobalErrorHandling: true,
+    });
+    return response;
+  },
+
   getStructure: async (orgId) => {
-    const response = await apiClient.get(`/organizations/${orgId}/structure`);
+    const response = await apiClient.get(`/organizations/${orgId}/structure`, {
+      skipPermissionDeniedToast: true,
+    });
     return response;
   },
 
@@ -116,12 +127,16 @@ export const organizationAPI = {
     return response;
   },
   getAccessibleChannelIds: async (orgId) => {
-    const response = await apiClient.get(`/organizations/${orgId}/accessible-channel-ids`);
+    const response = await apiClient.get(`/organizations/${orgId}/accessible-channel-ids`, {
+      skipPermissionDeniedToast: true,
+    });
     return response;
   },
 
   getTaskWorkspaceScope: async (orgId) => {
-    const response = await apiClient.get(`/organizations/${orgId}/task-workspace-scope`);
+    const response = await apiClient.get(`/organizations/${orgId}/task-workspace-scope`, {
+      skipPermissionDeniedToast: true,
+    });
     return response;
   },
   listChannelAccess: async (orgId, channelId) => {
@@ -215,9 +230,27 @@ export const organizationAPI = {
     return response;
   },
 
+  getDocumentsOverview: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/documents-overview`, {
+      skipPermissionDeniedToast: true,
+      skipGlobalErrorHandling: true,
+    });
+    return response;
+  },
+
   // Get organization members
   getMembers: async (orgId) => {
-    const response = await apiClient.get(`/organizations/${orgId}/members`);
+    const response = await apiClient.get(`/organizations/${orgId}/members`, {
+      skipPermissionDeniedToast: true,
+    });
+    return response;
+  },
+
+  getMembersWithRoles: async (orgId) => {
+    const response = await apiClient.get(`/organizations/${orgId}/members/with-roles`, {
+      skipPermissionDeniedToast: true,
+      skipGlobalErrorHandling: true,
+    });
     return response;
   },
 

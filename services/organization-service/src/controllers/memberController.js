@@ -11,35 +11,20 @@ const {
   placementsMatch,
   buildSuffixToIdMap,
 } = require('../utils/memberPlacementScope');
+const { resolveOrgAccess } = require('../utils/orgAccess');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { emitRealtimeEvent } = require('/shared');
+const { emitRealtimeEvent, resolveFrontendUrl } = require('/shared');
 const { ensureDefaultOrgRoles, syncUserOrgRole, stripUserOrgRoles } = require('../services/rolePermissionOrgSync');
+const { invalidateOrgReadCache, invalidateOrgAcl } = require('../services/orgReadCache.service');
+const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
 // Không log JWT/link mời đầy đủ — production nên dùng HTTPS cho FRONTEND_URL.
 const ALLOWED_ROLES = ['owner', 'admin', 'hr', 'member'];
 const INVITE_LINK_SECRET = String(process.env.INVITE_LINK_SECRET || process.env.JWT_SECRET || '').trim();
 const INVITE_LINK_EXPIRES_IN = process.env.INVITE_LINK_EXPIRES_IN || '7d';
-const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
 const NOTIFICATION_SERVICE_URL =
   process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3003';
 const NOTIFICATION_INTERNAL_TOKEN = String(process.env.NOTIFICATION_INTERNAL_TOKEN || '').trim();
-
-function resolveFrontendUrl(req) {
-  // Ưu tiên origin của request để không bị dính localhost khi client mở từ IP LAN.
-  const origin = req?.headers?.origin;
-  if (origin && String(origin).trim()) return String(origin).trim().replace(/\/+$/, '');
-
-  const referer = req?.headers?.referer;
-  if (referer && String(referer).trim()) {
-    try {
-      return new URL(String(referer)).origin;
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return FRONTEND_URL;
-}
 
 function notificationServiceAxiosOpts() {
   const opts = { timeout: 8000 };
@@ -176,96 +161,157 @@ async function createPendingJoinApplication({
 
 const MEMBER_LIST_FULL_ACCESS_ROLES = ['owner', 'admin', 'hr'];
 
-exports.getMembers = async (req, res, next) => {
+const ROLE_PERMISSION_BASE = String(
+  process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015'
+).replace(/\/$/, '');
+const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
+
+function rolePermissionInternalHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (GATEWAY_INTERNAL_TOKEN) h['x-gateway-internal-token'] = GATEWAY_INTERNAL_TOKEN;
+  return h;
+}
+
+async function fetchOrgRolesList(orgId) {
+  const oid = String(orgId || '').trim();
+  if (!oid || !GATEWAY_INTERNAL_TOKEN) return [];
   try {
-    const orgId = req.params.orgId;
-    const userId = String(req.user?.id || req.user?.userId || req.user?._id || '');
-    if (!userId) {
-      return res.status(401).json({ status: 'fail', message: 'Not authenticated' });
-    }
+    const res = await axios.get(
+      `${ROLE_PERMISSION_BASE}/api/roles/server/${encodeURIComponent(oid)}`,
+      { headers: rolePermissionInternalHeaders(), timeout: 8000, validateStatus: () => true }
+    );
+    if (res.status >= 400) return [];
+    const body = res.data?.data ?? res.data;
+    return Array.isArray(body) ? body : [];
+  } catch {
+    return [];
+  }
+}
 
-    const viewerMembership = await Membership.findOne({
-      user: userId,
-      organization: orgId,
-      status: 'active',
-    }).lean();
-    if (!viewerMembership) {
-      return res.status(403).json({ status: 'fail', message: 'Access denied' });
-    }
+async function listMembersForOrg(req) {
+  const orgId = req.params.orgId;
+  const userId = String(req.user?.id || req.user?.userId || req.user?._id || '');
+  if (!userId) {
+    const err = new Error('Not authenticated');
+    err.statusCode = 401;
+    throw err;
+  }
 
-    const members = await Membership.find({ organization: orgId, status: 'active' })
-      // organization-service không đăng ký model User; trả userId thô để client tự enrich profile.
-      .select('user organization role department branch division team joinedAt status invitedBy createdAt updatedAt')
-      .lean();
+  const access = await resolveOrgAccess(userId, orgId);
+  if (!access.ok) {
+    const err = new Error('Access denied');
+    err.statusCode = 403;
+    err.code = 'ORG_ACCESS_DENIED';
+    throw err;
+  }
+  const viewerMembership = access.membership;
+  if (!viewerMembership) {
+    return [];
+  }
 
-    const viewerRole = Membership.normalizeRole(viewerMembership.role);
-    if (MEMBER_LIST_FULL_ACCESS_ROLES.includes(viewerRole)) {
-      return res.json({ status: 'success', data: members });
-    }
+  const members = await Membership.find({ organization: orgId, status: 'active' })
+    .select('user organization role department branch division team joinedAt status invitedBy createdAt updatedAt')
+    .lean();
 
-    const teamIds = [
-      ...new Set(
-        [viewerMembership, ...members]
-          .map((row) => (row?.team ? String(row.team) : ''))
-          .filter(Boolean)
-      ),
-    ];
-    const teams =
-      teamIds.length > 0
-        ? await Team.find({ _id: { $in: teamIds }, organization: orgId })
-            .select('_id division department')
-            .lean()
-        : [];
-    const teamById = new Map(teams.map((team) => [String(team._id), team]));
+  const viewerRole = Membership.normalizeRole(viewerMembership.role);
+  if (MEMBER_LIST_FULL_ACCESS_ROLES.includes(viewerRole)) {
+    return members;
+  }
 
-    const [divisions, departments, viewerRoleNames] = await Promise.all([
-      Division.find({ organization: orgId }).select('_id name').lean(),
-      Department.find({ organization: orgId }).select('_id name division').lean(),
-      fetchUserRoleNamesInOrg(userId, orgId),
-    ]);
+  const teamIds = [
+    ...new Set(
+      [viewerMembership, ...members]
+        .map((row) => (row?.team ? String(row.team) : ''))
+        .filter(Boolean)
+    ),
+  ];
+  const teams =
+    teamIds.length > 0
+      ? await Team.find({ _id: { $in: teamIds }, organization: orgId })
+          .select('_id division department')
+          .lean()
+      : [];
+  const teamById = new Map(teams.map((team) => [String(team._id), team]));
 
-    const scopeContext = {
-      divisionBySuffix: buildSuffixToIdMap(divisions),
-      departmentBySuffix: buildSuffixToIdMap(departments),
-      divisions,
-      departments,
-    };
+  const [divisions, departments, viewerRoleNames] = await Promise.all([
+    Division.find({ organization: orgId }).select('_id name').lean(),
+    Department.find({ organization: orgId }).select('_id name division').lean(),
+    fetchUserRoleNamesInOrg(userId, orgId),
+  ]);
 
-    const viewerPlacement = resolveMemberPlacementScope(
-      viewerMembership,
+  const scopeContext = {
+    divisionBySuffix: buildSuffixToIdMap(divisions),
+    departmentBySuffix: buildSuffixToIdMap(departments),
+    divisions,
+    departments,
+  };
+
+  const viewerPlacement = resolveMemberPlacementScope(
+    viewerMembership,
+    teamById,
+    viewerRoleNames,
+    scopeContext
+  );
+
+  const memberUserIds = [
+    ...new Set(members.map((row) => String(row.user?._id || row.user || '')).filter(Boolean)),
+  ];
+  const roleNamesByUserId = new Map();
+  await Promise.all(
+    memberUserIds.map(async (uid) => {
+      const names = uid === userId ? viewerRoleNames : await fetchUserRoleNamesInOrg(uid, orgId);
+      roleNamesByUserId.set(uid, names);
+    })
+  );
+
+  return members.filter((member) => {
+    const memberUserId = String(member.user?._id || member.user || '');
+    if (memberUserId === userId) return true;
+    if (!viewerPlacement.divisionId || !viewerPlacement.departmentId) return false;
+    const memberRoleNames = roleNamesByUserId.get(memberUserId) || [];
+    const memberPlacement = resolveMemberPlacementScope(
+      member,
       teamById,
-      viewerRoleNames,
+      memberRoleNames,
       scopeContext
     );
+    return placementsMatch(viewerPlacement, memberPlacement);
+  });
+}
 
-    const memberUserIds = [
-      ...new Set(members.map((row) => String(row.user?._id || row.user || '')).filter(Boolean)),
-    ];
-    const roleNamesByUserId = new Map();
-    await Promise.all(
-      memberUserIds.map(async (uid) => {
-        const names = uid === userId ? viewerRoleNames : await fetchUserRoleNamesInOrg(uid, orgId);
-        roleNamesByUserId.set(uid, names);
-      })
-    );
-
-    const filtered = members.filter((member) => {
-      const memberUserId = String(member.user?._id || member.user || '');
-      if (memberUserId === userId) return true;
-      if (!viewerPlacement.divisionId || !viewerPlacement.departmentId) return false;
-      const memberRoleNames = roleNamesByUserId.get(memberUserId) || [];
-      const memberPlacement = resolveMemberPlacementScope(
-        member,
-        teamById,
-        memberRoleNames,
-        scopeContext
-      );
-      return placementsMatch(viewerPlacement, memberPlacement);
-    });
-
-    res.json({ status: 'success', data: filtered });
+exports.getMembers = async (req, res, next) => {
+  try {
+    const members = await listMembersForOrg(req);
+    return res.json({ status: 'success', data: members });
   } catch (error) {
-    next(error);
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        status: 'fail',
+        message: error.message,
+        code: error.code,
+      });
+    }
+    return next(error);
+  }
+};
+
+/** Gom members + roles RBAC — một request cho sidebar (wave-2d). */
+exports.getMembersWithRoles = async (req, res, next) => {
+  try {
+    const [members, roles] = await Promise.all([
+      listMembersForOrg(req),
+      fetchOrgRolesList(req.params.orgId),
+    ]);
+    return res.json({ status: 'success', data: { members, roles } });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        status: 'fail',
+        message: error.message,
+        code: error.code,
+      });
+    }
+    return next(error);
   }
 };
 
@@ -667,6 +713,11 @@ exports.joinViaLink = async (req, res, next) => {
       },
     });
 
+    await invalidateOrgReadCache(req.params.orgId, {
+      userId: String(userId),
+      eventType: ORG_EVENT_TYPES.MEMBER_JOINED,
+    });
+
     res.json({
       status: 'success',
       data: {
@@ -756,6 +807,10 @@ exports.updateMemberRole = async (req, res, next) => {
       },
     });
 
+    await invalidateOrgAcl(req.params.orgId, String(req.params.userId), {
+      eventType: ORG_EVENT_TYPES.ROLE_UPDATED,
+    });
+
     res.json({ status: 'success', data: membership });
   } catch (error) {
     next(error);
@@ -817,6 +872,11 @@ exports.removeMember = async (req, res, next) => {
       },
     });
 
+    await invalidateOrgReadCache(req.params.orgId, {
+      userId: String(req.params.userId),
+      eventType: ORG_EVENT_TYPES.MEMBER_REMOVED,
+    });
+
     res.json({ status: 'success', message: 'Member removed' });
   } catch (error) {
     next(error);
@@ -876,6 +936,11 @@ exports.leaveOrganization = async (req, res, next) => {
         userId: String(userId),
         timestamp: new Date().toISOString(),
       },
+    });
+
+    await invalidateOrgReadCache(orgId, {
+      userId: String(userId),
+      eventType: ORG_EVENT_TYPES.MEMBER_REMOVED,
     });
 
     res.json({ status: 'success', message: 'Đã rời tổ chức' });

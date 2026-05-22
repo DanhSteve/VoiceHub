@@ -12,6 +12,10 @@ import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
 import OrgWorkspaceSearchSidebar from '../../features/search/components/OrgWorkspaceSearchSidebar';
 import OrgMemberSidebarAttachments from '../../features/orgAttachments/OrgMemberSidebarAttachments';
+import UserAvatar from '../Shared/UserAvatar';
+import { isAvatarImageUrl } from '../../utils/avatarDisplay';
+import { resolveMediaUrl } from '../../utils/helpers';
+import { usePresenceSubscribe } from '../../hooks/usePresenceSubscribe';
 
 const unwrapBody = (payload) => payload?.data ?? payload;
 
@@ -52,11 +56,16 @@ function memberUserId(m) {
   return String(u || '');
 }
 
-async function fetchMembersRaw(orgId) {
-  const payload = await organizationAPI.getMembers(orgId);
+async function fetchMembersWithRolesBundle(orgId) {
+  const payload = await organizationAPI.getMembersWithRoles(orgId);
   const body = unwrapBody(payload);
-  const list = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
-  return list.filter((m) => String(m?.status || 'active') === 'active');
+  const bundle = body?.data ?? body;
+  const list = Array.isArray(bundle?.members)
+    ? bundle.members
+    : normalizeApiList(payload);
+  const roles = Array.isArray(bundle?.roles) ? bundle.roles : [];
+  const members = list.filter((m) => String(m?.status || 'active') === 'active');
+  return { members, roles };
 }
 
 async function enrichMembersWithProfiles(members, memberFallback) {
@@ -227,6 +236,14 @@ function OrganizationMemberSidebar({
   const [sidebarTab, setSidebarTab] = useState('people');
   const [orgPermissions, setOrgPermissions] = useState([]);
   const [orgPermissionsLoaded, setOrgPermissionsLoaded] = useState(false);
+  const memberUserIds = useMemo(
+    () => rows.map((m) => String(m.userId || '')).filter(Boolean),
+    [rows]
+  );
+  usePresenceSubscribe(memberUserIds, {
+    enabled: Boolean(organizationId) && sidebarTab === 'people' && memberDockOpen !== false,
+  });
+
   const pendingReviewCount = canReviewJoinApplications ? joinApplicationsToReview.length : 0;
   const joinReviewKey = (orgId, applicationId) => `${orgId}:${applicationId}`;
   const [selectedJoinApplication, setSelectedJoinApplication] = useState(null);
@@ -299,24 +316,17 @@ function OrganizationMemberSidebar({
   }, [sidebarTab, canShowTasksTab, canShowFilesTab]);
 
   useEffect(() => {
-    if (!organizationId) return;
+    if (!organizationId || sidebarTab !== 'people') return;
+    if (memberDockOpen === false) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
       setError('');
       try {
-        const [rawMembers, rolesPayload] = await Promise.all([
-          fetchMembersRaw(organizationId),
-          roleAPI.getRolesByOrganization(organizationId).catch(() => null),
-        ]);
+        const { members: rawMembers, roles: rolesList } =
+          await fetchMembersWithRolesBundle(organizationId);
         if (cancelled) return;
 
-        const rolesBody = rolesPayload ? unwrapBody(rolesPayload) : null;
-        const rolesList = Array.isArray(rolesBody?.data)
-          ? rolesBody.data
-          : Array.isArray(rolesBody)
-            ? rolesBody
-            : [];
         const normalizedRoles = rolesList.map(normalizeRoleRecord).filter(Boolean);
         setOrganizationRoles(normalizedRoles);
         const hasCustomRoles = Array.isArray(rolesList) && rolesList.length > 0;
@@ -337,7 +347,7 @@ function OrganizationMemberSidebar({
     return () => {
       cancelled = true;
     };
-  }, [organizationId, refreshKey, t]);
+  }, [organizationId, refreshKey, sidebarTab, memberDockOpen, t]);
 
   useEffect(() => {
     if (!selectedJoinApplication) return;
@@ -1151,15 +1161,16 @@ function OrganizationMemberSidebar({
         <div className={`h-16 ${isDarkMode ? 'bg-slate-700/70' : 'bg-slate-200'}`} />
         <div className="px-3 pb-3">
           <div className="-mt-8 flex items-end justify-between">
-            <div className={`h-16 w-16 overflow-hidden rounded-full border-4 ${isDarkMode ? 'border-[#1d1f28]' : 'border-white'}`}>
-              {memberCard.member.avatar ? (
-                <img src={memberCard.member.avatar} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-violet-600 to-fuchsia-700 text-xl font-bold text-white">
-                  {(memberCard.member.displayName || '?').charAt(0).toUpperCase()}
-                </div>
-              )}
-            </div>
+            <UserAvatar
+              avatar={
+                isAvatarImageUrl(memberCard.member.avatar)
+                  ? resolveMediaUrl(memberCard.member.avatar)
+                  : null
+              }
+              name={memberCard.member.displayName}
+              size="profile"
+              ringClassName={`border-4 ${isDarkMode ? 'border-[#1d1f28]' : 'border-white'}`}
+            />
             <button
               type="button"
               className={`rounded-md px-2 py-1 text-xs ${isDarkMode ? 'bg-white/10 hover:bg-white/15' : 'bg-slate-100 hover:bg-slate-200'}`}
@@ -1417,25 +1428,14 @@ function OrganizationMemberSidebar({
                       onContextMenu={(e) => openMemberMenu(e, m)}
                       onClick={(e) => openMemberCard(m, e.currentTarget.getBoundingClientRect())}
                     >
-                      <div className="relative h-9 w-9 shrink-0 rounded-lg">
-                        {m.avatar ? (
-                          <img
-                            src={m.avatar}
-                            alt=""
-                            className="h-9 w-9 rounded-lg object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-semibold text-white">
-                            {(m.displayName || '?').charAt(0).toUpperCase()}
-                          </div>
-                        )}
-                        <span
-                          className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 ${
-                            isDarkMode ? 'border-[#11141C]' : 'border-white'
-                          } ${online ? 'bg-emerald-400' : 'bg-gray-600'}`}
-                          aria-hidden
-                        />
-                      </div>
+                      <UserAvatar
+                        avatar={isAvatarImageUrl(m.avatar) ? resolveMediaUrl(m.avatar) : null}
+                        name={m.displayName}
+                        size="sm"
+                        showOnline
+                        status={online ? 'online' : 'offline'}
+                        ringClassName={isDarkMode ? 'border-[#11141C]' : 'border-white'}
+                      />
                       <div className="min-w-0 flex-1">
                         <div
                           className={`truncate text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}

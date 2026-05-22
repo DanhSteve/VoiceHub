@@ -14,7 +14,8 @@ import {
   Rocket,
   Sun,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -24,8 +25,12 @@ import { useTheme } from '../../context/ThemeContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { useAppStrings } from '../../locales/appStrings';
 import api from '../../services/api';
-import friendService from '../../services/friendService';
-import { organizationAPI } from '../../services/api/organizationAPI';
+import {
+  useFriendPending,
+  useNotificationBadge,
+  useOrganizationsMy,
+} from '../../hooks/queries';
+import { queryKeys } from '../../lib/queryKeys';
 import {
     navDivider,
     navItemActive,
@@ -41,6 +46,12 @@ import {
     tooltipBubble,
 } from '../../theme/shellTheme';
 import { getUserDisplayName } from '../../utils/helpers';
+import {
+  findOrgBySlug,
+  orgRecordId,
+  organizationsIdsKey,
+  workspacePayloadFromOrg,
+} from '../../utils/orgListUtils';
 import { removeToken } from '../../utils/tokenStorage';
 import ProfileModal from '../Profile/ProfileModal';
 import { ConfirmDialog } from '../Shared';
@@ -50,10 +61,15 @@ import Avatar from '../ui/Avatar';
 const iconBtn =
   'w-10 h-10 sm:w-11 sm:h-11 md:w-12 md:h-12 flex items-center justify-center shrink-0 rounded-xl transition-all duration-200';
 const orgAvatarBtn =
-  'relative flex h-10 w-10 sm:h-11 sm:w-11 md:h-12 md:w-12 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold uppercase tracking-wide transition-all duration-200';
+  'relative flex h-10 w-10 sm:h-11 sm:w-11 md:h-12 md:w-12 shrink-0 items-center justify-center rounded-xl border text-[11px] font-bold uppercase tracking-wide transition-all duration-200';
 
 /** Trang thông báo trong menu tổ chức — giữ sidebar org khi mở */
 const ORG_NOTIFICATIONS_PATH = '/notifications/organization';
+
+const DEMO_ORGANIZATIONS = [
+  { _id: 'demo-org-1', name: 'Alpha Corp', slug: 'alpha-corp' },
+  { _id: 'demo-org-2', name: 'BetaLabs', slug: 'betalabs' },
+];
 
 const PUBLIC_NAV_DEF = [
   { key: 'dashboard', Icon: Home, path: '/dashboard' },
@@ -71,6 +87,10 @@ const ORG_NAV_DEF = [
   { key: 'notifications', path: ORG_NOTIFICATIONS_PATH, bellBadge: true },
 ];
 
+const canUseHoverExpand = () =>
+  typeof window !== 'undefined' &&
+  window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
 const NavigationSidebar = ({ landingDemo = false } = {}) => {
   const [time, setTime] = useState(new Date());
   const location = useLocation();
@@ -81,7 +101,6 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     setActiveWorkspace,
     getLastWorkspacePath,
     lastWorkspaceSlug,
-    setLastWorkspaceSlug,
   } = useWorkspace();
   const { locale } = useLocale();
   const { t, dict } = useAppStrings();
@@ -89,10 +108,10 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
   const [profileOpen, setProfileOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [togglingInvisible, setTogglingInvisible] = useState(false);
-  const [sidebarExpanded, setSidebarExpanded] = useState(false);
-  const [bellBadgeCount, setBellBadgeCount] = useState(0);
+  /** Máy touch / LAN client không hover → giữ rail mở để icon menu luôn bấm được. */
+  const [sidebarExpanded, setSidebarExpanded] = useState(() => !canUseHoverExpand());
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
-  const [myOrganizations, setMyOrganizations] = useState([]);
+  const queryClient = useQueryClient();
   const [createOrgMenuOpen, setCreateOrgMenuOpen] = useState(false);
   const [joinByLinkOpen, setJoinByLinkOpen] = useState(false);
   const [joinLinkInput, setJoinLinkInput] = useState('');
@@ -102,80 +121,69 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (landingDemo) {
-      setBellBadgeCount(3);
-      return undefined;
+  const onOrgRail = useMemo(
+    () =>
+      location.pathname.startsWith('/w/') ||
+      location.pathname.startsWith(ORG_NOTIFICATIONS_PATH),
+    [location.pathname]
+  );
+
+  const orgIdForBadge = useMemo(() => {
+    let orgIdFromUrl = '';
+    if (location.pathname.startsWith(ORG_NOTIFICATIONS_PATH)) {
+      const q = new URLSearchParams(location.search);
+      orgIdFromUrl = String(q.get('organizationId') || q.get('orgId') || '').trim();
     }
-    let cancelled = false;
-    const loadBellBadge = async () => {
-      try {
-        const onOrgRail =
-          location.pathname.startsWith('/w/') ||
-          location.pathname.startsWith(ORG_NOTIFICATIONS_PATH);
-        const orgIdFromUrl = (() => {
-          if (!location.pathname.startsWith(ORG_NOTIFICATIONS_PATH)) return '';
-          const q = new URLSearchParams(location.search);
-          return String(q.get('organizationId') || q.get('orgId') || '').trim();
-        })();
-        const orgIdForBadge =
-          orgIdFromUrl ||
-          activeWorkspace?._id ||
-          activeWorkspace?.id ||
-          activeWorkspace?.organizationId ||
-          '';
-        const notifParams =
-          onOrgRail && orgIdForBadge
-            ? { scope: 'organization', organizationId: String(orgIdForBadge), limit: 1 }
-            : { scope: 'personal', limit: 1 };
+    return (
+      orgIdFromUrl ||
+      activeWorkspace?._id ||
+      activeWorkspace?.id ||
+      activeWorkspace?.organizationId ||
+      ''
+    );
+  }, [
+    location.pathname,
+    location.search,
+    activeWorkspace?._id,
+    activeWorkspace?.id,
+    activeWorkspace?.organizationId,
+  ]);
 
-        const requests = [
-          api.get('/notifications', { params: notifParams, skipGlobalErrorHandling: true }),
-        ];
-        if (!onOrgRail) {
-          requests.unshift(
-            friendService.getPendingRequests({ skipGlobalErrorHandling: true })
-          );
-        }
+  const notificationScope =
+    onOrgRail && orgIdForBadge ? 'organization' : 'personal';
 
-        const results = await Promise.allSettled(requests);
-        let pending = 0;
-        let unread = 0;
-        if (!onOrgRail) {
-          const frRes = results[0];
-          const ntRes = results[1];
-          if (frRes?.status === 'fulfilled') {
-            const r = frRes.value;
-            const list = Array.isArray(r?.data?.data)
-              ? r.data.data
-              : Array.isArray(r?.data)
-                ? r.data
-                : [];
-            pending = list.length;
-          }
-          if (ntRes?.status === 'fulfilled') {
-            const d = ntRes.value?.data?.data ?? ntRes.value?.data;
-            unread = Number(d?.unreadCount) || 0;
-          }
-        } else {
-          const ntRes = results[0];
-          if (ntRes?.status === 'fulfilled') {
-            const d = ntRes.value?.data?.data ?? ntRes.value?.data;
-            unread = Number(d?.unreadCount) || 0;
-          }
-        }
-        if (!cancelled) setBellBadgeCount(pending + unread);
-      } catch {
-        if (!cancelled) setBellBadgeCount(0);
-      }
-    };
-    loadBellBadge();
-    const intervalId = setInterval(loadBellBadge, 60000);
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-    };
-  }, [landingDemo, location.pathname, activeWorkspace?._id, activeWorkspace?.id, activeWorkspace?.organizationId]);
+  const { unreadCount } = useNotificationBadge({
+    scope: notificationScope,
+    organizationId: orgIdForBadge,
+    enabled: !landingDemo,
+  });
+
+  const { pendingCount } = useFriendPending({
+    enabled: !landingDemo && !onOrgRail,
+  });
+
+  const bellBadgeCount = landingDemo
+    ? 3
+    : onOrgRail
+      ? unreadCount
+      : unreadCount + pendingCount;
+
+  const { data: organizationsFromQuery = [] } = useOrganizationsMy({
+    enabled: !landingDemo,
+  });
+
+  const myOrganizations = landingDemo ? DEMO_ORGANIZATIONS : organizationsFromQuery;
+  const orgListIdsKey = useMemo(
+    () =>
+      landingDemo ? organizationsIdsKey(DEMO_ORGANIZATIONS) : organizationsIdsKey(organizationsFromQuery),
+    [landingDemo, organizationsFromQuery]
+  );
+  const workspaceUrlSyncRef = useRef('');
+
+  const refreshOrganizations = useCallback(() => {
+    if (landingDemo) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.organizations.my() });
+  }, [landingDemo, queryClient]);
 
   useEffect(() => {
     if (profileOpen || createOrgMenuOpen || joinByLinkOpen) setSidebarExpanded(true);
@@ -188,38 +196,21 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     if (joinByLinkOpen) setJoinByLinkOpen(false);
   }, [sidebarExpanded, profileOpen, createOrgMenuOpen, joinByLinkOpen]);
 
-  const loadMyOrganizations = useCallback(async () => {
-    if (landingDemo) {
-      setMyOrganizations([
-        { _id: 'demo-org-1', name: 'Alpha Corp', slug: 'alpha-corp' },
-        { _id: 'demo-org-2', name: 'BetaLabs', slug: 'betalabs' },
-      ]);
-      return;
-    }
-    try {
-      const payload = await organizationAPI.getOrganizations();
-      const list = Array.isArray(payload?.data)
-        ? payload.data
-        : Array.isArray(payload?.data?.data)
-          ? payload.data.data
-          : Array.isArray(payload)
-            ? payload
-            : [];
-      setMyOrganizations(list);
-    } catch {
-      setMyOrganizations([]);
-    }
-  }, [landingDemo]);
-
-  useEffect(() => {
-    loadMyOrganizations();
-  }, [loadMyOrganizations]);
-
   useEffect(() => {
     if (!landingDemo && location.pathname.startsWith('/workspaces')) {
-      loadMyOrganizations();
+      refreshOrganizations();
     }
-  }, [location.pathname, landingDemo, loadMyOrganizations]);
+  }, [location.pathname, landingDemo, refreshOrganizations]);
+
+  /** Tránh overlay z-[998] kẹt sau điều hướng — chặn click toàn màn hình trên client. */
+  useEffect(() => {
+    setProfileOpen(false);
+    setCreateOrgMenuOpen(false);
+    setJoinByLinkOpen(false);
+    setSidebarExpanded(!canUseHoverExpand());
+    setTooltip((p) => (p.show ? { ...p, show: false } : p));
+    workspaceUrlSyncRef.current = '';
+  }, [location.pathname]);
 
   const orgIdFromUrl = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -231,45 +222,34 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     return match ? decodeURIComponent(match[1]) : '';
   }, [location.pathname]);
 
-  /** Đồng bộ workspace đang chọn với URL (/w/:slug hoặc ?organizationId=) */
+  /** Đồng bộ workspace đang chọn với URL (/w/:slug hoặc ?organizationId=) — không phụ thuộc reference list mỗi render. */
   useEffect(() => {
-    if (landingDemo || myOrganizations.length === 0) return;
+    if (landingDemo || !orgListIdsKey) return;
 
     let target = null;
     if (slugFromPath) {
-      target =
-        myOrganizations.find((o) => String(o?.slug || '') === slugFromPath) || null;
+      target = findOrgBySlug(myOrganizations, slugFromPath);
     } else if (orgIdFromUrl) {
-      target =
-        myOrganizations.find((o) => String(o?._id || o?.id || '') === orgIdFromUrl) || null;
+      target = myOrganizations.find((o) => orgRecordId(o) === orgIdFromUrl) || null;
+    }
+    if (!target) return;
+
+    const id = orgRecordId(target);
+    const slug = String(target.slug || '').trim();
+    const syncKey = `${slugFromPath}|${orgIdFromUrl}|${id}`;
+    const currentId = orgRecordId(activeWorkspace);
+    const currentSlug = String(activeWorkspace?.slug || '').trim();
+    if (workspaceUrlSyncRef.current === syncKey && currentId === id && currentSlug === slug) {
+      return;
+    }
+    if (currentId === id && currentSlug === slug) {
+      workspaceUrlSyncRef.current = syncKey;
+      return;
     }
 
-    if (!target) return;
-    const id = String(target._id || target.id || '');
-    const slug = String(target.slug || '').trim();
-    const currentId = String(activeWorkspace?._id || activeWorkspace?.id || '');
-    if (currentId === id && String(activeWorkspace?.slug || '') === slug) return;
-
-    setActiveWorkspace({
-      _id: id,
-      id,
-      slug,
-      name: target.name,
-      organizationId: id,
-      myRole: target.myRole,
-    });
-    if (slug) setLastWorkspaceSlug(slug);
-  }, [
-    slugFromPath,
-    orgIdFromUrl,
-    myOrganizations,
-    landingDemo,
-    activeWorkspace?._id,
-    activeWorkspace?.id,
-    activeWorkspace?.slug,
-    setActiveWorkspace,
-    setLastWorkspaceSlug,
-  ]);
+    workspaceUrlSyncRef.current = syncKey;
+    setActiveWorkspace(workspacePayloadFromOrg(target));
+  }, [slugFromPath, orgIdFromUrl, orgListIdsKey, landingDemo, setActiveWorkspace]);
 
   const timeLocale = locale === 'en' ? 'en-US' : 'vi-VN';
   const currentTime = time.toLocaleTimeString(timeLocale, { hour: '2-digit', minute: '2-digit' });
@@ -404,22 +384,15 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     setJoinByLinkOpen(false);
     setJoinLinkInput('');
     navigate(`/workspaces?${params.toString()}`);
-    loadMyOrganizations();
+    refreshOrganizations();
   };
 
   const handleSelectOrganization = (org) => {
     if (!org) return;
-    const id = String(org._id || org.id || '');
+    const id = orgRecordId(org);
     const slug = String(org.slug || '').trim();
-    setActiveWorkspace({
-      _id: id,
-      id,
-      slug,
-      name: org.name,
-      organizationId: id,
-      myRole: org.myRole,
-    });
-    if (slug) setLastWorkspaceSlug(slug);
+    workspaceUrlSyncRef.current = `|${slug}|${id}`;
+    setActiveWorkspace(workspacePayloadFromOrg(org));
     setCreateOrgMenuOpen(false);
     setJoinByLinkOpen(false);
 
@@ -565,12 +538,16 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
   return (
     <>
       <div
-        className={`relative flex h-screen shrink-0 flex-col overflow-hidden border-r transition-[width] duration-300 ease-out ${borderR} ${
-          sidebarExpanded ? 'w-14 sm:w-16 md:w-[68px]' : 'w-2'
-        }`}
-        onMouseEnter={() => setSidebarExpanded(true)}
+        className={`relative z-[2] flex h-screen shrink-0 flex-col border-r transition-[width] duration-300 ease-out ${borderR} w-14 overflow-visible sm:w-16 md:w-[68px]`}
+        onMouseEnter={() => {
+          if (canUseHoverExpand()) setSidebarExpanded(true);
+        }}
         onMouseLeave={() => {
+          if (!canUseHoverExpand()) return;
           if (!profileOpen && !createOrgMenuOpen && !joinByLinkOpen) setSidebarExpanded(false);
+        }}
+        onPointerDown={() => {
+          if (!canUseHoverExpand()) setSidebarExpanded(true);
         }}
         title={sidebarExpanded ? undefined : t('nav.railHint')}
       >
@@ -822,14 +799,7 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
             >
               <div className={`relative px-4 pb-4 pt-6 ${profileDropdownHeader()}`}>
                 <div className="flex items-center gap-3">
-                  <div className="relative">
-                    <Avatar user={user} size="lg" online />
-                    <span
-                      className={`absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full border-2 ${
-                        isDarkMode ? 'border-[#151c2c]' : 'border-white'
-                      } ${isOnline ? 'bg-emerald-400' : 'bg-slate-400'}`}
-                    />
-                  </div>
+                  <Avatar user={user} size="lg" online={isOnline} />
                   <div className="min-w-0">
                     <div className="truncate text-sm font-bold text-white">{displayName}</div>
                     <div className="truncate text-xs text-white/80">{user?.username || user?.email || ''}</div>

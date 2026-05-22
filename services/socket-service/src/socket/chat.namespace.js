@@ -100,8 +100,28 @@ module.exports = function registerChatNamespace(io) {
       if (prevCount === 0) {
         redisPresence.setOnline(key);
         syncPresenceUserStatus(key, 'online');
+        io.emit('presence:batch', { userId: key, status: 'online' });
       }
     }
+
+    socket.on('presence:subscribe', async (payload = {}) => {
+      try {
+        const ids = Array.isArray(payload.userIds)
+          ? payload.userIds.map((id) => String(id).trim()).filter(Boolean)
+          : [];
+        const limited = ids.slice(0, 200);
+        const users = await Promise.all(
+          limited.map(async (id) => {
+            const inMemory = (onlineUserSockets.get(id) || 0) > 0;
+            const redisOn = inMemory ? true : await redisPresence.isOnline(id);
+            return { userId: id, status: inMemory || redisOn ? 'online' : 'offline' };
+          })
+        );
+        socket.emit('presence:batch', { users, timestamp: new Date().toISOString() });
+      } catch (err) {
+        socket.emit('error', { message: err.message || 'presence:subscribe failed' });
+      }
+    });
 
     // ====== FRIEND DM: gửi tin nhắn ======
     socket.on('friend:send', async ({ receiverId, content, messageType = 'text', replyToMessageId }) => {
@@ -207,6 +227,7 @@ module.exports = function registerChatNamespace(io) {
             const latest = onlineUserSockets.get(key) || 0;
             if (latest > 0) return;
             io.emit('user:disconnected', key);
+            io.emit('presence:batch', { userId: key, status: 'offline' });
             redisPresence.clear(key);
             await syncPresenceUserStatus(key, 'offline');
           };

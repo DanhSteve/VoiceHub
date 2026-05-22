@@ -16,6 +16,9 @@ const http = require('http');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const app = require('./app');
 const { services } = require('./config/services');
+const { connectBffRedis } = require('./bff/cache');
+
+connectBffRedis();
 
 /** Production: chạy sau reverse proxy TLS (HTTPS) — bật trust proxy nếu cần req.secure */
 if (process.env.TRUST_PROXY === '1') {

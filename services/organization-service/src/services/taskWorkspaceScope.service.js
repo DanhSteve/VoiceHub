@@ -1,17 +1,29 @@
 const Membership = require('../models/Membership');
 const Department = require('../models/Department');
 const Team = require('../models/Team');
+const { resolveOrgAccess } = require('../utils/orgAccess');
 
 async function resolveTaskWorkspaceScope(userId, orgId) {
-  const uid = String(userId || '');
-  const oid = String(orgId || '');
+  const uid = String(userId || '').trim();
+  const oid = String(orgId || '').trim();
   if (!uid || !oid) return null;
 
-  const membership = await Membership.findOne({
-    user: uid,
-    organization: oid,
-    status: 'active',
-  }).lean();
+  const access = await resolveOrgAccess(uid, oid);
+  if (!access.ok) return null;
+
+  if (access.rolesOnly && !access.membership) {
+    return {
+      visibility: 'self',
+      canCreateTask: false,
+      canUseAiTask: false,
+      assignableUserIds: [uid],
+      departmentIds: [],
+      teamIds: [],
+      divisionIds: [],
+    };
+  }
+
+  const membership = access.membership;
   if (!membership) return null;
 
   const membershipRole = Membership.normalizeRole(membership.role);

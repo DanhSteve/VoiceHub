@@ -1,5 +1,9 @@
 const Document = require('../models/Document');
 const { getRedisClient, logger, fetchUserProfileByIdInternal } = require('/shared');
+const {
+  resolveUploaderProfileMap,
+  attachUploadedByToDocuments,
+} = require('../utils/attachUploaderProfiles');
 
 class DocumentService {
   // Tạo document mới
@@ -52,12 +56,12 @@ class DocumentService {
   // Lấy document theo ID
   async getDocumentById(documentId) {
     try {
-      const document = await Document.findById(documentId).populate(
-        'uploadedBy',
-        'username displayName avatar'
-      );
+      const document = await Document.findById(documentId).lean();
+      if (!document) return null;
 
-      return document;
+      const profileMap = await resolveUploaderProfileMap([document.uploadedBy]);
+      const [withProfile] = attachUploadedByToDocuments(document, profileMap);
+      return withProfile;
     } catch (error) {
       logger.error('Error getting document:', error);
       throw new Error(`Error getting document: ${error.message}`);
@@ -70,15 +74,18 @@ class DocumentService {
       const { page = 1, limit = 50, sort = { createdAt: -1 } } = options;
 
       const documents = await Document.find(filter)
-        .populate('uploadedBy', 'username displayName avatar')
         .sort(sort)
         .limit(limit * 1)
-        .skip((page - 1) * limit);
+        .skip((page - 1) * limit)
+        .lean();
 
       const total = await Document.countDocuments(filter);
 
+      const profileMap = await resolveUploaderProfileMap(documents.map((d) => d.uploadedBy));
+      const documentsWithProfiles = attachUploadedByToDocuments(documents, profileMap);
+
       return {
-        documents,
+        documents: documentsWithProfiles,
         totalPages: Math.ceil(total / limit),
         currentPage: page,
         total,

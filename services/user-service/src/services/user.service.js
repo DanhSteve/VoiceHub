@@ -1,22 +1,56 @@
 const UserProfile = require('../models/UserProfile');
 const { getRedisClient, logger } = require('/shared');
+const { phoneBlindIndex } = require('/shared/utils/fieldCrypto');
+const { writePiiPatch } = require('../utils/profilePii');
 
 class UserService {
   // Tạo user profile mới
   async createUserProfile(userData) {
     try {
-      const { userId, username, displayName, dateOfBirth } = userData;
+      const { userId, username, email, displayName, dateOfBirth } = userData;
 
-      // Kiểm tra username đã tồn tại chưa
-      const existingUser = await UserProfile.findOne({ username });
-      if (existingUser) {
+      if (!userId) {
+        throw new Error('userId is required');
+      }
+      if (!email || typeof email !== 'string' || !String(email).trim()) {
+        throw new Error('email is required');
+      }
+      const normalizedEmail = String(email).trim().toLowerCase();
+
+      let finalUsername = String(username || '')
+        .trim()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-zA-Z0-9_]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      if (finalUsername.length < 3) {
+        finalUsername = normalizedEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') || 'user';
+      }
+      if (finalUsername.length < 3) {
+        finalUsername = `user${String(userId).slice(-6)}`;
+      }
+
+      let attempt = 0;
+      while (attempt < 6) {
+        const existingUser = await UserProfile.findOne({ username: finalUsername });
+        if (!existingUser) break;
+        attempt += 1;
+        const suffix = String(userId).slice(-4);
+        finalUsername =
+          attempt === 1
+            ? `${finalUsername}_${suffix}`
+            : `${String(username || 'user').trim().slice(0, 20)}_${suffix}${attempt}`;
+      }
+      const taken = await UserProfile.findOne({ username: finalUsername });
+      if (taken) {
         throw new Error('Username already exists');
       }
 
       const userProfile = new UserProfile({
         userId,
-        username,
-        displayName: displayName || username,
+        username: finalUsername,
+        email: normalizedEmail,
+        displayName: displayName || finalUsername,
         dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
       });
 
@@ -83,11 +117,10 @@ class UserService {
       const allowedFields = [
         'displayName',
         'avatar',
-        'bio',
-        'phone',
         'dateOfBirth',
-        'location',
         'preferences',
+        'isInvisible',
+        'status',
       ];
 
       const updateFields = {};
@@ -96,6 +129,14 @@ class UserService {
           updateFields[field] = updateData[field];
         }
       }
+      Object.assign(
+        updateFields,
+        writePiiPatch({
+          bio: updateData.bio,
+          phone: updateData.phone,
+          location: updateData.location,
+        })
+      );
 
       const userProfile = await UserProfile.findOneAndUpdate(
         { userId },
@@ -181,10 +222,19 @@ class UserService {
     }
   }
 
-  // Tìm user profile theo số điện thoại
+  // Tìm user profile theo số điện thoại (plaintext hoặc phoneBlindIndex khi PII mã hóa)
   async getUserProfileByPhone(phone) {
     try {
-      const userProfile = await UserProfile.findOne({ phone, isActive: true });
+      const normalized = String(phone || '').trim();
+      if (!normalized) return null;
+
+      let userProfile = await UserProfile.findOne({ phone: normalized, isActive: true });
+      if (!userProfile) {
+        const blind = phoneBlindIndex(normalized);
+        if (blind) {
+          userProfile = await UserProfile.findOne({ phoneBlindIndex: blind, isActive: true });
+        }
+      }
       return userProfile;
     } catch (error) {
       logger.error('Error getting user profile by phone:', error);

@@ -5,10 +5,33 @@ const { logger } = require('/shared');
 function errorToStatus(error, defaultMessage = 'An error occurred', defaultStatus = 400) {
   const msg = error?.message || defaultMessage;
   if (msg.includes('User not found')) return { status: 404, message: 'Không tìm thấy người dùng' };
+  if (msg.includes('Friend request already sent')) {
+    return { status: 409, message: 'Bạn đã gửi lời mời kết bạn cho người này rồi' };
+  }
+  if (msg.includes('Friend request already received')) {
+    return { status: 409, message: 'Người này đã gửi lời mời cho bạn — hãy chấp nhận trong danh sách lời mời' };
+  }
+  if (msg.includes('Already friends')) return { status: 409, message: 'Hai bạn đã là bạn bè' };
+  if (msg.includes('Cannot send friend request to blocked user')) {
+    return { status: 403, message: 'Không thể gửi lời mời tới người đã bị chặn' };
+  }
+  if (msg.includes('Cannot add yourself')) {
+    return { status: 400, message: 'Không thể kết bạn với chính mình' };
+  }
   if (msg.includes('temporarily unavailable') || msg.includes('Service temporarily unavailable')) {
     return { status: 503, message: 'Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau.' };
   }
   return { status: defaultStatus, message: msg };
+}
+
+function isExpectedFriendError(error) {
+  const msg = String(error?.message || '');
+  return (
+    msg.includes('Friend request already') ||
+    msg.includes('Already friends') ||
+    msg.includes('Cannot send friend request') ||
+    msg.includes('Cannot add yourself')
+  );
 }
 
 class FriendController {
@@ -33,7 +56,11 @@ class FriendController {
         data: friend,
       });
     } catch (error) {
-      logger.error('Send friend request error:', error);
+      if (isExpectedFriendError(error)) {
+        logger.warn('Send friend request:', error.message);
+      } else {
+        logger.error('Send friend request error:', error);
+      }
       const { status, message } = errorToStatus(error, 'Lỗi khi gửi lời mời');
       res.status(status).json({ success: false, message });
     }

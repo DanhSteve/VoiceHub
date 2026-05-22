@@ -71,7 +71,7 @@ const authenticate = (req, res, next) => {
       
       // Gắn user info vào request
       req.user = {
-        id: decoded.id,
+        id: decoded.id || decoded.userId || decoded._id,
         email: decoded.email,
         ...decoded,
       };
