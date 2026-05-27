@@ -7,8 +7,8 @@ const TTL_SEC = Math.min(
   Math.max(20, parseInt(process.env.BFF_SHELL_CACHE_TTL_SEC || '60', 10) || 60)
 );
 
-async function fetchOrgShell(userId, userEmail, orgId) {
-  const headers = buildTrustedHeaders(userId, userEmail);
+async function fetchOrgShell(userId, userEmail, orgId, req) {
+  const headers = buildTrustedHeaders(userId, userEmail, req);
   const url = `${services.organization.url}/api/organizations/${encodeURIComponent(orgId)}/shell`;
   const res = await fetchJson(url, headers, 'org/shell');
   if (!res.ok) {
@@ -41,7 +41,7 @@ async function handleOrgShell(req, res) {
       cacheKey,
       coalesceKey: cacheKey,
       ttlSec: TTL_SEC,
-      loader: () => fetchOrgShell(userId, req.user?.email, orgId),
+      loader: () => fetchOrgShell(userId, req.user?.email, orgId, req),
     });
 
     if (fromCache) res.setHeader('X-Bff-Cache', 'HIT');

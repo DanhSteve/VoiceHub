@@ -1480,7 +1480,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             {!metrics.loading && metrics.pendingCount > 0 && (
               <button
                 type="button"
-                onClick={() => navigate('/friends')}
+                onClick={() => navigate('/chat/friends?tab=requests')}
                 className={`w-full rounded-xl px-3 py-2 text-left text-sm font-semibold transition ${
                   isDarkMode
                     ? 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
@@ -1611,7 +1611,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   label: t('dashboard.statInvites'),
                   value: metrics.loading ? '…' : String(metrics.pendingCount),
                   icon: '👋',
-                  path: '/friends',
+                  path: '/chat/friends?tab=requests',
                 },
                 {
                   label: t('dashboard.statFriends'),

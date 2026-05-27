@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 import { organizationAPI } from '../../services/api/organizationAPI';
@@ -10,6 +10,7 @@ import friendService from '../../services/friendService';
 import { ConfirmDialog } from '../Shared';
 import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
+import { shellNavRailBackdrop } from '../../theme/shellTheme';
 import OrgWorkspaceSearchSidebar from '../../features/search/components/OrgWorkspaceSearchSidebar';
 import OrgMemberSidebarAttachments from '../../features/orgAttachments/OrgMemberSidebarAttachments';
 import UserAvatar from '../Shared/UserAvatar';
@@ -193,6 +194,7 @@ function OrganizationMemberSidebar({
   const { t } = useAppStrings();
   const { isDarkMode } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [rows, setRows] = useState([]);
@@ -428,6 +430,11 @@ function OrganizationMemberSidebar({
       selectedRoleIds: {},
     }));
   }, []);
+
+  useEffect(() => {
+    closeMenu();
+    setSelectedJoinApplication(null);
+  }, [location.pathname, closeMenu]);
 
   const prevMenuOpenRef = useRef(false);
 
@@ -801,7 +808,7 @@ function OrganizationMemberSidebar({
     createPortal(
       <>
         <div
-          className="fixed inset-0 z-[9997]"
+          className={`${shellNavRailBackdrop} z-[9997]`}
           aria-hidden
           onClick={closeMenu}
           onContextMenu={(e) => {
@@ -1045,7 +1052,7 @@ function OrganizationMemberSidebar({
     createPortal(
       <>
         <div
-          className="fixed inset-0 z-[9997] bg-black/40"
+          className={`${shellNavRailBackdrop} z-[9997] bg-black/40`}
           onClick={() => setSelectedJoinApplication(null)}
           aria-hidden
         />

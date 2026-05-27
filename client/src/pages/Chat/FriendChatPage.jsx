@@ -16,6 +16,7 @@ import ChannelMessageMoreMenu from '../../components/Organization/ChannelMessage
 import ForwardToFriendModal from '../../components/Organization/ForwardToFriendModal';
 import CreateTaskFromAiModal from '../../components/Chat/CreateTaskFromAiModal';
 import FriendChatRightPanel from '../../components/Chat/FriendChatRightPanel';
+import FriendPendingRequestsRail from '../../components/Friends/FriendPendingRequestsRail';
 import UserAvatar from '../../components/Shared/UserAvatar';
 import userService from '../../services/userService';
 import { buildFriendChatAttachments, findViewerIndex } from '../../utils/friendChatMedia';
@@ -134,6 +135,8 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const [blockingFriend, setBlockingFriend] = useState(false);
   const [unblockConfirmOpen, setUnblockConfirmOpen] = useState(false);
   const [unblockingFriend, setUnblockingFriend] = useState(false);
+  const [unfriendConfirmOpen, setUnfriendConfirmOpen] = useState(false);
+  const [removingFriend, setRemovingFriend] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [emojiSearch, setEmojiSearch] = useState('');
   const [emojiPickerTab, setEmojiPickerTab] = useState('emoji');
@@ -193,12 +196,14 @@ function FriendChatPage({ landingDemo = false } = {}) {
   /** Cuộc gọi đi: chờ accept / reject / timeout */
   const [outboundCall, setOutboundCall] = useState(null);
   const outboundCallRef = useRef(null);
+  const unfriendInFlightRef = useRef(false);
   const routedDmUserId = String(
     location.state?.openDmUserId || searchParams.get('openDmUserId') || ''
   );
   const routedComposeText = String(
     location.state?.composeText || searchParams.get('composeText') || ''
   );
+  const showPendingRequestsRail = String(searchParams.get('tab') || '').toLowerCase() === 'requests';
 
   const formatDateDividerLabel = useCallback(
     (iso) => {
@@ -1614,6 +1619,42 @@ function FriendChatPage({ landingDemo = false } = {}) {
     }
   };
 
+  const unfriendGraceHours = 12;
+
+  const confirmUnfriendCurrentFriend = async () => {
+    if (!selectedFriendId || landingDemo || unfriendInFlightRef.current) return;
+    const removedId = String(selectedFriendId);
+    unfriendInFlightRef.current = true;
+    setRemovingFriend(true);
+    try {
+      const resp = await friendService.removeFriend(removedId);
+      const hours = Number(resp?.data?.graceHours) || unfriendGraceHours;
+      toast.success(t('friendChat.unfriendOk', { hours }));
+      setFriends((prev) =>
+        prev.filter((row) => {
+          const uid = row.friendId?._id || row.friendId?.userId || row.friendId;
+          return String(uid || '') !== removedId;
+        })
+      );
+      setArchivedFriendIds((prev) => {
+        const next = prev.filter((id) => id !== removedId);
+        saveIdList(DM_ARCHIVE_STORAGE_KEY, next);
+        return next;
+      });
+      setSelectedFriendId((prev) => (String(prev || '') === removedId ? null : prev));
+      setMessages([]);
+      setOutboundCall(null);
+      refreshFriendsCache();
+      refreshUnread();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || t('friendChat.unfriendFail'));
+      throw err;
+    } finally {
+      unfriendInFlightRef.current = false;
+      setRemovingFriend(false);
+    }
+  };
+
   const toggleArchiveCurrentFriend = useCallback(() => {
     if (!currentFriendKey) return;
     const next = archivedFriendIds.includes(currentFriendKey)
@@ -1707,6 +1748,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
               variant="subtle"
             />
           </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-2 scrollbar-overlay">
             {friendsLoading ? (
               <div className={`py-4 text-center text-[10px] leading-relaxed ${railMuted}`}>
@@ -1815,6 +1857,17 @@ function FriendChatPage({ landingDemo = false } = {}) {
                 {t('friendChat.friendSearchNoMatch')}
               </div>
             )}
+          </div>
+          {!landingDemo && (
+            <FriendPendingRequestsRail
+              isDarkMode={isDarkMode}
+              defaultExpanded={showPendingRequestsRail}
+              onAccepted={(item) => {
+                if (item?.id) setSelectedFriendId(item.id);
+                refreshFriendsCache();
+              }}
+            />
+          )}
           </div>
         </aside>
 
@@ -2639,6 +2692,9 @@ function FriendChatPage({ landingDemo = false } = {}) {
                 onAttachmentAction={handleAttachmentAction}
                 onOpenCalendarForFriend={openCalendarForFriend}
                 onOpenMutualOrganization={openMutualOrganization}
+                onUnfriend={() => setUnfriendConfirmOpen(true)}
+                unfriendDisabled={landingDemo || removingFriend}
+                unfriendLoading={removingFriend}
               />
             )
           )}
@@ -2770,6 +2826,21 @@ function FriendChatPage({ landingDemo = false } = {}) {
         title={t('friendChat.unblockUser')}
         message={t('friendChat.unblockConfirm', { name: currentFriend?.name || '' })}
         confirmText={t('friendChat.unblockConfirmBtn')}
+        cancelText={t('nav.cancel')}
+      />
+      <ConfirmDialog
+        isOpen={unfriendConfirmOpen}
+        onClose={() => !removingFriend && setUnfriendConfirmOpen(false)}
+        onConfirm={async () => {
+          await confirmUnfriendCurrentFriend();
+          setUnfriendConfirmOpen(false);
+        }}
+        title={t('friendChat.unfriend')}
+        message={t('friendChat.unfriendConfirm', {
+          name: currentFriend?.name || '',
+          hours: unfriendGraceHours,
+        })}
+        confirmText={t('friendChat.unfriendConfirmBtn')}
         cancelText={t('nav.cancel')}
       />
       {inlineToast && (

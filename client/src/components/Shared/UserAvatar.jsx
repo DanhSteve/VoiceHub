@@ -5,6 +5,7 @@ import {
   avatarPlaceholderClassName,
   displayInitials,
   isAvatarImageUrl,
+  pickAvatarValue,
   resolveAvatarSrc,
 } from '../../utils/avatarDisplay';
 
@@ -24,15 +25,16 @@ export default function UserAvatar({
   cacheBust,
 }) {
   const [imgFailed, setImgFailed] = useState(false);
+  const avatarValue = pickAvatarValue(avatar);
 
   useEffect(() => {
     setImgFailed(false);
-  }, [avatar, cacheBust]);
+  }, [avatarValue, cacheBust]);
 
   const clickable = typeof onClick === 'function';
   const Wrapper = clickable ? 'button' : 'div';
   const isOnline = status === 'online';
-  const hasImage = isAvatarImageUrl(avatar) && !imgFailed;
+  const hasImage = isAvatarImageUrl(avatarValue) && !imgFailed;
   const shellClass = hasImage
     ? avatarImageShellClassName(size, ringClassName)
     : avatarPlaceholderClassName(name, size, ringClassName);
@@ -47,7 +49,7 @@ export default function UserAvatar({
       <span className={shellClass}>
         {hasImage ? (
           <img
-            src={resolveAvatarSrc(avatar, cacheBust)}
+            src={resolveAvatarSrc(avatarValue, cacheBust)}
             alt=""
             className="h-full w-full object-cover"
             onError={() => setImgFailed(true)}

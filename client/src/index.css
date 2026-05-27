@@ -8,6 +8,20 @@
   --bg-secondary: #1a0b2e;
   --text-primary: #ffffff;
   --text-secondary: #a0aec0;
+  /* Khớp NavigationSidebar w-14 / sm:w-16 / md:w-[68px] — ResizeObserver ghi đè khi mount */
+  --vh-nav-rail-width: 3.5rem;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --vh-nav-rail-width: 4rem;
+  }
+}
+
+@media (min-width: 768px) {
+  :root {
+    --vh-nav-rail-width: 68px;
+  }
 }
 
 html.light {

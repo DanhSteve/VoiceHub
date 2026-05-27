@@ -10,15 +10,24 @@ const TTL_SEC = Math.min(
   Math.max(15, parseInt(process.env.BFF_DOCUMENTS_OVERVIEW_CACHE_TTL_SEC || '45', 10) || 45)
 );
 
-async function fetchDocumentsOverview(userId, userEmail, orgId) {
-  const headers = buildTrustedHeaders(userId, userEmail);
+/** Aggregate org + chat search — cần dài hơn BFF_DOWNSTREAM_TIMEOUT_MS (mặc định 7s). */
+const DOCUMENTS_OVERVIEW_TIMEOUT_MS = Math.min(
+  120000,
+  Math.max(15000, parseInt(process.env.BFF_DOCUMENTS_OVERVIEW_TIMEOUT_MS || '45000', 10) || 45000)
+);
+
+async function fetchDocumentsOverview(userId, userEmail, orgId, req) {
+  const headers = buildTrustedHeaders(userId, userEmail, req);
   const url = `${services.organization.url}/api/organizations/${encodeURIComponent(orgId)}/documents-overview`;
-  const res = await fetchJson(url, headers, 'documents-overview');
+  const res = await fetchJson(url, headers, 'documents-overview', DOCUMENTS_OVERVIEW_TIMEOUT_MS);
   if (!res.ok) {
     const err = new Error(
-      res.data?.message || res.data?.error || 'Documents overview unavailable'
+      res.timedOut
+        ? 'Documents overview timed out — thử tải lại sau vài giây'
+        : res.data?.message || res.data?.error || 'Documents overview unavailable'
     );
-    err.statusCode = res.status || 503;
+    err.statusCode = res.timedOut ? 504 : res.status || 503;
+    err.code = res.timedOut ? 'BFF_DOCUMENTS_TIMEOUT' : undefined;
     throw err;
   }
   return res.data;
@@ -40,7 +49,7 @@ async function handleDocumentsOverview(req, res) {
       cacheKey,
       coalesceKey: cacheKey,
       ttlSec: TTL_SEC,
-      loader: () => fetchDocumentsOverview(userId, req.user?.email, orgId),
+      loader: () => fetchDocumentsOverview(userId, req.user?.email, orgId, req),
     });
 
     if (fromCache) res.setHeader('X-Bff-Cache', 'HIT');

@@ -22,7 +22,13 @@ import { restoreAuthSession, restoreAuthSessionAfterLogin } from '../services/au
 
 // Import userService để update user status
 import userService from '../services/userService';
-import { getToken, setToken, removeToken } from '../utils/tokenStorage';
+import {
+  getToken,
+  setToken,
+  removeToken,
+  onTokenChange,
+  getResolvedBearerToken,
+} from '../utils/tokenStorage';
 import { isAutoLogoutDisabled } from '../utils/devAuth';
 import { resolveApiBaseUrl } from '../utils/browserOrigin';
 /* ========================================
@@ -70,6 +76,8 @@ function AuthProvider({ children }) {
   // Default: null (Guest role - chưa đăng nhập)
   // Khi login thành công → setUser(userData từ API)
   const [user, setUser] = useState(null);
+  /** JWT đồng bộ state — React Query `enabled` phải phản ứng khi token đổi (getToken() một mình không re-render). */
+  const [accessToken, setAccessToken] = useState(() => getToken());
   
   // State loading: true khi đang check auth lần đầu (reload) — tránh ProtectedRoute redirect oan
   const [loading, setLoading] = useState(true);
@@ -89,6 +97,7 @@ function AuthProvider({ children }) {
         const { user: restored } = await restoreAuthSession();
         if (restored) {
           setUser(restored);
+          setAccessToken(getToken());
         }
       } catch (error) {
         // Chỉ xóa token khi server xác nhận 401 — lỗi mạng/503 không được logout oan
@@ -98,6 +107,7 @@ function AuthProvider({ children }) {
           removeToken();
         }
       } finally {
+        setAccessToken(getToken());
         // Dù thành công hay thất bại cũng set loading = false
         setLoading(false);
       }
@@ -106,6 +116,9 @@ function AuthProvider({ children }) {
     // Chạy checkAuth khi app khởi động
     checkAuth();
   }, []); // Empty deps → chỉ chạy 1 lần khi mount
+
+  /** Đồng bộ accessToken khi apiClient/axios xóa JWT (401) mà không qua logout(). */
+  useEffect(() => onTokenChange(() => setAccessToken(getToken())), []);
 
   /* ========================================
      LOGIN FUNCTION
@@ -139,6 +152,7 @@ function AuthProvider({ children }) {
       // Lưu token vào localStorage để persist login
       // Token này sẽ được gửi kèm mọi API request
       setToken(token);
+      setAccessToken(token);
 
       try {
         const merged = await restoreAuthSessionAfterLogin(userData);
@@ -326,6 +340,7 @@ function AuthProvider({ children }) {
       await authService.logout();
       
       removeToken();
+      setAccessToken(null);
       
       // Set user = null → app sẽ redirect về login
       setUser(null);
@@ -338,6 +353,7 @@ function AuthProvider({ children }) {
       
       // Force logout: xóa token và user dù API fail
       removeToken();
+      setAccessToken(null);
       setUser(null);
     }
   }, []);
@@ -369,14 +385,13 @@ function AuthProvider({ children }) {
   ======================================== */
   const value = {
     user,              // User hiện tại: { id, name, email, avatar }
+    accessToken,       // JWT hiện tại (state) — dùng cho React Query enabled
     loading,           // Loading state: true/false
     login,             // Function: login(email, password)
     register,          // Function: register(userData)
     logout,            // Function: logout()
     updateUser,        // Function: updateUser(userData)
-    isAuthenticated: !!user,  // Boolean: true nếu có user (đã login)
-                              // !! convert object → boolean
-                              // null → false, object → true
+    isAuthenticated: Boolean(user && getResolvedBearerToken()),
   };
 
   /* ========================================

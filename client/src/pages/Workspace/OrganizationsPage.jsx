@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppStrings } from '../../locales/appStrings';
 import toast from 'react-hot-toast';
@@ -12,6 +13,7 @@ import OrganizationScopeRoleSettingsModal from '../../components/Organization/Or
 import ForwardChannelModal from '../../components/Organization/ForwardChannelModal';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { useAuth } from '../../context/AuthContext';
+import { getResolvedBearerToken } from '../../utils/tokenStorage';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useSocket } from '../../context/SocketContext';
@@ -23,6 +25,10 @@ import { organizationAPI } from '../../services/api/organizationAPI';
 import { taskAPI } from '../../services/api/taskAPI';
 import { useLandingSafeNavigate } from '../../hooks/useLandingSafeNavigate';
 import { useOrgShell } from '../../hooks/queries/useOrgShell';
+import {
+  buildOrgFilesFromOverview,
+  fetchOrganizationDocumentsOverview,
+} from '../../hooks/queries/useOrganizationDocumentsOverview';
 import { useOrgChannelMessages } from '../../hooks/queries/useOrgChannelMessages';
 import { useOrganizationsMy } from '../../hooks/queries/useOrganizationsMy';
 import { useFriendsList } from '../../hooks/queries/useFriendsList';
@@ -48,6 +54,7 @@ import {
   organizationsListSame,
   workspacePayloadFromOrg,
 } from '../../utils/orgListUtils';
+import { normalizeWorkspaceTab, parseWorkspaceTabFromSearch } from '../../utils/workspaceTabUtils';
 const unwrapData = (payload) => payload?.data ?? payload;
 
 /** Khi đổi phòng ban: không tự nhảy vào kênh voice — ưu tiên kênh chat hoặc để trống. */
@@ -86,20 +93,9 @@ function preferDefaultTextChannelId(channelList, preferredTeamId = '', permissio
   return anyText?._id ? String(anyText._id) : '';
 }
 
-const parseNotificationData = (item) => {
-  if (!item || typeof item !== 'object') return { data: {} };
-  if (item.data && typeof item.data === 'object') return item;
-  if (typeof item.data !== 'string') return { ...item, data: {} };
-  try {
-    return { ...item, data: JSON.parse(item.data) };
-  } catch {
-    return { ...item, data: {} };
-  }
-};
-
 function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = {}) {
   const { t, locale } = useAppStrings();
-  const { user } = useAuth();
+  const { user, loading: authLoading, isAuthenticated, accessToken } = useAuth();
   const { setActiveWorkspace, lastWorkspaceSlug, setLastWorkspaceSlug } = useWorkspace();
   const { isDarkMode } = useTheme();
   const { on, off, onlineUsers, connected: socketConnected, joinRoom, leaveRoom } = useSocket();
@@ -193,6 +189,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   const [chatContacts, setChatContacts] = useState([]);
   const [loadingChatContacts, setLoadingChatContacts] = useState(false);
   const [createOrgModalOpen, setCreateOrgModalOpen] = useState(false);
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [createWorkspaceStep, setCreateWorkspaceStep] = useState(1);
   const [createOrgName, setCreateOrgName] = useState('');
   const [createWorkspaceSlug, setCreateWorkspaceSlug] = useState('');
@@ -295,10 +292,10 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   const [memberListRefreshKey, setMemberListRefreshKey] = useState(0);
   const [workspaceTasks, setWorkspaceTasks] = useState([]);
   const [loadingWorkspaceTasks, setLoadingWorkspaceTasks] = useState(false);
+  const [workspaceDocFiles, setWorkspaceDocFiles] = useState([]);
+  const [loadingWorkspaceDocuments, setLoadingWorkspaceDocuments] = useState(false);
+  const [workspaceDocumentsError, setWorkspaceDocumentsError] = useState('');
   const [workspaceTabView, setWorkspaceTabView] = useState('chat');
-  const [workspaceNotificationsOpen, setWorkspaceNotificationsOpen] = useState(false);
-  const [workspaceNotifications, setWorkspaceNotifications] = useState([]);
-  const [loadingWorkspaceNotifications, setLoadingWorkspaceNotifications] = useState(false);
   const previousVoiceChannelIdRef = useRef('');
   const hasInviteQuery = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -312,11 +309,10 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     !createOrgModalOpen &&
     !location.state?.openCreateWorkspace &&
     !hasInviteQuery;
-  const workspaceTabFromUrl = useMemo(() => {
-    const params = new URLSearchParams(location.search);
-    const raw = String(params.get('tab') || '').trim().toLowerCase();
-    return raw === 'tasks' ? 'tasks' : 'chat';
-  }, [location.search]);
+  const workspaceTabFromUrl = useMemo(
+    () => parseWorkspaceTabFromSearch(location.search),
+    [location.search]
+  );
 
   useEffect(() => {
     setWorkspaceTabView(workspaceTabFromUrl);
@@ -341,9 +337,57 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     [organizations, selectedOrganizationId]
   );
 
+  const handleWorkspaceTabChange = useCallback(
+    (tab) => {
+      const next = normalizeWorkspaceTab(tab);
+      const current = parseWorkspaceTabFromSearch(location.search);
+      if (current === next) return;
+      const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
+      if (!slug || landingDemo) return;
+      const base = `/w/${encodeURIComponent(slug)}`;
+      if (next === 'chat') {
+        navigate(base);
+      } else {
+        navigate(`${base}?tab=${next}`);
+      }
+    },
+    [
+      location.search,
+      selectedOrganization?.slug,
+      selectedOrganizationId,
+      landingDemo,
+      navigate,
+    ]
+  );
+
+  const openWorkspaceNotifications = useCallback(() => {
+    if (!selectedOrganizationId) return;
+    handleWorkspaceTabChange('notifications');
+  }, [selectedOrganizationId, handleWorkspaceTabChange]);
+
+  const handleOpenDocumentInWorkspace = useCallback(
+    (file) => {
+      if (file?.roomId) {
+        setSelectedChannelId(String(file.roomId));
+      }
+      const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
+      if (!slug) return;
+      const params = new URLSearchParams();
+      if (file?.roomId) params.set('channelId', String(file.roomId));
+      if (file?.source === 'message' && file?.id) params.set('messageId', String(file.id));
+      const qs = params.toString();
+      navigate(`/w/${encodeURIComponent(slug)}${qs ? `?${qs}` : ''}`);
+    },
+    [selectedOrganization?.slug, selectedOrganizationId, navigate]
+  );
+
   useEffect(() => {
     setWorkspaceSearchOpen(false);
   }, [selectedOrganizationId]);
+
+  useEffect(() => {
+    setWorkspaceSearchOpen(false);
+  }, [location.pathname]);
   const selectedDepartment = useMemo(
     () => departments.find((department) => department._id === selectedDepartmentId) || null,
     [departments, selectedDepartmentId]
@@ -773,8 +817,20 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   }, [queryClient]);
 
   const { data: orgShellData, isError: orgShellError } = useOrgShell(selectedOrganizationId, {
-    enabled: !landingDemo,
+    enabled: !landingDemo && !authLoading,
   });
+
+  const hasAuthToken = Boolean(getResolvedBearerToken());
+
+  const notificationsFetchEnabled =
+    !landingDemo &&
+    !authLoading &&
+    isAuthenticated &&
+    hasAuthToken &&
+    Boolean(selectedOrganizationId) &&
+    workspaceTabView === 'notifications' &&
+    Boolean(orgShellData) &&
+    !orgShellError;
 
   const orgChannelMessagesQuery = useOrgChannelMessages(
     selectedChannelId,
@@ -1143,29 +1199,40 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     }
   };
 
-  const openWorkspaceNotifications = async () => {
-    if (!selectedOrganizationId) return;
-    setWorkspaceNotificationsOpen(true);
-    setLoadingWorkspaceNotifications(true);
-    try {
-      const response = await api.get('/notifications', {
-        params: {
-          scope: 'organization',
-          organizationId: selectedOrganizationId,
-          limit: 50,
-        },
-      });
-      const body = response?.data ?? response;
-      const inner = body?.data ?? body;
-      const list = Array.isArray(inner?.notifications) ? inner.notifications : [];
-      setWorkspaceNotifications(list.map(parseNotificationData));
-    } catch (error) {
-      setWorkspaceNotifications([]);
-      notifyError(error?.response?.data?.message || t('notifications.loadFail'));
-    } finally {
-      setLoadingWorkspaceNotifications(false);
-    }
-  };
+  /** Cùng pattern taskAPI.getTasks — gọi trực tiếp khi có orgId + JWT (không React Query enabled). */
+  const loadWorkspaceDocuments = useCallback(
+    async (organizationId) => {
+      const orgId = String(organizationId || '').trim();
+      if (!orgId) {
+        setWorkspaceDocFiles([]);
+        setWorkspaceDocumentsError('');
+        return;
+      }
+      if (!getResolvedBearerToken()) {
+        setWorkspaceDocFiles([]);
+        setWorkspaceDocumentsError(t('documents.orgLoadError'));
+        setLoadingWorkspaceDocuments(false);
+        return;
+      }
+      setLoadingWorkspaceDocuments(true);
+      setWorkspaceDocumentsError('');
+      try {
+        const overview = await fetchOrganizationDocumentsOverview(orgId);
+        setWorkspaceDocFiles(buildOrgFilesFromOverview(overview, t, locale));
+      } catch (err) {
+        setWorkspaceDocFiles([]);
+        setWorkspaceDocumentsError(
+          err?.response?.data?.message ||
+            err?.response?.data?.error ||
+            err?.message ||
+            t('documents.orgLoadError')
+        );
+      } finally {
+        setLoadingWorkspaceDocuments(false);
+      }
+    },
+    [t, locale]
+  );
 
   const handleMoveWorkspaceTask = async (task, nextStatus) => {
     if (!task?._id || !selectedOrganizationId) return;
@@ -1251,6 +1318,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     setCreateDepartmentNames([[['']]]);
     setCreateTeamNames([[[['']]]]);
     setCreateWorkspaceStep(1);
+    setCreatingWorkspace(false);
     setCreateOrgModalOpen(true);
   };
 
@@ -1266,6 +1334,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       return;
     }
 
+    setCreatingWorkspace(true);
     try {
       const response = await organizationAPI.createWorkspace({
         name: normalizedName,
@@ -1295,6 +1364,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
         error?.message ||
         t('organizations.orgCreateFail');
       notifyError(typeof msg === 'string' ? msg : t('organizations.orgCreateFail'));
+    } finally {
+      setCreatingWorkspace(false);
     }
   };
 
@@ -2571,6 +2642,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   }, [landingDemo, selectedTeamId, channelMatrixKey, channelsKey]);
 
   const lastMessagesEnrichRef = useRef('');
+  const lastMessagesChannelKeyRef = useRef('');
 
   useEffect(() => {
     if (landingDemo) return;
@@ -2578,14 +2650,27 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     if (!selectedChannelId) {
       setMessages([]);
       lastMessagesEnrichRef.current = '';
+      lastMessagesChannelKeyRef.current = '';
       return;
     }
     if (selectedChannel?.type === 'voice') {
       setMessages([]);
       lastMessagesEnrichRef.current = '';
+      lastMessagesChannelKeyRef.current = '';
       return;
     }
-    const enrichKey = `${selectedOrganizationId}|${selectedChannelId}|${orgChannelMessagesQuery.messagesFingerprint ?? ''}`;
+
+    const channelKey = `${selectedOrganizationId}|${selectedChannelId}`;
+    if (lastMessagesChannelKeyRef.current !== channelKey) {
+      lastMessagesChannelKeyRef.current = channelKey;
+      lastMessagesEnrichRef.current = '';
+      setMessages([]);
+    }
+
+    const fingerprint = orgChannelMessagesQuery.messagesFingerprint ?? '';
+    if (!fingerprint && orgChannelMessagesQuery.isLoading) return;
+
+    const enrichKey = `${channelKey}|${fingerprint}`;
     if (lastMessagesEnrichRef.current === enrichKey) return;
     lastMessagesEnrichRef.current = enrichKey;
 
@@ -2608,6 +2693,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     selectedChannelId,
     selectedChannel?.type,
     orgChannelMessagesQuery.messagesFingerprint,
+    orgChannelMessagesQuery.isLoading,
   ]);
 
   useEffect(() => {
@@ -2710,6 +2796,23 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       loadWorkspaceTasks(selectedOrganizationId);
     }
   }, [selectedOrganizationId, landingDemo]);
+
+  useEffect(() => {
+    if (landingDemo || authLoading || !isAuthenticated) return;
+    if (workspaceTabView !== 'documents') return;
+    const orgId = String(selectedOrganizationId || '').trim();
+    if (!orgId) return;
+    if (!getResolvedBearerToken()) return;
+    loadWorkspaceDocuments(orgId);
+  }, [
+    selectedOrganizationId,
+    workspaceTabView,
+    landingDemo,
+    authLoading,
+    isAuthenticated,
+    accessToken,
+    loadWorkspaceDocuments,
+  ]);
 
   useEffect(() => {
     if (landingDemo) return;
@@ -2841,6 +2944,11 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
           <OrganizationMainPanel
             landingDemo={landingDemo}
             workspaceTabView={workspaceTabView}
+            workspaceDocFiles={workspaceDocFiles}
+            loadingWorkspaceDocuments={loadingWorkspaceDocuments}
+            workspaceDocumentsError={workspaceDocumentsError}
+            onWorkspaceDocumentsReload={() => loadWorkspaceDocuments(selectedOrganizationId)}
+            notificationsFetchEnabled={notificationsFetchEnabled}
             selectedOrganization={selectedOrganization}
             departments={sidebarDepartments}
             selectedDepartment={selectedDepartment}
@@ -2922,7 +3030,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
               Boolean(membershipScope?.canSeeAllStructure) ||
               isOrgMembershipStructureAdmin(selectedOrganization?.myRole)
             }
-            onWorkspaceTabChange={setWorkspaceTabView}
+            onWorkspaceTabChange={handleWorkspaceTabChange}
+            onOpenDocumentInWorkspace={handleOpenDocumentInWorkspace}
             onDisconnectVoice={() => setSelectedChannelId('')}
             organizationId={selectedOrganizationId}
             onVoiceRoomSessionEnd={handleVoiceRoomSessionEnd}
@@ -3023,64 +3132,6 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             : 'w-[280px]'
         }
       />
-      {workspaceNotificationsOpen && (
-        <Modal
-          isOpen={workspaceNotificationsOpen}
-          onClose={() => setWorkspaceNotificationsOpen(false)}
-          title={`Thong bao - ${selectedOrganization?.name || ''}`}
-          size="lg"
-        >
-          <div className="space-y-3">
-            {loadingWorkspaceNotifications ? (
-              <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-gray-300">
-                Dang tai thong bao...
-              </div>
-            ) : workspaceNotifications.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-white/15 bg-white/[0.03] p-5 text-sm text-gray-400">
-                Chua co thong bao trong to chuc nay.
-              </div>
-            ) : (
-              workspaceNotifications.map((item) => (
-                <button
-                  key={item._id || item.id}
-                  type="button"
-                  onClick={() => {
-                    const data = item.data || {};
-                    if (item.type === 'document' || data.documentId) {
-                      navigate(`/documents?organizationId=${encodeURIComponent(selectedOrganizationId)}`);
-                    } else if (item.type === 'task_assigned' || item.type === 'task_completed' || data.taskId) {
-                      navigate(`/w/${encodeURIComponent(selectedOrganization?.slug || selectedOrganizationId)}?tab=tasks`);
-                    } else {
-                      navigate(`/w/${encodeURIComponent(selectedOrganization?.slug || selectedOrganizationId)}`);
-                    }
-                    setWorkspaceNotificationsOpen(false);
-                  }}
-                  className="block w-full rounded-xl border border-white/10 bg-white/[0.04] p-4 text-left transition hover:bg-white/[0.07]"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-white">
-                        {item.title || t('notifications.defaultTitle')}
-                      </div>
-                      {(item.organizationName || item.data?.organizationName || item.data?.workspaceName) && (
-                        <div className="mt-1 truncate text-[11px] uppercase tracking-wide text-cyan-300">
-                          {item.organizationName || item.data?.workspaceName || item.data?.organizationName}
-                        </div>
-                      )}
-                      <div className="mt-1 line-clamp-2 text-sm text-gray-400">
-                        {item.content || item.message || ''}
-                      </div>
-                    </div>
-                    {!item.isRead ? (
-                      <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-cyan-400" />
-                    ) : null}
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </Modal>
-      )}
       {leaveOrgModalOpen && (
         <Modal
           isOpen={leaveOrgModalOpen}
@@ -3254,11 +3305,36 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
 
       <Modal
         isOpen={createOrgModalOpen}
-        onClose={() => setCreateOrgModalOpen(false)}
-        title={`Create Workspace - Step ${createWorkspaceStep}/5`}
+        onClose={() => {
+          if (creatingWorkspace) return;
+          setCreateOrgModalOpen(false);
+        }}
+        title={
+          creatingWorkspace
+            ? t('organizations.creatingWorkspace')
+            : `Create Workspace - Step ${createWorkspaceStep}/5`
+        }
         size="sm"
       >
-        <div className="space-y-3">
+        <div className="relative space-y-3">
+          {creatingWorkspace ? (
+            <div
+              className="absolute inset-0 z-10 flex min-h-[12rem] flex-col items-center justify-center gap-3 rounded-xl bg-slate-950/90 px-4 text-center backdrop-blur-sm"
+              role="status"
+              aria-live="polite"
+              aria-busy="true"
+            >
+              <Loader2
+                className="h-10 w-10 animate-spin text-cyan-400"
+                strokeWidth={1.75}
+                aria-hidden
+              />
+              <p className="text-sm font-semibold text-white">{t('organizations.creatingWorkspace')}</p>
+              <p className="max-w-xs text-xs leading-relaxed text-slate-400">
+                {t('organizations.creatingWorkspaceHint')}
+              </p>
+            </div>
+          ) : null}
           {createWorkspaceStep === 1 ? (
             <input
               value={createOrgName}
@@ -3697,19 +3773,23 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
               <div>Teams/Department: {createTeamPerDepartment}</div>
             </div>
           ) : null}
-          <div className="flex justify-end gap-2">
+          <div
+            className={`flex justify-end gap-2 ${creatingWorkspace ? 'pointer-events-none opacity-40' : ''}`}
+          >
             <button
               type="button"
+              disabled={creatingWorkspace}
               onClick={() => setCreateOrgModalOpen(false)}
-              className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300"
+              className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300 disabled:cursor-not-allowed"
             >
               {t('nav.cancel')}
             </button>
             {createWorkspaceStep > 1 ? (
               <button
                 type="button"
+                disabled={creatingWorkspace}
                 onClick={() => setCreateWorkspaceStep((step) => Math.max(1, step - 1))}
-                className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300"
+                className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300 disabled:cursor-not-allowed"
               >
                 Back
               </button>
@@ -3717,8 +3797,9 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             {createWorkspaceStep < 5 ? (
               <button
                 type="button"
+                disabled={creatingWorkspace}
                 onClick={() => setCreateWorkspaceStep((step) => Math.min(5, step + 1))}
-                className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"
+                className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Next
               </button>
@@ -3726,10 +3807,18 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             {createWorkspaceStep === 5 ? (
               <button
                 type="button"
+                disabled={creatingWorkspace}
                 onClick={handleSubmitCreateOrganization}
-                className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-80"
               >
-                Create Workspace
+                {creatingWorkspace ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} aria-hidden />
+                    {t('organizations.creatingWorkspace')}
+                  </>
+                ) : (
+                  t('organizations.createWorkspaceSubmit')
+                )}
               </button>
             ) : null}
           </div>

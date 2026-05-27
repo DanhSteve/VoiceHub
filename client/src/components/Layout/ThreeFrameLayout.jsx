@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../../context/ThemeContext';
-import { appShellBg, threeFrameRightPanel } from '../../theme/shellTheme';
+import { appShellBg, shellNavRailZ, threeFrameRightPanel } from '../../theme/shellTheme';
 import NavigationSidebar from './NavigationSidebar';
 import ShellWaveBackdrop from './ShellWaveBackdrop';
 
@@ -77,7 +77,7 @@ const ThreeFrameLayout = ({
   return (
     <div className={`relative flex h-screen overflow-hidden ${shell}`}>
       <ShellWaveBackdrop />
-      <div className="relative z-[2] h-full shrink-0">{navLeft}</div>
+      <div className={`relative ${shellNavRailZ} h-full shrink-0 pointer-events-auto`}>{navLeft}</div>
 
       <div className="relative z-[1] flex min-w-0 flex-1 flex-col overflow-hidden py-2 pl-2 pr-1">
         <div

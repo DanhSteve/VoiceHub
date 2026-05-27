@@ -1,4 +1,5 @@
 import apiClient from './apiClient';
+import { getResolvedBearerToken } from '../../utils/tokenStorage';
 
 export const organizationAPI = {
   // Get all organizations
@@ -231,6 +232,12 @@ export const organizationAPI = {
   },
 
   getDocumentsOverview: async (orgId) => {
+    if (!getResolvedBearerToken()) {
+      const err = new Error('Chưa có phiên đăng nhập (JWT). Vui lòng đăng nhập lại.');
+      err.status = 401;
+      err.code = 'CLIENT_NO_JWT';
+      throw err;
+    }
     const response = await apiClient.get(`/organizations/${orgId}/documents-overview`, {
       skipPermissionDeniedToast: true,
       skipGlobalErrorHandling: true,

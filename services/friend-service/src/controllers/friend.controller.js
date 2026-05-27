@@ -21,6 +21,9 @@ function errorToStatus(error, defaultMessage = 'An error occurred', defaultStatu
   if (msg.includes('temporarily unavailable') || msg.includes('Service temporarily unavailable')) {
     return { status: 503, message: 'Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau.' };
   }
+  if (msg.includes('Friend relationship not found')) {
+    return { status: 404, message: 'Không tìm thấy quan hệ bạn bè' };
+  }
   return { status: defaultStatus, message: msg };
 }
 
@@ -187,11 +190,15 @@ class FriendController {
         });
       }
 
-      await friendService.removeFriend(userId, friendId);
+      const result = await friendService.removeFriend(userId, friendId);
 
       res.json({
         success: true,
         message: 'Friend removed successfully',
+        data: {
+          purgeAt: result?.purgeAt,
+          graceHours: result?.graceHours,
+        },
       });
     } catch (error) {
       logger.error('Remove friend error:', error);

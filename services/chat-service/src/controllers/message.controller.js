@@ -15,7 +15,10 @@ const {
   isMimeAllowed,
 } = require('../config/fileRetention');
 const { publishTaskAiSyncEvent } = require('../messaging/taskAiSyncPublisher');
-const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
+const {
+  buildTrustedGatewayHeaders,
+  isTrustedGatewayForward,
+} = require('/shared/middleware/gatewayTrust');
 const {
   fetchAccessibleChannelPermissionMatrix,
   assertCanWriteInOrgChannel,
@@ -47,6 +50,20 @@ function headersForOrganizationForward(req) {
 async function fetchAccessibleChannelIds(orgId, req) {
   const access = await resolveOrgChannelAccess(orgId, req);
   return access.channelIds;
+}
+
+/** ACL đã resolve ở org-service (documents-overview S2S) — tránh gọi lại accessible-channel-ids. */
+function parseTrustedAllowedRoomIds(q, req) {
+  if (!isTrustedGatewayForward(req)) return null;
+  if (String(req.headers['x-vh-org-documents-internal'] || '').trim() !== '1') {
+    return null;
+  }
+  const raw = q.allowedRoomIds ?? q.channelIds;
+  if (raw == null || raw === '') return [];
+  return String(raw)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 class MessageController {
@@ -533,8 +550,12 @@ class MessageController {
         });
       }
       let allowedRoomIds;
+      const preResolved = parseTrustedAllowedRoomIds(q, req);
       try {
-        allowedRoomIds = await fetchAccessibleChannelIds(organizationId, req);
+        allowedRoomIds =
+          preResolved !== null
+            ? preResolved
+            : await fetchAccessibleChannelIds(organizationId, req);
       } catch (e) {
         const upstream = e.response?.status || e.statusCode;
         const body = e.response?.data || {};

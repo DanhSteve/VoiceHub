@@ -12,28 +12,47 @@ const CHAT_SERVICE_URL = String(
   process.env.CHAT_SERVICE_URL || 'http://chat-service:3006'
 ).replace(/\/$/, '');
 const DOCUMENT_SERVICE_URL = String(
-  process.env.DOCUMENT_SERVICE_URL || 'http://document-service:3014'
+  process.env.DOCUMENT_SERVICE_URL || 'http://document-service:3010'
 ).replace(/\/$/, '');
 
 const MAX_ATTACHMENT_PAGES = Math.min(
   12,
-  Math.max(1, Number(process.env.ORG_DOCUMENTS_ATTACHMENT_MAX_PAGES || 8))
+  Math.max(1, Number(process.env.ORG_DOCUMENTS_ATTACHMENT_MAX_PAGES || 4))
 );
-const PAGE_LIMIT = Math.min(100, Math.max(10, Number(process.env.ORG_DOCUMENTS_PAGE_LIMIT || 50)));
+const PAGE_LIMIT = Math.min(100, Math.max(10, Number(process.env.ORG_DOCUMENTS_PAGE_LIMIT || 40)));
+const ATTACHMENT_BUDGET_MS = Math.min(
+  90000,
+  Math.max(8000, Number(process.env.ORG_DOCUMENTS_ATTACHMENT_BUDGET_MS || 32000))
+);
 
-async function fetchAttachmentMessages(orgId, userId) {
-  const headers = buildTrustedGatewayHeaders(userId);
+async function fetchAttachmentMessages(orgId, userId, allowedRoomIds = []) {
+  const headers = {
+    ...buildTrustedGatewayHeaders(userId),
+    'x-vh-org-documents-internal': '1',
+  };
+  const roomIdsCsv = (Array.isArray(allowedRoomIds) ? allowedRoomIds : [])
+    .map(String)
+    .filter(Boolean)
+    .join(',');
   const all = [];
   let pageToken = null;
   let pages = 0;
+  let truncated = false;
+  let lastHasMore = false;
+  const startedAt = Date.now();
 
   while (pages < MAX_ATTACHMENT_PAGES) {
+    if (Date.now() - startedAt > ATTACHMENT_BUDGET_MS) {
+      truncated = true;
+      break;
+    }
     const params = {
       organizationId: String(orgId),
       hasAttachment: true,
       limit: PAGE_LIMIT,
       fields: 'summary',
     };
+    if (roomIdsCsv) params.allowedRoomIds = roomIdsCsv;
     if (pageToken) params.pageToken = pageToken;
 
     const res = await axios.get(`${CHAT_SERVICE_URL}/api/messages/search`, {
@@ -53,11 +72,14 @@ async function fetchAttachmentMessages(orgId, userId) {
     const messages = Array.isArray(result?.messages) ? result.messages : [];
     all.push(...messages);
     pages += 1;
-    if (!result?.hasMore || !result?.nextPageToken || messages.length === 0) break;
+    lastHasMore = Boolean(result?.hasMore && result?.nextPageToken);
+    if (!lastHasMore || messages.length === 0) break;
     pageToken = result.nextPageToken;
   }
 
-  return all;
+  if (!truncated && lastHasMore) truncated = true;
+
+  return { messages: all, truncated };
 }
 
 async function fetchLibraryDocuments(orgId, userId) {
@@ -102,12 +124,14 @@ async function buildDocumentsOverview(orgId, userId) {
     ? accessData.channelIds.map(String)
     : [];
 
-  const [attachmentMessages, libraryDocuments] = await Promise.all([
+  const [attachmentResult, libraryDocuments] = await Promise.all([
     allowedRoomIds.length
-      ? fetchAttachmentMessages(oid, uid)
-      : Promise.resolve([]),
+      ? fetchAttachmentMessages(oid, uid, allowedRoomIds)
+      : Promise.resolve({ messages: [], truncated: false }),
     fetchLibraryDocuments(oid, uid),
   ]);
+  const attachmentMessages = attachmentResult?.messages || [];
+  const attachmentsTruncated = Boolean(attachmentResult?.truncated);
 
   return {
     orgName: orgDoc?.name || '',
@@ -121,7 +145,7 @@ async function buildDocumentsOverview(orgId, userId) {
     provisioning: structureData?.provisioning || null,
     attachmentMessages,
     libraryDocuments,
-    hasMore: false,
+    hasMore: attachmentsTruncated,
     nextPageToken: null,
   };
 }

@@ -1,10 +1,15 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useLocale } from '../../context/LocaleContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import CreateTaskFromAiModal from '../Chat/CreateTaskFromAiModal';
 import { getAiTaskEligibility, AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
+import { shellNavRailBackdrop } from '../../theme/shellTheme';
+import OrganizationDocumentsWorkspacePanel from '../../features/orgDocuments/OrganizationDocumentsWorkspacePanel';
+import OrganizationNotificationsWorkspacePanel from '../../features/orgNotifications/OrganizationNotificationsWorkspacePanel';
+import { isWorkspaceAuxTab, normalizeWorkspaceTab } from '../../utils/workspaceTabUtils';
 
 import {
   Bell,
@@ -103,6 +108,11 @@ function userInitialsFromProfile(user) {
 const OrganizationMainPanel = ({
   landingDemo = false,
   workspaceTabView = 'chat',
+  workspaceDocFiles = [],
+  loadingWorkspaceDocuments = false,
+  workspaceDocumentsError = '',
+  onWorkspaceDocumentsReload,
+  notificationsFetchEnabled = false,
   selectedOrganization,
   departments = [],
   selectedDepartment,
@@ -132,6 +142,7 @@ const OrganizationMainPanel = ({
   onSelectDepartment,
   onSelectTeam,
   onOpenNotificationsPage,
+  onOpenDocumentInWorkspace,
   onCreateDepartment,
   onCreateChannel,
   onOpenChannelSettings,
@@ -181,6 +192,12 @@ const OrganizationMainPanel = ({
   const { locale } = useLocale();
   const { t } = useAppStrings();
   const { isDarkMode } = useTheme();
+  const location = useLocation();
+
+  useEffect(() => {
+    setShowEmojiPicker(false);
+    setMoreMenu({ open: false, anchorRect: null, message: null });
+  }, [location.pathname]);
 
   const formatDateDividerLabel = (iso) => {
     if (!iso) return '';
@@ -225,6 +242,7 @@ const OrganizationMainPanel = ({
   const chatScrollRef = useRef(null);
   const messagesEndRef = useRef(null);
   const isNearBottomRef = useRef(true);
+  const forceScrollOnChannelRef = useRef(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const [editingMessageId, setEditingMessageId] = useState(null);
@@ -236,7 +254,7 @@ const OrganizationMainPanel = ({
   const [createTaskMentions, setCreateTaskMentions] = useState([]);
   /** Hover: thanh công cụ phía trên bubble hoặc phía dưới (tránh cắt khi tin ở đầu khung chat) */
   const [toolbarPlacementById, setToolbarPlacementById] = useState({});
-  const [workspaceTab, setWorkspaceTab] = useState(workspaceTabView === 'tasks' ? 'tasks' : 'chat');
+  const [workspaceTab, setWorkspaceTab] = useState(() => normalizeWorkspaceTab(workspaceTabView));
   const [taskSearchQuery, setTaskSearchQuery] = useState('');
   const [taskDepartmentFilter, setTaskDepartmentFilter] = useState('all');
   const [taskCreateOpen, setTaskCreateOpen] = useState(false);
@@ -306,13 +324,11 @@ const OrganizationMainPanel = ({
   };
 
   useEffect(() => {
-    onWorkspaceTabChange?.(workspaceTab);
-  }, [workspaceTab, onWorkspaceTabChange]);
-
-  useEffect(() => {
-    const nextTab = workspaceTabView === 'tasks' ? 'tasks' : 'chat';
+    const nextTab = normalizeWorkspaceTab(workspaceTabView);
     setWorkspaceTab((prev) => (prev === nextTab ? prev : nextTab));
   }, [workspaceTabView]);
+
+  const auxWorkspaceTab = isWorkspaceAuxTab(workspaceTab);
 
   const scopedChannels = selectedTeamId
     ? channels.filter((channel) => String(channel.team || '') === String(selectedTeamId))
@@ -428,36 +444,40 @@ const OrganizationMainPanel = ({
     };
     requestAnimationFrame(() => {
       apply();
-      requestAnimationFrame(updateNearBottomState);
+      requestAnimationFrame(() => {
+        apply();
+        requestAnimationFrame(updateNearBottomState);
+      });
     });
   }, [updateNearBottomState]);
 
   useEffect(() => {
-    if (workspaceTab === 'tasks' || isVoiceChannel) return;
+    if (auxWorkspaceTab || isVoiceChannel) return;
+    forceScrollOnChannelRef.current = true;
     isNearBottomRef.current = true;
     setShowJumpToLatest(false);
-  }, [selectedChannelId, workspaceTab, isVoiceChannel]);
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = 0;
+  }, [selectedChannelId, workspaceTab, isVoiceChannel, auxWorkspaceTab]);
 
   useEffect(() => {
-    if (workspaceTab === 'tasks' || isVoiceChannel || loadingMessages) return;
-    scrollChatToLatest('auto');
-  }, [
-    selectedChannelId,
-    loadingMessages,
-    workspaceTab,
-    isVoiceChannel,
-    scrollChatToLatest,
-  ]);
+    if (auxWorkspaceTab || isVoiceChannel || loadingMessages) return;
 
-  useEffect(() => {
-    if (workspaceTab === 'tasks' || isVoiceChannel || loadingMessages) return;
+    if (forceScrollOnChannelRef.current) {
+      forceScrollOnChannelRef.current = false;
+      scrollChatToLatest('auto');
+      return;
+    }
+
     if (!isNearBottomRef.current) return;
     scrollChatToLatest(sortedWorkspaceMessages.length > 0 ? 'smooth' : 'auto');
   }, [
+    selectedChannelId,
     sortedWorkspaceMessages,
     loadingMessages,
     workspaceTab,
     isVoiceChannel,
+    auxWorkspaceTab,
     scrollChatToLatest,
   ]);
 
@@ -1006,11 +1026,17 @@ const OrganizationMainPanel = ({
                 <h2
                   className={`truncate text-base font-semibold ${workspace.textPrimary}`}
                 >
-                  {selectedChannelId
-                    ? `#${chSlug || t('organizations.channelNameFallback')}`
-                    : deptName}
+                  {workspaceTab === 'tasks'
+                    ? t('nav.tasks.label')
+                    : workspaceTab === 'documents'
+                      ? t('documents.orgTitle')
+                      : workspaceTab === 'notifications'
+                        ? t('notifications.titleOrganization')
+                        : selectedChannelId
+                          ? `#${chSlug || t('organizations.channelNameFallback')}`
+                          : deptName}
                 </h2>
-                {workspaceTab !== 'tasks' && !isVoiceChannel && sortedWorkspaceMessages.length > 0 ? (
+                {workspaceTab === 'chat' && !isVoiceChannel && sortedWorkspaceMessages.length > 0 ? (
                   <p className={`mt-0.5 text-[10px] ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}>
                     {t('orgPanel.msgCountLine', { n: sortedWorkspaceMessages.length })}
                   </p>
@@ -1057,7 +1083,23 @@ const OrganizationMainPanel = ({
             className="scrollbar-chat min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain"
             onScroll={handleChatScroll}
           >
-            {workspaceTab === 'tasks' ? (
+            {workspaceTab === 'documents' ? (
+              <OrganizationDocumentsWorkspacePanel
+                files={workspaceDocFiles}
+                loading={loadingWorkspaceDocuments}
+                error={workspaceDocumentsError}
+                onReload={onWorkspaceDocumentsReload}
+                isDarkMode={isDarkMode}
+                onOpenInWorkspace={onOpenDocumentInWorkspace}
+              />
+            ) : workspaceTab === 'notifications' ? (
+              <OrganizationNotificationsWorkspacePanel
+                organizationId={organizationId ? String(organizationId) : ''}
+                organizationSlug={String(selectedOrganization?.slug || '').trim()}
+                isDarkMode={isDarkMode}
+                fetchEnabled={notificationsFetchEnabled}
+              />
+            ) : workspaceTab === 'tasks' ? (
               <div className="min-h-0 px-4 py-3">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1470,7 +1512,7 @@ const OrganizationMainPanel = ({
 
           {showJumpToLatest &&
             sortedWorkspaceMessages.length > 0 &&
-            workspaceTab !== 'tasks' &&
+            workspaceTab === 'chat' &&
             !isVoiceChannel &&
             !loadingMessages && (
             <button
@@ -1511,7 +1553,7 @@ const OrganizationMainPanel = ({
 
           </div>
 
-          {workspaceTab !== 'tasks' && !isVoiceChannel && (
+          {workspaceTab === 'chat' && !isVoiceChannel && (
             <div className={workspace.composerBar}>
               {channelReadOnly ? (
                 <p
@@ -1655,13 +1697,13 @@ const OrganizationMainPanel = ({
         </div>
       </div>
 
-      {workspaceTab !== 'tasks' && showEmojiPicker && (
+      {workspaceTab === 'chat' && showEmojiPicker && (
         <>
           <button
             type="button"
             aria-label={t('orgPanel.closeEmoji')}
             onClick={() => setShowEmojiPicker(false)}
-            className="fixed inset-0 z-40 cursor-default bg-black/30"
+            className={`${shellNavRailBackdrop} z-40 cursor-default bg-black/30`}
           />
           <div className="fixed bottom-24 right-8 z-50 h-[420px] w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-[#0b1220] shadow-2xl">
             <div className="flex items-center gap-2 border-b border-slate-700 px-4 py-3">

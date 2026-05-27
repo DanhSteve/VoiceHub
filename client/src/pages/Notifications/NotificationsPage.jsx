@@ -10,11 +10,12 @@ import { useWorkspace } from '../../context/WorkspaceContext';
 import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
 import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
-import { useNotificationsInfinite } from '../../hooks/queries';
+import { useFriendPending, useNotificationsInfinite, useOrganizationsMy } from '../../hooks/queries';
 import { useOrgShell } from '../../hooks/queries/useOrgShell';
 import { queryKeys } from '../../lib/queryKeys';
 import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
+import { orgRecordId } from '../../utils/orgListUtils';
 
 function parseNotificationDataField(raw) {
   if (!raw) return {};
@@ -63,6 +64,8 @@ function NotificationsPage() {
     activeWorkspace?.organizationId,
   ]);
 
+  const orgsQuery = useOrganizationsMy();
+
   /** URL cũ ?scope=organization → trang org riêng */
   useEffect(() => {
     const legacyScope = String(searchParams.get('scope') || '').trim().toLowerCase();
@@ -72,6 +75,32 @@ function NotificationsPage() {
     const qs = params.toString();
     navigate(`${ORG_NOTIFICATIONS_PATH}${qs ? `?${qs}` : ''}`, { replace: true });
   }, [location.pathname, navigate, searchParams]);
+
+  /** Thông báo tổ chức → workspace tab giữa (giống công việc) */
+  useEffect(() => {
+    if (!isOrgNotificationsPage || !organizationIdFilter) return;
+    const fromList = (Array.isArray(orgsQuery.data) ? orgsQuery.data : []).find(
+      (o) => orgRecordId(o) === organizationIdFilter
+    );
+    const slug =
+      String(fromList?.slug || '').trim() ||
+      String(activeWorkspace?.slug || '').trim() ||
+      '';
+    if (slug) {
+      navigate(`/w/${encodeURIComponent(slug)}?tab=notifications`, { replace: true });
+      return;
+    }
+    navigate(
+      `/workspaces?orgId=${encodeURIComponent(organizationIdFilter)}&tab=notifications`,
+      { replace: true }
+    );
+  }, [
+    isOrgNotificationsPage,
+    organizationIdFilter,
+    orgsQuery.data,
+    activeWorkspace?.slug,
+    navigate,
+  ]);
   const [filter, setFilter] = useState('all');
   const [notifSearch, setNotifSearch] = useState('');
   const [notifications, setNotifications] = useState([]);
@@ -82,6 +111,10 @@ function NotificationsPage() {
   const notifInfiniteQuery = useNotificationsInfinite({
     scope: notificationScope,
     organizationId: organizationIdFilter,
+  });
+
+  const { pendingCount: friendPendingCount } = useFriendPending({
+    enabled: !isOrgNotificationsPage,
   });
 
   const { data: orgShellForBadge } = useOrgShell(organizationIdFilter, {
@@ -382,9 +415,11 @@ function NotificationsPage() {
         break;
       case 'file':
         navigate(
-          notif.organizationId
-            ? `/documents?organizationId=${encodeURIComponent(notif.organizationId)}`
-            : '/documents'
+          notif.organizationSlug
+            ? `/w/${encodeURIComponent(notif.organizationSlug)}?tab=documents`
+            : notif.organizationId
+              ? `/workspaces?orgId=${encodeURIComponent(notif.organizationId)}&tab=documents`
+              : '/documents'
         );
         toast(t('notifications.toastOpenDocs'), { icon: '📁' });
         break;
@@ -430,6 +465,10 @@ function NotificationsPage() {
     }
     return base;
   }, [t, isOrgNotificationsPage]);
+
+  if (isOrgNotificationsPage && organizationIdFilter) {
+    return null;
+  }
 
   const shell = `${appShellBg(isDarkMode)} ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`;
   const gc = isDarkMode ? 'border border-slate-800 bg-slate-900/60' : 'border border-slate-200 bg-white shadow-sm';
@@ -489,6 +528,20 @@ function NotificationsPage() {
             isDarkMode={isDarkMode}
           />
         </PageSearchToolbar>
+
+        {!isOrgNotificationsPage && friendPendingCount > 0 && (
+          <button
+            type="button"
+            onClick={() => navigate('/chat/friends?tab=requests')}
+            className={`mb-6 w-full rounded-xl px-4 py-3 text-left text-sm font-semibold transition ${
+              isDarkMode
+                ? 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20'
+                : 'border border-cyan-200 bg-cyan-50 text-cyan-900 hover:bg-cyan-100'
+            }`}
+          >
+            {t('dashboard.pendingInvites', { n: friendPendingCount })}
+          </button>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4 mb-6">

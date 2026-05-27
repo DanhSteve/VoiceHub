@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { queryKeys } from '../../lib/queryKeys';
 import { STALE_TIME_ORGS_MS } from '../../lib/queryClient';
 import { organizationAPI } from '../../services/api/organizationAPI';
+import { getResolvedBearerToken } from '../../utils/tokenStorage';
 
 const unwrapShell = (payload) => {
   const raw = payload?.data ?? payload;
@@ -15,12 +16,14 @@ export async function fetchOrgShell(orgId) {
 }
 
 export function useOrgShell(orgId, { enabled: enabledProp = true } = {}) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading: authLoading, accessToken } = useAuth();
   const id = orgId ? String(orgId) : '';
-  const enabled = enabledProp && isAuthenticated && Boolean(id);
+  const authReady = Boolean(getResolvedBearerToken());
+  const enabled =
+    enabledProp && !authLoading && isAuthenticated && authReady && Boolean(id);
 
   return useQuery({
-    queryKey: queryKeys.org.shell(id),
+    queryKey: [...queryKeys.org.shell(id), authReady ? 'auth' : 'anon'],
     queryFn: () => fetchOrgShell(id),
     staleTime: STALE_TIME_ORGS_MS,
     enabled,

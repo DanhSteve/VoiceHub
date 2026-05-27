@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { GlassCard, GradientButton } from '../Shared';
+import UserAvatar from '../Shared/UserAvatar';
 import friendService from '../../services/friendService';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -100,9 +101,21 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
     }
   };
 
+  const pendingRequesterProfile = (row) => {
+    const candidates = [row?.requester, row?.fromUser, row?.userId];
+    for (const c of candidates) {
+      if (c && typeof c === 'object') return c;
+    }
+    return null;
+  };
+
   const pendingRequesterId = (row) => {
-    const requester = row?.requester && typeof row.requester === 'object' ? row.requester : null;
-    return String(requester?.userId || requester?._id || row?.requester || '').trim();
+    const profile = pendingRequesterProfile(row);
+    if (profile) {
+      return String(profile.userId || profile._id || profile.id || '').trim();
+    }
+    if (typeof row?.userId === 'string') return row.userId.trim();
+    return String(row?.requester || '').trim();
   };
 
   const acceptRequest = async (row) => {
@@ -136,16 +149,16 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
   const blockRequestUser = async (row) => {
     const friendId = pendingRequesterId(row);
     if (!friendId) {
-      toast.error('KhÃ´ng xÃ¡c Ä‘á»‹nh Ä‘Æ°á»£c ngÆ°á»i dÃ¹ng');
+      toast.error('Không xác định được người dùng');
       return;
     }
     try {
       await friendService.blockFriend(friendId);
-      toast.success('ÄÃ£ cháº·n ngÆ°á»i dÃ¹ng');
+      toast.success('Đã chặn người dùng');
       onFriendlistChanged?.();
       await loadPending();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'KhÃ´ng cháº·n Ä‘Æ°á»£c ngÆ°á»i dÃ¹ng');
+      toast.error(err.response?.data?.message || 'Không chặn được người dùng');
     }
   };
 
@@ -155,6 +168,7 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
     if (s === 'accepted' || s === 'friends') return 'Đã là bạn';
     if (s === 'pending') return 'Đang chờ phản hồi';
     if (s === 'blocked') return 'Đã chặn';
+    if (s === 'dissolving') return 'Đang hủy kết bạn';
     return rel.status;
   };
 
@@ -166,6 +180,7 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
     const st = String(rel.status || '').toLowerCase();
     if (st === 'accepted' || st === 'friends') return false;
     if (st === 'pending') return false;
+    if (st === 'dissolving') return false;
     return true;
   };
 
@@ -254,9 +269,16 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
               {searchResult && (
                 <GlassCard className={`mt-4 ${cardBorder}`}>
                   <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-green-500 to-emerald-600 text-3xl">
-                      {searchResult.avatar || '👤'}
-                    </div>
+                    <UserAvatar
+                      avatar={searchResult.avatar}
+                      name={
+                        searchResult.displayName ||
+                        searchResult.name ||
+                        searchResult.username ||
+                        'Người dùng'
+                      }
+                      size="profile"
+                    />
                     <div className="min-w-0 flex-1">
                       <h3 className={`truncate ${nameStrong}`}>
                         {searchResult.displayName ||
@@ -303,7 +325,7 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
               ) : (
                 <div className="space-y-3">
                   {pending.map((row) => {
-                    const req = row.requester && typeof row.requester === 'object' ? row.requester : {};
+                    const req = pendingRequesterProfile(row) || {};
                     const name =
                       req.displayName ||
                       req.name ||
@@ -313,9 +335,11 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
                     return (
                       <GlassCard key={String(rid)} className={cardBorder}>
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 text-2xl">
-                            {req.avatar || '👤'}
-                          </div>
+                          <UserAvatar
+                            avatar={req.avatar}
+                            name={name}
+                            size="lg"
+                          />
                           <div className="min-w-0 flex-1">
                             <div className={`truncate font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{name}</div>
                             <div className={isDarkMode ? 'text-xs text-gray-500' : 'text-xs text-slate-500'}>

@@ -14,7 +14,7 @@ import {
   Rocket,
   Sun,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
@@ -39,6 +39,8 @@ import {
     navOuterStrip,
     navSidebarRail,
     navTimeText,
+    shellNavRailBackdrop,
+    shellNavRailZ,
     profileDropdownBody,
     profileDropdownCard,
     profileDropdownHeader,
@@ -115,10 +117,38 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
   const [createOrgMenuOpen, setCreateOrgMenuOpen] = useState(false);
   const [joinByLinkOpen, setJoinByLinkOpen] = useState(false);
   const [joinLinkInput, setJoinLinkInput] = useState('');
+  const railMeasureRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const el = railMeasureRef.current;
+    if (!el || typeof window === 'undefined') return undefined;
+
+    const syncRailWidth = () => {
+      const w = Math.ceil(el.getBoundingClientRect().width);
+      if (w > 0) {
+        document.documentElement.style.setProperty('--vh-nav-rail-width', `${w}px`);
+      }
+    };
+
+    syncRailWidth();
+    const ro = new ResizeObserver(syncRailWidth);
+    ro.observe(el);
+    window.addEventListener('resize', syncRailWidth);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', syncRailWidth);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setProfileOpen(false);
+    setCreateOrgMenuOpen(false);
+    setJoinByLinkOpen(false);
   }, []);
 
   const onOrgRail = useMemo(
@@ -397,12 +427,10 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     setJoinByLinkOpen(false);
 
     const path = location.pathname;
-    if (path.startsWith(ORG_NOTIFICATIONS_PATH)) {
-      navigate(`${ORG_NOTIFICATIONS_PATH}?organizationId=${encodeURIComponent(id)}`);
-      return;
-    }
-    if (path.startsWith('/documents')) {
-      navigate(`/documents?organizationId=${encodeURIComponent(id)}`);
+    if (path.startsWith(ORG_NOTIFICATIONS_PATH) || path.startsWith('/documents')) {
+      const slug = String(org.slug || '').trim();
+      const tab = path.startsWith('/documents') ? 'documents' : 'notifications';
+      navigate(slug ? `/w/${encodeURIComponent(slug)}?tab=${tab}` : `/workspaces?orgId=${encodeURIComponent(id)}&tab=${tab}`);
       return;
     }
     if (path.startsWith('/w/') || inOrganizationContext) {
@@ -448,26 +476,32 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     const workspacePath = getLastWorkspacePath();
     if (item.key === 'notifications') {
       if (!inOrganizationContext) return '/notifications';
-      if (activeWorkspaceId) {
-        return `${ORG_NOTIFICATIONS_PATH}?organizationId=${encodeURIComponent(activeWorkspaceId)}`;
-      }
-      return ORG_NOTIFICATIONS_PATH;
+      return `${workspacePath}?tab=notifications`;
     }
     if (!inOrganizationContext) return item.path;
     if (item.key === 'org') return workspacePath;
     if (item.key === 'tasks') return `${workspacePath}?tab=tasks`;
-    if (item.key === 'documents' && activeWorkspaceId) {
-      return `/documents?organizationId=${encodeURIComponent(activeWorkspaceId)}`;
-    }
+    if (item.key === 'documents') return `${workspacePath}?tab=documents`;
     return item.path;
   };
 
   const isNavItemActive = (item) => {
     if (inOrganizationContext && item.key === 'org') {
-      return location.pathname.startsWith('/w/') && workspaceTab !== 'tasks';
+      return (
+        location.pathname.startsWith('/w/') &&
+        workspaceTab !== 'tasks' &&
+        workspaceTab !== 'documents' &&
+        workspaceTab !== 'notifications'
+      );
     }
     if (inOrganizationContext && item.key === 'tasks') {
       return location.pathname.startsWith('/w/') && workspaceTab === 'tasks';
+    }
+    if (inOrganizationContext && item.key === 'documents') {
+      return location.pathname.startsWith('/w/') && workspaceTab === 'documents';
+    }
+    if (inOrganizationContext && item.key === 'notifications') {
+      return location.pathname.startsWith('/w/') && workspaceTab === 'notifications';
     }
     return isActivePath(item.path);
   };
@@ -538,7 +572,8 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
   return (
     <>
       <div
-        className={`relative z-[2] flex h-screen shrink-0 flex-col border-r transition-[width] duration-300 ease-out ${borderR} w-14 overflow-visible sm:w-16 md:w-[68px]`}
+        ref={railMeasureRef}
+        className={`relative ${shellNavRailZ} isolate flex h-screen shrink-0 flex-col border-r transition-[width] duration-300 ease-out ${borderR} w-14 overflow-visible pointer-events-auto touch-manipulation sm:w-16 md:w-[68px]`}
         onMouseEnter={() => {
           if (canUseHoverExpand()) setSidebarExpanded(true);
         }}
@@ -701,7 +736,11 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
       {createOrgMenuOpen &&
         createPortal(
           <>
-            <div className="fixed inset-0 z-[998]" onClick={() => setCreateOrgMenuOpen(false)} />
+            <div
+              className={`${shellNavRailBackdrop} z-[998]`}
+              onClick={() => setCreateOrgMenuOpen(false)}
+              aria-hidden
+            />
             <div
               className={`fixed left-20 top-1/2 z-[999] w-[280px] -translate-y-1/2 rounded-2xl border p-4 shadow-xl ${
                 isDarkMode
@@ -741,7 +780,11 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
       {joinByLinkOpen &&
         createPortal(
           <>
-            <div className="fixed inset-0 z-[998]" onClick={() => setJoinByLinkOpen(false)} />
+            <div
+              className={`${shellNavRailBackdrop} z-[998]`}
+              onClick={() => setJoinByLinkOpen(false)}
+              aria-hidden
+            />
             <div
               className={`fixed left-1/2 top-1/2 z-[999] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-4 shadow-xl ${
                 isDarkMode
@@ -793,7 +836,11 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
       {profileOpen &&
         createPortal(
           <>
-            <div className="fixed inset-0 z-[998]" onClick={() => setProfileOpen(false)} />
+            <div
+              className={`${shellNavRailBackdrop} z-[998]`}
+              onClick={() => setProfileOpen(false)}
+              aria-hidden
+            />
             <div
               className={`fixed bottom-6 left-20 z-[999] w-[320px] animate-slideUp overflow-hidden rounded-2xl ${profileDropdownCard(isDarkMode)}`}
             >

@@ -9,10 +9,67 @@ const {
   fetchUserProfileByIdInternal,
 } = require('/shared');
 const axios = require('axios');
+const {
+  scheduleGrace,
+  cancelGraceIfActive,
+  findActiveGrace,
+  gracePeriodHoursForClient,
+  getGracePeriodMs,
+} = require('./unfriendGrace.service');
+
+function toObjectId(id) {
+  if (id == null) return null;
+  const s = String(id).trim();
+  if (!s) return null;
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    return new mongoose.Types.ObjectId(s);
+  }
+  return s;
+}
+
+/** Tìm hai chiều quan hệ accepted; hỗ trợ friendId là userId hoặc _id bản ghi Friend. */
+async function resolveAcceptedFriendRows(actorUserId, targetId) {
+  const actor = toObjectId(actorUserId);
+  const target = toObjectId(targetId);
+  if (!actor || !target) {
+    return { rows: [], peerUserId: null };
+  }
+
+  const pairQuery = (uidA, uidB) => ({
+    status: 'accepted',
+    $or: [
+      { userId: uidA, friendId: uidB },
+      { userId: uidB, friendId: uidA },
+    ],
+  });
+
+  let rows = await Friend.find(pairQuery(actor, target)).lean();
+  let peerUserId = target;
+
+  if (!rows.length && mongoose.Types.ObjectId.isValid(String(targetId))) {
+    const byDoc = await Friend.findOne({ _id: targetId, status: 'accepted' }).lean();
+    if (byDoc) {
+      const docUser = toObjectId(byDoc.userId);
+      const docFriend = toObjectId(byDoc.friendId);
+      const actorStr = String(actor);
+      if (String(docUser) === actorStr) {
+        peerUserId = docFriend;
+      } else if (String(docFriend) === actorStr) {
+        peerUserId = docUser;
+      }
+      if (peerUserId) {
+        rows = await Friend.find(pairQuery(actor, peerUserId)).lean();
+      }
+    }
+  }
+
+  return {
+    rows,
+    peerUserId: peerUserId ? String(peerUserId) : String(targetId),
+  };
+}
 
 const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3004';
-const CHAT_SERVICE_URL = process.env.CHAT_SERVICE_URL || 'http://chat-service:3006';
-const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
 const USER_SERVICE_INTERNAL_TOKEN = process.env.USER_SERVICE_INTERNAL_TOKEN || '';
 
 const MONGO_UNAVAILABLE_MSG = 'Service temporarily unavailable. Please try again later.';
@@ -94,11 +151,17 @@ class FriendService {
         throw new Error('User not found');
       }
 
+      const actor = toObjectId(userId);
+      const peer = toObjectId(friendId);
+      if (!actor || !peer) {
+        throw new Error('User not found');
+      }
+
       // Kiểm tra đã có relationship chưa
       const existing = await Friend.findOne({
         $or: [
-          { userId, friendId },
-          { userId: friendId, friendId: userId },
+          { userId: actor, friendId: peer },
+          { userId: peer, friendId: actor },
         ],
       });
 
@@ -117,29 +180,54 @@ class FriendService {
         }
       }
 
+      await cancelGraceIfActive(userId, friendId);
+
       // Tạo friend request
       const friend = new Friend({
-        userId,
-        friendId,
+        userId: actor,
+        friendId: peer,
         status: 'pending',
-        requestedBy: userId,
+        requestedBy: actor,
       });
 
       await friend.save();
 
+      const actorStr = String(userId);
+      const peerStr = String(friendId);
+      let senderName = 'Someone';
+      try {
+        const res = await fetchUserProfileByIdInternal(actorStr);
+        const data = res.data?.data || res.data;
+        senderName = data?.displayName || data?.username || senderName;
+      } catch (nameErr) {
+        logger.warn('sendFriendRequest sender profile:', nameErr.message);
+      }
+
+      try {
+        await friendWebhook.requestSent(actorStr, peerStr, senderName);
+      } catch (webhookErr) {
+        logger.warn('sendFriendRequest webhook:', webhookErr.message);
+      }
+
+      const realtimePayload = {
+        requesterId: actorStr,
+        receiverId: peerStr,
+        requestId: String(friend._id),
+        status: 'pending',
+        timestamp: new Date().toISOString(),
+      };
+      await emitRealtimeEvent({
+        event: 'friend:request_received',
+        userId: peerStr,
+        payload: realtimePayload,
+      });
       await emitRealtimeEvent({
         event: 'friend:request_sent',
-        userId: String(friendId),
-        payload: {
-          requesterId: String(userId),
-          receiverId: String(friendId),
-          requestId: String(friend._id),
-          status: 'pending',
-          timestamp: new Date().toISOString(),
-        },
+        userId: peerStr,
+        payload: realtimePayload,
       });
 
-      logger.info(`Friend request sent: ${userId} -> ${friendId}`);
+      logger.info(`Friend request sent: ${actorStr} -> ${peerStr}`);
       return friend;
     } catch (error) {
       const msg = String(error?.message || '');
@@ -160,6 +248,8 @@ class FriendService {
   async acceptFriendRequest(userId, friendId) {
     try {
       await ensureMongoReady();
+      await cancelGraceIfActive(userId, friendId);
+
       const friend = await Friend.findOne({
         userId: friendId,
         friendId: userId,
@@ -270,6 +360,8 @@ class FriendService {
   async blockUser(userId, friendId) {
     try {
       await ensureMongoReady();
+      await cancelGraceIfActive(userId, friendId);
+
       const priorAccepted = await Friend.findOne({ userId, friendId, status: 'accepted' }).lean();
       const priorAcceptedAt = priorAccepted?.acceptedAt || null;
       const priorRequestedBy = priorAccepted?.requestedBy || userId;
@@ -485,10 +577,13 @@ class FriendService {
   async getFriendRequests(userId, type = 'received') {
     try {
       await ensureMongoReady();
+      const actor = toObjectId(userId);
+      if (!actor) return [];
+
       const query =
         type === 'sent'
-          ? { userId, status: 'pending', requestedBy: userId }
-          : { friendId: userId, status: 'pending', requestedBy: { $ne: userId } };
+          ? { userId: actor, status: 'pending', requestedBy: actor }
+          : { friendId: actor, status: 'pending', requestedBy: { $ne: actor } };
 
       const requests = await Friend.find(query).sort({ createdAt: -1 }).lean();
 
@@ -511,7 +606,18 @@ class FriendService {
       return requests.map((r) => {
         const id = r[idField]?.toString();
         const user = userMap[id] || null;
-        return { ...r, [idField]: user || r[idField] };
+        const enriched = { ...r, [idField]: user || r[idField] };
+        if (type === 'received') {
+          return {
+            ...enriched,
+            requester: user || enriched.userId,
+            fromUser: user || enriched.userId,
+          };
+        }
+        return {
+          ...enriched,
+          recipient: user || enriched.friendId,
+        };
       });
     } catch (error) {
       normalizeMongoError(error);
@@ -520,63 +626,86 @@ class FriendService {
     }
   }
 
-  // Xóa bạn bè
+  // Hủy kết bạn — xóa quan hệ ngay; DM xóa vĩnh viễn sau grace (mặc định 12h) nếu không kết bạn lại.
   async removeFriend(userId, friendId) {
     try {
       await ensureMongoReady();
-      const result = await Friend.deleteMany({
-        $or: [
-          { userId, friendId },
-          { userId: friendId, friendId: userId },
-        ],
-        status: 'accepted',
-      });
 
-      if (result.deletedCount === 0) {
+      const actorId = String(userId || '').trim();
+      const { rows: acceptedRows, peerUserId } = await resolveAcceptedFriendRows(actorId, friendId);
+      const peerId = peerUserId || String(friendId || '').trim();
+
+      if (!acceptedRows.length) {
+        const grace = await findActiveGrace(actorId, peerId);
+        if (grace) {
+          return {
+            deletedCount: 0,
+            purgeAt: grace.purgeAt,
+            graceHours: gracePeriodHoursForClient(),
+            alreadyRemoved: true,
+          };
+        }
         throw new Error('Friend relationship not found');
       }
 
-      // Xóa cache
+      const metaRow =
+        acceptedRows.find((r) => String(r.userId) === actorId) || acceptedRows[0];
+
+      const result = await Friend.deleteMany({
+        _id: { $in: acceptedRows.map((r) => r._id) },
+      });
+
+      let graceDoc;
+      try {
+        graceDoc = await scheduleGrace({
+          userId: actorId,
+          friendId: peerId,
+          dissolvedBy: actorId,
+          meta: {
+            requestedBy: metaRow?.requestedBy,
+            acceptedAt: metaRow?.acceptedAt,
+          },
+        });
+      } catch (graceErr) {
+        logger.error(
+          `Friend rows deleted but grace schedule failed (${actorId} <-> ${peerId}):`,
+          graceErr
+        );
+        graceDoc = { purgeAt: new Date(Date.now() + getGracePeriodMs()) };
+      }
+
       const redis = getRedisClient();
       if (redis) {
-        await clearFriendsListCache(userId, friendId);
+        await clearFriendsListCache(actorId, peerId);
       }
 
-      logger.info(`Friend removed: ${userId} <-> ${friendId}`);
-
-      // Xóa toàn bộ tin nhắn DM giữa hai người (chat-service)
-      if (CHAT_INTERNAL_TOKEN) {
-        try {
-          await axios.post(
-            `${CHAT_SERVICE_URL}/api/messages/internal/dm/delete-between`,
-            { userIdA: String(userId), userIdB: String(friendId) },
-            {
-              headers: { 'x-internal-token': CHAT_INTERNAL_TOKEN },
-              timeout: 20000,
-            }
-          );
-          logger.info(`DM messages purged for pair ${userId} <-> ${friendId}`);
-        } catch (chatErr) {
-          logger.warn(
-            `Could not purge DM messages after unfriend: ${chatErr.response?.data?.message || chatErr.message}`
-          );
-        }
-      } else {
-        logger.warn('CHAT_INTERNAL_TOKEN not set; DM messages are not deleted from database on unfriend');
-      }
+      logger.info(
+        `Friend removed (grace until ${graceDoc.purgeAt.toISOString()}): ${actorId} <-> ${peerId}`
+      );
 
       await emitRealtimeEvent({
         event: 'friend:removed',
-        userIds: [String(userId), String(friendId)],
+        userIds: [actorId, peerId],
         payload: {
-          userId: String(userId),
-          friendId: String(friendId),
+          userId: actorId,
+          friendId: peerId,
+          purgeAt: graceDoc.purgeAt.toISOString(),
+          graceHours: gracePeriodHoursForClient(),
           timestamp: new Date().toISOString(),
         },
       });
-      return result;
+
+      return {
+        deletedCount: result.deletedCount,
+        purgeAt: graceDoc.purgeAt,
+        graceHours: gracePeriodHoursForClient(),
+      };
     } catch (error) {
       normalizeMongoError(error);
+      const msg = String(error?.message || '');
+      if (msg === 'Friend relationship not found' || msg.includes('Invalid user pair')) {
+        throw error;
+      }
       logger.error('Error removing friend:', error);
       throw new Error(`Error removing friend: ${error.message}`);
     }
@@ -600,6 +729,16 @@ class FriendService {
       const id1 = toObjectId(userId);
       const id2 = toObjectId(friendId);
       if (!id1 || !id2) return { status: 'none' };
+
+      const grace = await findActiveGrace(id1, id2);
+      if (grace) {
+        return {
+          status: 'dissolving',
+          purgeAt: grace.purgeAt,
+          dissolvedAt: grace.dissolvedAt,
+          canRestoreUntil: grace.purgeAt,
+        };
+      }
 
       const friend = await Friend.findOne({
         $or: [

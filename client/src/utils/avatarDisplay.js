@@ -1,14 +1,30 @@
 /** Chuẩn avatar toàn app: bo góc (squircle), nền màu + chữ trắng (JA = initials). */
 
+/** Bóc chuỗi avatar từ API (string, hoặc object url/avatarUrl). */
+export function pickAvatarValue(avatar) {
+  if (avatar == null) return null;
+  if (typeof avatar === 'string') {
+    const v = avatar.trim();
+    return v || null;
+  }
+  if (typeof avatar === 'object') {
+    return pickAvatarValue(avatar.url || avatar.avatarUrl || avatar.src || avatar.avatar);
+  }
+  return null;
+}
+
 function resolveMediaUrlLocal(path) {
-  if (!path) return '';
-  const p = String(path).trim();
+  const raw = pickAvatarValue(path);
+  if (!raw) return '';
+  const p = String(raw).trim();
   if (!p) return '';
   if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('data:')) return p;
+  const normalized = p.replace(/\\/g, '/');
+  const pathPart = normalized.startsWith('/') ? normalized : `/${normalized}`;
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return `${window.location.origin}${p.startsWith('/') ? p : `/${p}`}`;
+    return `${window.location.origin}${pathPart}`;
   }
-  return p;
+  return pathPart;
 }
 
 export const AVATAR_RADIUS_CLASS = 'rounded-xl';
@@ -44,12 +60,14 @@ const AVATAR_BG_COLORS = [
 ];
 
 export function isAvatarImageUrl(value) {
-  if (value == null || typeof value !== 'string') return false;
-  const v = value.trim();
+  const picked = pickAvatarValue(value);
+  if (!picked) return false;
+  const v = picked.trim();
   if (!v) return false;
   if (/^https?:\/\//i.test(v)) return true;
-  if (v.startsWith('/uploads/') || v.startsWith('/api/')) return true;
   if (v.startsWith('data:image/')) return true;
+  if (/^\/?uploads\//i.test(v) || /^\/?api\//i.test(v)) return true;
+  if (/\.(jpe?g|png|gif|webp|avif|bmp|svg|ico)(\?.*)?$/i.test(v)) return true;
   return false;
 }
 
@@ -107,7 +125,7 @@ export function avatarImageShellClassName(size = 'md', extra = '') {
 
 export function resolveAvatarSrc(avatar, cacheBust) {
   if (!isAvatarImageUrl(avatar)) return null;
-  let url = resolveMediaUrlLocal(String(avatar).trim());
+  let url = resolveMediaUrlLocal(avatar);
   if (!url) return null;
   if (cacheBust) {
     const sep = url.includes('?') ? '&' : '?';

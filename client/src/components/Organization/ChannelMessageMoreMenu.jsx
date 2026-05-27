@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { shellNavRailBackdrop } from '../../theme/shellTheme';
 
 const MENU_WIDTH = 256;
 const EST_MENU_HEIGHT = 380;
@@ -52,7 +53,7 @@ export default function ChannelMessageMoreMenu({
       <button
         type="button"
         aria-label="Đóng menu"
-        className="fixed inset-0 z-[80] cursor-default bg-black/20"
+        className={`${shellNavRailBackdrop} z-[80] cursor-default bg-black/20`}
         onClick={onClose}
       />
       <div

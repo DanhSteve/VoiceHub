@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Forward, MoreHorizontal, Pencil, Reply, SmilePlus } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { shellNavRailBackdrop } from '../../theme/shellTheme';
 
 const DEFAULT_STORAGE_KEY = 'vh_org_recent_reactions';
 
@@ -48,12 +50,24 @@ export default function ChannelMessageToolbar({
   recentReactionsStorageKey = DEFAULT_STORAGE_KEY,
 }) {
   const { isDarkMode } = useTheme();
+  const location = useLocation();
   const [recent, setRecent] = useState(() => loadRecent(recentReactionsStorageKey));
   const [emojiOpen, setEmojiOpen] = useState(false);
 
   useEffect(() => {
     setRecent(loadRecent(recentReactionsStorageKey));
   }, [recentReactionsStorageKey]);
+
+  useEffect(() => {
+    setEmojiOpen(false);
+  }, [location.pathname]);
+
+  useEffect(
+    () => () => {
+      setEmojiOpen(false);
+    },
+    []
+  );
 
   const pushRecent = useCallback(
     (emoji) => {
@@ -127,7 +141,7 @@ export default function ChannelMessageToolbar({
             <button
               type="button"
               aria-label="Đóng"
-              className="fixed inset-0 z-[60] cursor-default bg-transparent"
+              className={`${shellNavRailBackdrop} z-[60] cursor-default bg-transparent`}
               onClick={() => setEmojiOpen(false)}
             />
             <div className={emojiPanel}>

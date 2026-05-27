@@ -1,6 +1,6 @@
 import axios from 'axios';
 import toast from 'react-hot-toast';
-import { getToken, removeToken } from '../../utils/tokenStorage';
+import { applyAuthHeader, removeToken } from '../../utils/tokenStorage';
 import { mapAuthSessionMessageForLogout } from '../../utils/authErrorMessages';
 import { isAutoLogoutDisabled } from '../../utils/devAuth';
 import {
@@ -40,21 +40,6 @@ import { resolveApiBaseUrl } from '../../utils/browserOrigin';
 // Đồng bộ với services/api.js — https://voicehub.local luôn dùng /api same-origin.
 const API_URL = resolveApiBaseUrl();
 
-const normalizeToken = (rawToken) => {
-  if (!rawToken) return null;
-  let token = String(rawToken).trim();
-  if (!token) return null;
-  if (token.startsWith('Bearer ')) token = token.slice(7).trim();
-  if (
-    (token.startsWith('"') && token.endsWith('"')) ||
-    (token.startsWith("'") && token.endsWith("'"))
-  ) {
-    token = token.slice(1, -1).trim();
-  }
-  if (!token || token === 'null' || token === 'undefined') return null;
-  return token;
-};
-
 // Create axios instance
 const apiClient = axios.create({
   baseURL: API_URL,
@@ -84,9 +69,8 @@ apiClient.interceptors.request.use(
       return Promise.reject(block);
     }
 
-    const token = normalizeToken(getToken());
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    if (!isAuthPublicUrl(config.url)) {
+      applyAuthHeader(config);
     }
     return config;
   },
@@ -120,11 +104,18 @@ apiClient.interceptors.response.use(
       const method = String(config.method || 'get').toLowerCase();
       if (method === 'get' || method === 'head') {
         config.__cacheBustRetry = true;
+        const prevHeaders =
+          config.headers && typeof config.headers.toJSON === 'function'
+            ? config.headers.toJSON()
+            : { ...(config.headers || {}) };
         config.headers = {
-          ...config.headers,
+          ...prevHeaders,
           'Cache-Control': 'no-store, no-cache',
           Pragma: 'no-cache',
         };
+        if (!isAuthPublicUrl(config.url)) {
+          applyAuthHeader(config);
+        }
         config.params = { ...(config.params || {}), _nc: Date.now() };
         try {
           return await apiClient.request(config);

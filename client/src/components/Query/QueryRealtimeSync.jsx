@@ -166,6 +166,8 @@ export default function QueryRealtimeSync() {
 
     on('friend:request_received', invalidateFriends);
 
+    on('friend:request_sent', invalidateFriends);
+
     on('friend:request_accepted', invalidateFriends);
 
     on('friend:request_rejected', invalidateFriends);
@@ -181,6 +183,8 @@ export default function QueryRealtimeSync() {
       off('org:shell:updated', onOrgShellUpdated);
 
       off('friend:request_received', invalidateFriends);
+
+      off('friend:request_sent', invalidateFriends);
 
       off('friend:request_accepted', invalidateFriends);
 

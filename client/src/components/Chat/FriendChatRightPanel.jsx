@@ -10,6 +10,7 @@ import {
   Loader2,
   MoreHorizontal,
   Plus,
+  UserMinus,
   Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -64,6 +65,9 @@ export default function FriendChatRightPanel({
   onAttachmentAction,
   onOpenCalendarForFriend,
   onOpenMutualOrganization,
+  onUnfriend,
+  unfriendDisabled = false,
+  unfriendLoading = false,
 }) {
   const { t } = useAppStrings();
   const { locale } = useLocale();
@@ -486,6 +490,28 @@ export default function FriendChatRightPanel({
           )}
         </section>
       </div>
+
+      {onUnfriend && (
+        <div className={`shrink-0 px-4 py-3 ${hairlineT}`}>
+          <button
+            type="button"
+            onClick={onUnfriend}
+            disabled={unfriendDisabled || unfriendLoading}
+            className={`flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              isDarkMode
+                ? 'border-rose-500/35 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+                : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+            }`}
+          >
+            {unfriendLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            ) : (
+              <UserMinus className="h-4 w-4 shrink-0" aria-hidden />
+            )}
+            <span>{t('friendChat.unfriend')}</span>
+          </button>
+        </div>
+      )}
 
       <ChatAttachmentContextMenu
         open={Boolean(ctxMenu)}

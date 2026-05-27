@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { useSearchParams } from 'react-router-dom';
-import OrganizationDocumentsView from '../../features/orgDocuments/OrganizationDocumentsView';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, Dropdown, GlassCard, GradientButton, Modal } from '../../components/Shared';
 import { useTheme } from '../../context/ThemeContext';
@@ -10,10 +9,16 @@ import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 import api from '../../services/api';
 import UserAvatar from '../../components/Shared/UserAvatar';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import { useOrganizationsMy } from '../../hooks/queries';
+import { orgRecordId } from '../../utils/orgListUtils';
 
 function DocumentsPage() {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
+  const navigate = useNavigate();
+  const { activeWorkspace } = useWorkspace();
+  const orgsQuery = useOrganizationsMy();
   const [searchParams] = useSearchParams();
   const organizationId = String(
     searchParams.get('organizationId') || searchParams.get('orgId') || ''
@@ -148,8 +153,27 @@ function DocumentsPage() {
     return list;
   }, [documents, listFilter, docNameQuery]);
 
+  useEffect(() => {
+    if (!isOrgDocuments) return;
+    const fromList = (Array.isArray(orgsQuery.data) ? orgsQuery.data : []).find(
+      (o) => orgRecordId(o) === organizationId
+    );
+    const slug =
+      String(fromList?.slug || '').trim() ||
+      (orgRecordId(activeWorkspace) === organizationId
+        ? String(activeWorkspace?.slug || '').trim()
+        : '');
+    if (slug) {
+      navigate(`/w/${encodeURIComponent(slug)}?tab=documents`, { replace: true });
+      return;
+    }
+    navigate(`/workspaces?orgId=${encodeURIComponent(organizationId)}&tab=documents`, {
+      replace: true,
+    });
+  }, [isOrgDocuments, organizationId, orgsQuery.data, activeWorkspace, navigate]);
+
   if (isOrgDocuments) {
-    return <OrganizationDocumentsView organizationId={organizationId} />;
+    return null;
   }
 
   const muted = isDarkMode ? 'text-slate-400' : 'text-slate-600';

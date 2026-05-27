@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import NavigationSidebar from '../../components/Layout/NavigationSidebar';
 import { GlassCard, GradientButton } from '../../components/Shared';
+import UserAvatar from '../../components/Shared/UserAvatar';
 import AddFriendModal from '../../components/Friends/AddFriendModal';
 import friendService from '../../services/friendService';
 import { useAppStrings } from '../../locales/appStrings';
@@ -43,11 +44,18 @@ function FriendsPage() {
   const friendRequests = useMemo(
     () =>
       pendingRequests.map((req) => {
-        const from = req.fromUser || req.from || req.requester || {};
+        const from =
+          req.fromUser ||
+          req.from ||
+          req.requester ||
+          (req.userId && typeof req.userId === 'object' ? req.userId : null) ||
+          {};
         const reqId = String(req._id || req.id || from._id || from.userId || '');
+        const requesterUserId =
+          typeof req.userId === 'string' ? req.userId : from._id || from.userId || from.id || '';
         return {
           requestId: reqId,
-          friendId: String(from._id || from.userId || from.id || ''),
+          friendId: String(requesterUserId),
           name: from.displayName || from.fullName || from.username || from.email || t('common.user'),
           avatar: from.avatar || '👤',
           mutualFriends: Number(req.mutualFriends || 0),
@@ -430,9 +438,11 @@ function FriendsPage() {
                 <h2 className="text-xl font-bold text-white mb-2">{t('friends.searchResults')}</h2>
                 <GlassCard hover>
                   <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center text-3xl">
-                      {searchResult.avatar || '👤'}
-                    </div>
+                    <UserAvatar
+                      avatar={searchResult.avatar}
+                      name={searchResult.displayName || searchResult.username || 'Người dùng'}
+                      size="profile"
+                    />
                     <div className="flex-1">
                       <h3 className="font-bold text-white mb-1">{searchResult.displayName || searchResult.username}</h3>
                       <div className="text-xs text-gray-400 mb-1">{searchResult.phone}</div>

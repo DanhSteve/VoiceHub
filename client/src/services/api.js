@@ -15,7 +15,7 @@
 
 // Import axios - HTTP client library
 import axios from 'axios';
-import { getToken, removeToken } from '../utils/tokenStorage';
+import { applyAuthHeader, removeToken } from '../utils/tokenStorage';
 import { mapAuthSessionMessageForLogout } from '../utils/authErrorMessages';
 import { isAutoLogoutDisabled } from '../utils/devAuth';
 import {
@@ -95,10 +95,6 @@ api.interceptors.request.use(
       return Promise.reject(block);
     }
 
-    // Lấy token từ localStorage (được lưu khi login)
-    const token = getToken();
-    
-    // Danh sách public routes không cần JWT token
     const publicRoutes = [
       '/auth/register',
       '/auth/login',
@@ -106,18 +102,11 @@ api.interceptors.request.use(
       '/auth/forgot-password',
       '/auth/resend-verification',
       '/auth/reset-password',
-      '/auth/verify-email', // Verify email chỉ dùng token trong query, KHÔNG dùng JWT
+      '/auth/verify-email',
     ];
-    
-    // Kiểm tra xem route có phải public route không
-    const isPublicRoute = publicRoutes.some(route => config.url?.includes(route));
-    
-    // Chỉ thêm JWT token nếu:
-    // 1. Token tồn tại và không rỗng
-    // 2. Route KHÔNG phải public route (đặc biệt là verify-email)
-    if (token && token.trim() !== '' && !isPublicRoute) {
-      // Format: "Bearer <token>" (JWT standard)
-      config.headers.Authorization = `Bearer ${token}`;
+    const isPublicRoute = publicRoutes.some((route) => config.url?.includes(route));
+    if (!isPublicRoute) {
+      applyAuthHeader(config);
     }
 
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {

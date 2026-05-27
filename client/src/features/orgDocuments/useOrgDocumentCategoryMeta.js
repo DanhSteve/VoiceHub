@@ -1,27 +1,10 @@
 import { useMemo } from 'react';
 import { useAppStrings } from '../../locales/appStrings';
 import { ORG_FILE_CATEGORIES } from './orgDocumentUtils';
-import { useOrganizationDocumentsOverview } from '../../hooks/queries/useOrganizationDocumentsOverview';
 
-export function useOrganizationDocuments(organizationId, { enabled = true } = {}) {
+/** Meta chip danh mục từ danh sách file (không gọi API). */
+export function useOrgDocumentCategoryMeta(files) {
   const { t } = useAppStrings();
-  const {
-    files,
-    isLoading: loading,
-    isFetching,
-    isError,
-    error: queryError,
-    orgName,
-    reload,
-    overview,
-  } = useOrganizationDocumentsOverview(organizationId, { enabled });
-
-  const error = isError
-    ? queryError?.response?.data?.message ||
-      queryError?.response?.data?.error ||
-      queryError?.message ||
-      t('documents.orgLoadError')
-    : '';
 
   const categoryMeta = useMemo(() => {
     const labelKey = {
@@ -61,15 +44,5 @@ export function useOrganizationDocuments(organizationId, { enabled = true } = {}
     [files]
   );
 
-  return {
-    files,
-    loading: loading || (enabled && isFetching && !overview),
-    error,
-    orgName,
-    reload,
-    categoryMeta,
-    countsByCategory,
-    totalBytes,
-    overview,
-  };
+  return { categoryMeta, countsByCategory, totalBytes };
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Smile } from 'lucide-react';
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
+import { shellNavRailBackdrop } from '../../theme/shellTheme';
 
 /**
  * Chỉnh sửa tin nhắn trực tiếp trên dòng (Discord-like).
@@ -91,7 +92,7 @@ export default function OrgMessageInlineEditor({
               <button
                 type="button"
                 aria-label="Đóng emoji"
-                className="fixed inset-0 z-[60] cursor-default bg-transparent"
+                className={`${shellNavRailBackdrop} z-[60] cursor-default bg-transparent`}
                 onClick={() => setEmojiOpen(false)}
               />
               <div

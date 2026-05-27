@@ -1,22 +1,32 @@
+import {
+  Code,
+  Download,
+  FileArchive,
+  FileText,
+  Film,
+  FolderDown,
+  Image as ImageIcon,
+  Music,
+  Paperclip,
+} from 'lucide-react';
 import friendService from '../../services/friendService';
 import toast from 'react-hot-toast';
 import { useTheme } from '../../context/ThemeContext';
+import { useAppStrings } from '../../locales/appStrings';
 import ChatMessageText from './ChatMessageText';
 
-/**
- * Hiá»ƒn thá»‹ tin nháº¯n file/hÃ¬nh: tháº» tá»‡p thay vÃ¬ chuá»—i URL Firebase dÃ i.
- */
+/** Hien thi tin nhan file/hinh: the tep thay vi chuoi URL Firebase dai. */
 
 function formatFileSize(bytes) {
   const n = Number(bytes);
-  if (!Number.isFinite(n) || n < 0) return 'â€”';
+  if (!Number.isFinite(n) || n < 0) return '—';
   if (n < 1024) return `${Math.round(n)} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-/** TÃªn file an toÃ n cho thuá»™c tÃ­nh download (Windows/macOS). */
+/** Ten file an toan cho thuoc tinh download (Windows/macOS). */
 export function safeDownloadFileName(name) {
   const s = String(name || 'download').trim() || 'download';
   return s.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').slice(0, 200);
@@ -28,7 +38,6 @@ export function guessNameFromUrl(url) {
     const path = u.pathname.split('/').filter(Boolean);
     const last = path[path.length - 1] || 'file';
     let decoded = decodeURIComponent(last.replace(/\+/g, ' '));
-    // Bá» prefix UUID (path dáº¡ng .../uuid_tÃªn_gá»‘c.ext)
     decoded = decoded.replace(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_/i,
       ''
@@ -58,9 +67,7 @@ function guessNameFromStoragePath(storagePath) {
 function decodeFileNameCandidate(raw) {
   let out = String(raw || '').trim();
   if (!out) return '';
-  // Má»™t sá»‘ payload cÃ³ kiá»ƒu query-string: space lÃ  '+'
   out = out.replace(/\+/g, ' ');
-  // Decode tá»‘i Ä‘a 2 láº§n Ä‘á»ƒ xá»­ lÃ½ trÆ°á»ng há»£p double-encoded.
   for (let i = 0; i < 2; i++) {
     if (!/%[0-9a-f]{2}/i.test(out)) break;
     try {
@@ -74,28 +81,27 @@ function decodeFileNameCandidate(raw) {
 
 function resolveDisplayFileName(fileMeta, url) {
   const fromMeta = decodeFileNameCandidate(fileMeta?.originalName);
-  if (fromMeta) {
-    return fromMeta;
-  }
+  if (fromMeta) return fromMeta;
 
   const fromStoragePath = decodeFileNameCandidate(guessNameFromStoragePath(fileMeta?.storagePath));
-  if (fromStoragePath) {
-    return fromStoragePath;
-  }
+  if (fromStoragePath) return fromStoragePath;
 
   return guessNameFromUrl(url);
 }
 
-function iconForFile(name, mime) {
+function FileTypeIcon({ name, mime, className = 'h-5 w-5' }) {
   const m = String(mime || '').toLowerCase();
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  if (m.startsWith('image/')) return 'ðŸ–¼ï¸';
-  if (m.startsWith('video/')) return 'ðŸŽ¬';
-  if (m.startsWith('audio/')) return 'ðŸŽµ';
-  if (m.includes('pdf')) return 'ðŸ“•';
-  if (['zip', 'rar', '7z', 'gz'].includes(ext)) return 'ðŸ“¦';
-  if (['php', 'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'go', 'rs'].includes(ext)) return 'ðŸ“„';
-  return 'ðŸ“Ž';
+  const ext = (String(name || '').split('.').pop() || '').toLowerCase();
+  const props = { className, strokeWidth: 1.75, 'aria-hidden': true };
+  if (m.startsWith('image/')) return <ImageIcon {...props} />;
+  if (m.startsWith('video/')) return <Film {...props} />;
+  if (m.startsWith('audio/')) return <Music {...props} />;
+  if (m.includes('pdf')) return <FileText {...props} />;
+  if (['zip', 'rar', '7z', 'gz'].includes(ext)) return <FileArchive {...props} />;
+  if (['php', 'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'go', 'rs'].includes(ext)) {
+    return <Code {...props} />;
+  }
+  return <Paperclip {...props} />;
 }
 
 async function fetchBlob(url) {
@@ -140,14 +146,11 @@ export async function saveFileWithPicker(url, filename) {
   }
 }
 
-/**
- * Tháº» tá»‡p: tÃªn, dung lÆ°á»£ng, má»Ÿ / lÆ°u / táº£i.
- */
 export function ChatFileCard({ url, fileMeta, className = '', compact = false }) {
+  const { t } = useAppStrings();
   const name = resolveDisplayFileName(fileMeta, url);
   const sizeLabel = formatFileSize(fileMeta?.byteSize);
   const mime = fileMeta?.mimeType || '';
-  const icon = iconForFile(name, mime);
 
   const openFile = (e) => {
     e?.preventDefault?.();
@@ -165,42 +168,44 @@ export function ChatFileCard({ url, fileMeta, className = '', compact = false })
           className="flex min-w-0 w-full items-center gap-2 text-left transition hover:opacity-95"
         >
           <span
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-sky-600/80 to-indigo-700/90 text-base"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-sky-600/80 to-indigo-700/90 text-white"
             aria-hidden
           >
-            {icon}
+            <FileTypeIcon name={name} mime={mime} className="h-4 w-4" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-xs font-semibold text-white">{name}</span>
             <span className="mt-0.5 block text-[10px] leading-tight text-[#8e9297]">
               {sizeLabel}
               <span className="mx-1 text-[#4e5257]">·</span>
-              <span className="text-emerald-400/90">Nhấn để mở</span>
+              <span className="text-emerald-400/90">{t('friendChat.clickToOpen')}</span>
             </span>
           </span>
         </button>
         <div className="flex gap-1 border-t border-white/[0.08] pt-1.5">
           <button
             type="button"
-            title="Lưu tệp"
+            title={t('friendChat.saveFile')}
             onClick={(e) => {
               e.stopPropagation();
               saveFileWithPicker(url, name);
             }}
             className="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-white/[0.1] bg-white/[0.04] text-[10px] text-white/90 transition hover:bg-white/[0.08]"
           >
-            📁 Lưu
+            <FolderDown className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden />
+            {t('friendChat.saveFileShort')}
           </button>
           <button
             type="button"
-            title="Tải xuống"
+            title={t('friendChat.downloadFile')}
             onClick={(e) => {
               e.stopPropagation();
               downloadToDisk(url, name);
             }}
             className="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-white/[0.1] bg-white/[0.04] text-[10px] text-white/90 transition hover:bg-white/[0.08]"
           >
-            ⬇️ Tải
+            <Download className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden />
+            {t('friendChat.downloadFileShort')}
           </button>
         </div>
       </div>
@@ -217,42 +222,42 @@ export function ChatFileCard({ url, fileMeta, className = '', compact = false })
         className="flex min-w-0 flex-1 items-center gap-3 text-left transition hover:opacity-95"
       >
         <span
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-600/80 to-indigo-700/90 text-xl"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-600/80 to-indigo-700/90 text-white"
           aria-hidden
         >
-          {icon}
+          <FileTypeIcon name={name} mime={mime} className="h-6 w-6" />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate font-semibold text-white">{name}</span>
           <span className="mt-0.5 block text-xs text-[#8e9297]">
             {sizeLabel}
-            <span className="mx-1.5 text-[#4e5257]">Â·</span>
-            <span className="text-emerald-400/90">Nháº¥n Ä‘á»ƒ má»Ÿ</span>
+            <span className="mx-1.5 text-[#4e5257]">·</span>
+            <span className="text-emerald-400/90">{t('friendChat.clickToOpen')}</span>
           </span>
         </span>
       </button>
       <div className="flex shrink-0 flex-col gap-1.5 border-l border-white/[0.08] pl-2">
         <button
           type="button"
-          title="LÆ°u tá»‡p (chá»n thÆ° má»¥c náº¿u trÃ¬nh duyá»‡t há»— trá»£)"
+          title={t('friendChat.saveFile')}
           onClick={(e) => {
             e.stopPropagation();
             saveFileWithPicker(url, name);
           }}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.1] bg-white/[0.04] text-base text-white/90 transition hover:bg-white/[0.08]"
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.1] bg-white/[0.04] text-white/90 transition hover:bg-white/[0.08]"
         >
-          ðŸ“
+          <FolderDown className="h-4 w-4" strokeWidth={2} aria-hidden />
         </button>
         <button
           type="button"
-          title="Táº£i xuá»‘ng"
+          title={t('friendChat.downloadFile')}
           onClick={(e) => {
             e.stopPropagation();
             downloadToDisk(url, name);
           }}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.1] bg-white/[0.04] text-base text-white/90 transition hover:bg-white/[0.08]"
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.1] bg-white/[0.04] text-white/90 transition hover:bg-white/[0.08]"
         >
-          â¬‡ï¸
+          <Download className="h-4 w-4" strokeWidth={2} aria-hidden />
         </button>
       </div>
     </div>
@@ -272,17 +277,15 @@ function isStorageUrl(s) {
   );
 }
 
-/**
- * Nội dung bubble: text / ảnh / file — không render URL thô cho file đính kèm.
- * @param {'org'|'friend'|null} mentionVariant — tô màu @mention
- */
 export function ChatMessageAttachmentBody({
   message,
   compact = false,
   mentionVariant = null,
   mentionLabels = [],
+  onImageClick,
 }) {
   const { isDarkMode } = useTheme();
+  const { t } = useAppStrings();
   const content = message?.content;
   const fm = message?.fileMeta;
   const mt = message?.messageType || 'text';
@@ -319,7 +322,9 @@ export function ChatMessageAttachmentBody({
             {String(fullName).slice(0, 1).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <div className="text-xs font-semibold uppercase tracking-wide text-cyan-100/70">Danh thiếp</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-cyan-100/70">
+              Danh thiếp
+            </div>
             <div className="truncate text-sm font-semibold text-white">Tên: {fullName}</div>
             <div className="truncate text-xs text-cyan-100/75">SĐT: {phone}</div>
             <div className="truncate text-xs text-cyan-100/75">Email: {email}</div>
@@ -333,30 +338,31 @@ export function ChatMessageAttachmentBody({
               if (!targetUserId) return;
               try {
                 await friendService.sendRequest(targetUserId);
-                toast.success('Da gui loi moi ket ban');
+                toast.success(t('orgPanel.contactFriendSent'));
               } catch {
-                toast.error('Khong the gui loi moi ket ban');
+                toast.error(t('orgPanel.contactFriendFail'));
               }
             }}
             className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-500 disabled:opacity-50"
           >
-            Kết bạn
+            {t('orgPanel.contactAddFriend')}
           </button>
           <button
             type="button"
             onClick={goToFriendChat}
             className="rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10"
           >
-            Nhắn tin
+            {t('friendChat.profileMessage')}
           </button>
         </div>
       </div>
     );
   }
 
-
   if (mt === 'image' && isHttpUrl(content)) {
-    const alt = resolveDisplayFileName(fm, content) || 'HÃ¬nh áº£nh';
+    const alt = resolveDisplayFileName(fm, content) || t('friendChat.imageAlt');
+    const fileName =
+      resolveDisplayFileName(fm, content) || guessNameFromUrl(content) || 'image.jpg';
     return (
       <div className="space-y-2">
         <button
@@ -379,29 +385,21 @@ export function ChatMessageAttachmentBody({
         <div className="flex justify-end gap-1">
           <button
             type="button"
-            title="LÆ°u áº£nh"
-            onClick={() =>
-              saveFileWithPicker(
-                content,
-                resolveDisplayFileName(fm, content) || guessNameFromUrl(content) || 'image.jpg'
-              )
-            }
-            className="rounded-lg border border-white/[0.1] bg-white/[0.06] px-2 py-1 text-xs text-white/90 hover:bg-white/[0.1]"
+            title={t('friendChat.saveFile')}
+            onClick={() => saveFileWithPicker(content, fileName)}
+            className="inline-flex items-center gap-1 rounded-lg border border-white/[0.1] bg-white/[0.06] px-2 py-1 text-xs text-white/90 hover:bg-white/[0.1]"
           >
-            ðŸ“ LÆ°u
+            <FolderDown className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+            {t('friendChat.saveFileShort')}
           </button>
           <button
             type="button"
-            title="Táº£i xuá»‘ng"
-            onClick={() =>
-              downloadToDisk(
-                content,
-                resolveDisplayFileName(fm, content) || guessNameFromUrl(content) || 'image.jpg'
-              )
-            }
-            className="rounded-lg border border-white/[0.1] bg-white/[0.06] px-2 py-1 text-xs text-white/90 hover:bg-white/[0.1]"
+            title={t('friendChat.downloadFile')}
+            onClick={() => downloadToDisk(content, fileName)}
+            className="inline-flex items-center gap-1 rounded-lg border border-white/[0.1] bg-white/[0.06] px-2 py-1 text-xs text-white/90 hover:bg-white/[0.1]"
           >
-            â¬‡ï¸ Táº£i
+            <Download className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+            {t('friendChat.downloadFileShort')}
           </button>
         </div>
       </div>
