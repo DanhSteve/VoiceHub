@@ -4,13 +4,7 @@ Service quản lý xác thực và phân quyền cho hệ thống.
 
 ## Cấu hình môi trường
 
-Tạo file `.env` từ `ENV.example`:
-
-```bash
-cp ENV.example .env
-```
-
-Cập nhật các giá trị trong file `.env`:
+Tạo file `.env` trực tiếp trong thư mục `services/auth-service/` và cập nhật các giá trị:
 
 ```env
 # Server
