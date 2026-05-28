@@ -92,6 +92,18 @@ app.use(
   })
 );
 
+// Ảnh đại diện /uploads/* — user-service static tại /uploads (Express mount strip prefix → pathRewrite)
+app.use(
+  '/uploads',
+  createProxyMiddleware({
+    target: services.user.url,
+    changeOrigin: true,
+    xfwd: true,
+    logLevel: 'warn',
+    pathRewrite: (path) => `/uploads${path.startsWith('/') ? path : `/${path}`}`,
+  })
+);
+
 /** Public — phải khai báo trước router + auth để Express 5 không rơi vào 401 (client gọi không có JWT). */
 app.get('/api/health/gateway-trust', (req, res) => {
   const configured = Boolean(String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim());

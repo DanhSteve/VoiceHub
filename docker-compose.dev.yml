@@ -48,7 +48,7 @@ services:
       CHOKIDAR_INTERVAL: "500"
 
   voice-service:
-    command: ["sh", "-c", "npm ci || npm install; npm run dev"]
+    # Giữ ENTRYPOINT docker-entrypoint.sh (mediasoup-worker). Dev reload: mount src + restart container.
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "500"

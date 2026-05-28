@@ -52,6 +52,24 @@ async function getSignedReadUrl(storagePath) {
   return res.data.data.url;
 }
 
+async function buildDraftAttachmentsFromMessage(msg) {
+  if (!msg || !['image', 'file'].includes(String(msg.messageType || ''))) return [];
+  const storagePath = String(msg?.fileMeta?.storagePath || '').trim();
+  if (!storagePath) return [];
+  try {
+    const signedUrl = await getSignedReadUrl(storagePath);
+    if (!signedUrl) return [];
+    return [
+      {
+        name: String(msg?.fileMeta?.originalName || msg?.content || 'Tệp đính kèm').trim(),
+        url: signedUrl,
+      },
+    ];
+  } catch {
+    return [];
+  }
+}
+
 async function runOcrByUrl(imageUrl) {
   const base = (process.env.PADDLEOCR_BASE_URL || '').replace(/\/$/, '');
   if (!base) return { text: '', raw: null };
@@ -176,6 +194,7 @@ function buildPatchFromDraft(nextDraft) {
   if (nextDraft.departmentId) patch.departmentId = nextDraft.departmentId;
   if (nextDraft.teamId) patch.teamId = nextDraft.teamId;
   if (nextDraft.departmentName) patch.departmentName = nextDraft.departmentName;
+  if (Array.isArray(nextDraft.attachments)) patch.attachments = nextDraft.attachments;
   return patch;
 }
 
@@ -196,6 +215,7 @@ async function buildDraftFromMessage({ messageText, organizationId, generatedBy,
     userIds,
     mentionLabels,
     channelId: channelId || undefined,
+    messageText,
   });
 
   const nowIso = new Date().toISOString();
@@ -320,6 +340,10 @@ async function processExtractJob(payload) {
       payload,
       extraction,
     });
+    const draftAttachments = await buildDraftAttachmentsFromMessage(msg);
+    if (draftAttachments.length > 0) {
+      draft.attachments = draftAttachments;
+    }
 
     if (!draft.title && extraction.draft?.title) {
       draft.title = extraction.draft.title;
@@ -392,6 +416,10 @@ async function processSyncJob(payload) {
       },
       extraction,
     });
+    const draftAttachments = await buildDraftAttachmentsFromMessage(msg);
+    if (draftAttachments.length > 0) {
+      draft.attachments = draftAttachments;
+    }
 
     const validation = validateDraft(draft);
     if (!validation.ok) continue;

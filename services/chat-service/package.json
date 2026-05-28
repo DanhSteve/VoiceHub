@@ -11,6 +11,7 @@
     "firebase-admin": "^12.7.0",
     "ioredis": "^5.9.0",
     "jsonwebtoken": "^9.0.2",
+    "meilisearch": "^0.44.1",
     "mongoose": "^9.1.4",
     "socket.io": "^4.8.3"
   },
@@ -22,6 +23,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "backfill:dm-conversation": "node src/scripts/backfillDmConversationId.js",
+    "backfill:message-search": "node src/scripts/backfillMessageSearchIndex.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

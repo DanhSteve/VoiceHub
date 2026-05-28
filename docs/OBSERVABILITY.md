@@ -16,6 +16,12 @@
 - Presence keys: `vh:presence:{userId}` (TTL ~120s, socket-service).
 - Cache DM list: `dm:last:{sortedPair}` (chat-service, TTL 60s).
 
+## Performance baseline (Wave 0)
+
+- [perf-baseline-2026-05.md](./perf-baseline-2026-05.md) — inventory request theo màn + cột p95 điền tay.
+- [api-read-pagination-contract.md](./api-read-pagination-contract.md) — chuẩn `cursor` / `limit` / `fields=summary`.
+- [populate-audit-wave0.md](./populate-audit-wave0.md) — audit populate cross-service.
+
 ## Gợi ý mở rộng
 
 - Prometheus + Grafana cho từng service.

@@ -4,6 +4,7 @@ const userController = require('../controllers/user.controller');
 const userContext = require('../middlewares/userContext');
 const internalServiceAuth = require('../middlewares/internalServiceAuth');
 const { protect } = require('../middleware/auth');
+const upload = require('../middleware/upload');
 
 // Presence từ socket-service (trước userContext — không cần x-user-id)
 router.patch(
@@ -55,6 +56,12 @@ router.patch('/me/status', userController.updateStatus.bind(userController));
 
 // Cập nhật user profile
 router.patch('/me', userController.updateUserProfile.bind(userController));
+
+router.post(
+  '/avatar',
+  upload.single('avatar'),
+  userController.uploadAvatar.bind(userController)
+);
 
 // Tìm kiếm users
 router.get('/search', userController.searchUsers.bind(userController));

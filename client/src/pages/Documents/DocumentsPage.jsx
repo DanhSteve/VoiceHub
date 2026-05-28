@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { useSearchParams } from 'react-router-dom';
-import OrganizationDocumentsView from '../../features/orgDocuments/OrganizationDocumentsView';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, Dropdown, GlassCard, GradientButton, Modal } from '../../components/Shared';
 import { useTheme } from '../../context/ThemeContext';
@@ -9,10 +8,17 @@ import { appShellBg } from '../../theme/shellTheme';
 import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 import api from '../../services/api';
+import UserAvatar from '../../components/Shared/UserAvatar';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import { useOrganizationsMy } from '../../hooks/queries';
+import { orgRecordId } from '../../utils/orgListUtils';
 
 function DocumentsPage() {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
+  const navigate = useNavigate();
+  const { activeWorkspace } = useWorkspace();
+  const orgsQuery = useOrganizationsMy();
   const [searchParams] = useSearchParams();
   const organizationId = String(
     searchParams.get('organizationId') || searchParams.get('orgId') || ''
@@ -147,8 +153,27 @@ function DocumentsPage() {
     return list;
   }, [documents, listFilter, docNameQuery]);
 
+  useEffect(() => {
+    if (!isOrgDocuments) return;
+    const fromList = (Array.isArray(orgsQuery.data) ? orgsQuery.data : []).find(
+      (o) => orgRecordId(o) === organizationId
+    );
+    const slug =
+      String(fromList?.slug || '').trim() ||
+      (orgRecordId(activeWorkspace) === organizationId
+        ? String(activeWorkspace?.slug || '').trim()
+        : '');
+    if (slug) {
+      navigate(`/w/${encodeURIComponent(slug)}?tab=documents`, { replace: true });
+      return;
+    }
+    navigate(`/workspaces?orgId=${encodeURIComponent(organizationId)}&tab=documents`, {
+      replace: true,
+    });
+  }, [isOrgDocuments, organizationId, orgsQuery.data, activeWorkspace, navigate]);
+
   if (isOrgDocuments) {
-    return <OrganizationDocumentsView organizationId={organizationId} />;
+    return null;
   }
 
   const muted = isDarkMode ? 'text-slate-400' : 'text-slate-600';
@@ -475,18 +500,14 @@ function DocumentsPage() {
               </h4>
               <div className="space-y-2 text-sm">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-xs font-bold">
-                    SC
-                  </div>
+                  <UserAvatar name="Sarah Chen" size="xs" />
                   <div className="flex-1">
                     <div className="text-white font-semibold">Sarah Chen</div>
                     <div className="text-gray-500 text-xs">{t('documents.roleOwner')}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-xs font-bold">
-                    EW
-                  </div>
+                  <UserAvatar name="Emma Wilson" size="xs" />
                   <div className="flex-1">
                     <div className="text-white font-semibold">Emma Wilson</div>
                     <div className="text-gray-500 text-xs">{t('documents.canEditNote')}</div>
@@ -616,9 +637,7 @@ function DocumentsPage() {
               <GlassCard>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-sm font-bold">
-                      SC
-                    </div>
+                    <UserAvatar name="Sarah Chen" size="md" />
                     <div>
                       <div className="font-semibold text-white">Sarah Chen</div>
                       <div className="text-xs text-gray-500">sarah@company.com</div>
@@ -635,9 +654,7 @@ function DocumentsPage() {
               <GlassCard>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-sm font-bold">
-                      EW
-                    </div>
+                    <UserAvatar name="Emma Wilson" size="md" />
                     <div>
                       <div className="font-semibold text-white">Emma Wilson</div>
                       <div className="text-xs text-gray-500">emma@company.com</div>

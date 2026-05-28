@@ -24,6 +24,11 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Task board routes (mount trước /tasks để tránh xung đột /:taskId)
+const taskBoardRoutes = require('./routes/taskBoard.routes');
+app.use('/api/tasks/boards', taskBoardRoutes);
+app.use('/api/work/boards', taskBoardRoutes);
+
 // Task routes
 const taskRoutes = require('./routes/task.routes');
 app.use('/api/tasks', taskRoutes);

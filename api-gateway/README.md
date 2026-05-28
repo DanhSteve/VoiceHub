@@ -7,6 +7,11 @@ API Gateway là entry point duy nhất cho tất cả các microservices trong h
 1. **JWT Authentication**: Verify JWT token từ client và gắn `req.user`
 2. **Request Routing**: Route requests đến microservice phù hợp
 3. **Request Proxy**: Forward requests với user context
+4. **BFF read layer** (`src/bff/`): Gom cross-service reads, Redis cache ngắn, request coalescing. Xem [docs/gateway-bff-architecture.md](../docs/gateway-bff-architecture.md).
+   - `GET /api/bootstrap` — user + orgs + badges
+   - `GET /api/dashboard/summary` — dashboard aggregate
+   - `GET /api/organizations/:orgId/shell` — cache wrap org shell (wave 2a)
+   - `GET /api/organizations/:orgId/documents-overview` — cache wrap (logic vẫn ở org-service)
 
 ## Flow
 

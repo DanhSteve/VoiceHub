@@ -31,6 +31,15 @@ const aiTaskExtractionSchema = new mongoose.Schema(
       dueDate: { type: Date, default: null },
       priority: { type: String, default: 'medium' },
       tags: { type: [String], default: [] },
+      attachments: {
+        type: [
+          {
+            name: { type: String, default: '' },
+            url: { type: String, default: '' },
+          },
+        ],
+        default: [],
+      },
     },
     contextHints: {
       mentions: { type: mongoose.Schema.Types.Mixed, default: [] },

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAppStrings } from '../../locales/appStrings';
 import toast from 'react-hot-toast';
 import { useLocation } from 'react-router-dom';
@@ -11,6 +13,7 @@ import OrganizationScopeRoleSettingsModal from '../../components/Organization/Or
 import ForwardChannelModal from '../../components/Organization/ForwardChannelModal';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { useAuth } from '../../context/AuthContext';
+import { getResolvedBearerToken } from '../../utils/tokenStorage';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useSocket } from '../../context/SocketContext';
@@ -21,6 +24,15 @@ import userService from '../../services/userService';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import { taskAPI } from '../../services/api/taskAPI';
 import { useLandingSafeNavigate } from '../../hooks/useLandingSafeNavigate';
+import { useOrgShell } from '../../hooks/queries/useOrgShell';
+import {
+  buildOrgFilesFromOverview,
+  fetchOrganizationDocumentsOverview,
+} from '../../hooks/queries/useOrganizationDocumentsOverview';
+import { useOrgChannelMessages } from '../../hooks/queries/useOrgChannelMessages';
+import { useOrganizationsMy } from '../../hooks/queries/useOrganizationsMy';
+import { useFriendsList } from '../../hooks/queries/useFriendsList';
+import { queryKeys } from '../../lib/queryKeys';
 import { appShellBg } from '../../theme/shellTheme';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
 
@@ -35,9 +47,28 @@ import {
   normalizeOrgChatMessages,
 } from '../../utils/normalizeOrgChatMessage';
 import { enrichOrgChatMessagesWithProfiles } from '../../utils/enrichOrgChatMessages';
+import {
+  findOrgBySlug,
+  mergeOrganizationsList,
+  orgRecordId,
+  organizationsListSame,
+  workspacePayloadFromOrg,
+} from '../../utils/orgListUtils';
+import { normalizeWorkspaceTab, parseWorkspaceTabFromSearch } from '../../utils/workspaceTabUtils';
 const unwrapData = (payload) => payload?.data ?? payload;
 
 /** Khi đổi phòng ban: không tự nhảy vào kênh voice — ưu tiên kênh chat hoặc để trống. */
+
+const DEMO_ORGANIZATIONS = [
+  {
+    _id: 'demo-org-vh',
+    id: 'demo-org-vh',
+    name: 'VoiceHub Demo',
+    slug: 'voicehub-demo',
+    role: 'admin',
+  },
+];
+
 function preferDefaultTextChannelId(channelList, preferredTeamId = '', permissionMatrix = null) {
   const list = Array.isArray(channelList) ? channelList : [];
   const matrix =
@@ -62,26 +93,36 @@ function preferDefaultTextChannelId(channelList, preferredTeamId = '', permissio
   return anyText?._id ? String(anyText._id) : '';
 }
 
-const parseNotificationData = (item) => {
-  if (!item || typeof item !== 'object') return { data: {} };
-  if (item.data && typeof item.data === 'object') return item;
-  if (typeof item.data !== 'string') return { ...item, data: {} };
-  try {
-    return { ...item, data: JSON.parse(item.data) };
-  } catch {
-    return { ...item, data: {} };
-  }
-};
-
 function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = {}) {
   const { t, locale } = useAppStrings();
-  const { user } = useAuth();
+  const { user, loading: authLoading, isAuthenticated, accessToken } = useAuth();
   const { setActiveWorkspace, lastWorkspaceSlug, setLastWorkspaceSlug } = useWorkspace();
   const { isDarkMode } = useTheme();
   const { on, off, onlineUsers, connected: socketConnected, joinRoom, leaveRoom } = useSocket();
   const navigate = useLandingSafeNavigate(landingDemo);
   const location = useLocation();
-  const [organizations, setOrganizations] = useState([]);
+  const queryClient = useQueryClient();
+  const orgsQuery = useOrganizationsMy({ enabled: !landingDemo });
+  const friendsQuery = useFriendsList({ enabled: !landingDemo });
+  /** Org từ by-slug chưa có trong GET /organizations/my — giữ tạm tối đa 1 bản ghi. */
+  const [slugPendingOrg, setSlugPendingOrg] = useState(null);
+  const organizationsStableRef = useRef([]);
+  const organizations = useMemo(() => {
+    if (landingDemo) return DEMO_ORGANIZATIONS;
+    const fromQuery = Array.isArray(orgsQuery.data) ? orgsQuery.data : [];
+    const merged = mergeOrganizationsList(fromQuery, slugPendingOrg ? [slugPendingOrg] : []);
+    if (organizationsListSame(organizationsStableRef.current, merged)) {
+      return organizationsStableRef.current;
+    }
+    organizationsStableRef.current = merged;
+    return merged;
+  }, [landingDemo, orgsQuery.data, slugPendingOrg]);
+  const organizationIdsKey = useMemo(
+    () => organizations.map((o) => orgRecordId(o)).filter(Boolean).sort().join(','),
+    [organizations]
+  );
+  const organizationsLoaded =
+    landingDemo || orgsQuery.isFetched || orgsQuery.isSuccess || orgsQuery.isError;
   const [selectedOrganizationId, setSelectedOrganizationId] = useState('');
   const [workspaceSearchOpen, setWorkspaceSearchOpen] = useState(false);
   const [departments, setDepartments] = useState([]);
@@ -103,6 +144,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     departmentId: null,
     teamId: null,
     canSeeAllStructure: false,
+    structureMode: 'none',
     scopedDivisionIds: [],
     scopedDepartmentIds: [],
     scopedTeamIds: [],
@@ -116,11 +158,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   const [voiceMessageInput, setVoiceMessageInput] = useState('');
   const [voiceChatDismissed, setVoiceChatDismissed] = useState(false);
   const senderProfileCacheRef = useRef(new Map());
-  /** Đã hoàn tất ít nhất một lần gọi API danh sách tổ chức (sidebar: chỉ hiện “chưa tham gia” sau khi biết kết quả). */
-  const [organizationsLoaded, setOrganizationsLoaded] = useState(false);
   const [loadingDepartments, setLoadingDepartments] = useState(false);
   const [loadingChannels, setLoadingChannels] = useState(false);
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   /** Tiến trình upload file/ảnh lên kênh (0–100), null khi không upload */
   const [channelUploadProgress, setChannelUploadProgress] = useState(null);
@@ -150,6 +189,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   const [chatContacts, setChatContacts] = useState([]);
   const [loadingChatContacts, setLoadingChatContacts] = useState(false);
   const [createOrgModalOpen, setCreateOrgModalOpen] = useState(false);
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [createWorkspaceStep, setCreateWorkspaceStep] = useState(1);
   const [createOrgName, setCreateOrgName] = useState('');
   const [createWorkspaceSlug, setCreateWorkspaceSlug] = useState('');
@@ -252,10 +292,10 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   const [memberListRefreshKey, setMemberListRefreshKey] = useState(0);
   const [workspaceTasks, setWorkspaceTasks] = useState([]);
   const [loadingWorkspaceTasks, setLoadingWorkspaceTasks] = useState(false);
+  const [workspaceDocFiles, setWorkspaceDocFiles] = useState([]);
+  const [loadingWorkspaceDocuments, setLoadingWorkspaceDocuments] = useState(false);
+  const [workspaceDocumentsError, setWorkspaceDocumentsError] = useState('');
   const [workspaceTabView, setWorkspaceTabView] = useState('chat');
-  const [workspaceNotificationsOpen, setWorkspaceNotificationsOpen] = useState(false);
-  const [workspaceNotifications, setWorkspaceNotifications] = useState([]);
-  const [loadingWorkspaceNotifications, setLoadingWorkspaceNotifications] = useState(false);
   const previousVoiceChannelIdRef = useRef('');
   const hasInviteQuery = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -269,11 +309,10 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     !createOrgModalOpen &&
     !location.state?.openCreateWorkspace &&
     !hasInviteQuery;
-  const workspaceTabFromUrl = useMemo(() => {
-    const params = new URLSearchParams(location.search);
-    const raw = String(params.get('tab') || '').trim().toLowerCase();
-    return raw === 'tasks' ? 'tasks' : 'chat';
-  }, [location.search]);
+  const workspaceTabFromUrl = useMemo(
+    () => parseWorkspaceTabFromSearch(location.search),
+    [location.search]
+  );
 
   useEffect(() => {
     setWorkspaceTabView(workspaceTabFromUrl);
@@ -298,9 +337,57 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     [organizations, selectedOrganizationId]
   );
 
+  const handleWorkspaceTabChange = useCallback(
+    (tab) => {
+      const next = normalizeWorkspaceTab(tab);
+      const current = parseWorkspaceTabFromSearch(location.search);
+      if (current === next) return;
+      const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
+      if (!slug || landingDemo) return;
+      const base = `/w/${encodeURIComponent(slug)}`;
+      if (next === 'chat') {
+        navigate(base);
+      } else {
+        navigate(`${base}?tab=${next}`);
+      }
+    },
+    [
+      location.search,
+      selectedOrganization?.slug,
+      selectedOrganizationId,
+      landingDemo,
+      navigate,
+    ]
+  );
+
+  const openWorkspaceNotifications = useCallback(() => {
+    if (!selectedOrganizationId) return;
+    handleWorkspaceTabChange('notifications');
+  }, [selectedOrganizationId, handleWorkspaceTabChange]);
+
+  const handleOpenDocumentInWorkspace = useCallback(
+    (file) => {
+      if (file?.roomId) {
+        setSelectedChannelId(String(file.roomId));
+      }
+      const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
+      if (!slug) return;
+      const params = new URLSearchParams();
+      if (file?.roomId) params.set('channelId', String(file.roomId));
+      if (file?.source === 'message' && file?.id) params.set('messageId', String(file.id));
+      const qs = params.toString();
+      navigate(`/w/${encodeURIComponent(slug)}${qs ? `?${qs}` : ''}`);
+    },
+    [selectedOrganization?.slug, selectedOrganizationId, navigate]
+  );
+
   useEffect(() => {
     setWorkspaceSearchOpen(false);
   }, [selectedOrganizationId]);
+
+  useEffect(() => {
+    setWorkspaceSearchOpen(false);
+  }, [location.pathname]);
   const selectedDepartment = useMemo(
     () => departments.find((department) => department._id === selectedDepartmentId) || null,
     [departments, selectedDepartmentId]
@@ -309,6 +396,22 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     () => teams.find((team) => String(team._id) === String(selectedTeamId)) || null,
     [teams, selectedTeamId]
   );
+
+  useEffect(() => {
+    if (workspaceTabView !== 'tasks' && workspaceTabView !== 'documents') return;
+    if (selectedTeamId) return;
+    const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
+    if (!slug) return;
+    toast.error('Vui lòng chọn team!');
+    navigate(`/w/${encodeURIComponent(slug)}`);
+  }, [
+    workspaceTabView,
+    selectedTeamId,
+    selectedOrganization?.slug,
+    selectedOrganizationId,
+    navigate,
+  ]);
+
   const selectedChannel = useMemo(
     () => channels.find((ch) => String(ch._id) === String(selectedChannelId)) || null,
     [channels, selectedChannelId]
@@ -348,17 +451,26 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     });
   }, [inviteFriends, inviteSearch]);
 
+  const activeWorkspaceSyncKey = useMemo(
+    () => `${selectedOrganizationId}|${organizationIdsKey}`,
+    [selectedOrganizationId, organizationIdsKey]
+  );
+  const lastWorkspacePushRef = useRef('');
+
   useEffect(() => {
-    if (!selectedOrganizationId) return;
-    const current = organizations.find((item) => String(item._id) === String(selectedOrganizationId));
+    if (!selectedOrganizationId) {
+      lastWorkspacePushRef.current = '';
+      return;
+    }
+    const current = organizations.find(
+      (item) => orgRecordId(item) === String(selectedOrganizationId)
+    );
     if (!current) return;
-    setActiveWorkspace({
-      _id: current._id,
-      slug: current.slug,
-      name: current.name,
-      myRole: current.myRole,
-    });
-  }, [organizations, selectedOrganizationId, setActiveWorkspace]);
+    const pushKey = orgRecordId(current);
+    if (lastWorkspacePushRef.current === pushKey) return;
+    lastWorkspacePushRef.current = pushKey;
+    setActiveWorkspace(workspacePayloadFromOrg(current));
+  }, [activeWorkspaceSyncKey, setActiveWorkspace]);
 
   /** Số đơn gia nhập chờ duyệt theo từng tổ chức (badge trên avatar). */
   const joinReviewCountByOrgId = useMemo(() => {
@@ -407,22 +519,10 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
 
   const loadOrganizations = async () => {
     try {
-      const payload = await organizationAPI.getOrganizations();
-      const list = unwrapData(payload);
-      const normalized = Array.isArray(list) ? list : [];
-      setOrganizations(normalized);
-      if (normalized.length > 0) {
-        const matchedBySlug = normalized.find(
-          (item) => String(item.slug || '').trim() === String(lastWorkspaceSlug || '').trim()
-        );
-        setSelectedOrganizationId((prev) => prev || matchedBySlug?._id || normalized[0]._id);
-      } else {
-        setSelectedOrganizationId('');
-      }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.organizations.my() });
+      await queryClient.refetchQueries({ queryKey: queryKeys.organizations.my() });
     } catch (error) {
       notifyError(t('organizations.loadOrgsFail'));
-    } finally {
-      setOrganizationsLoaded(true);
     }
   };
 
@@ -617,139 +717,6 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     };
   };
 
-  const loadStructure = async (orgId) => {
-    if (!orgId) return;
-    try {
-      const payload = await organizationAPI.getStructure(orgId);
-      const body = unwrapData(payload);
-      const branches = Array.isArray(body?.branches) ? body.branches : Array.isArray(body) ? body : [];
-      setWorkspaceStructure(branches);
-
-      const depList = [];
-      const teamList = [];
-      for (const branch of branches) {
-        for (const division of branch?.divisions || []) {
-          for (const department of division?.departments || []) {
-            depList.push(department);
-            for (const team of department?.teams || []) {
-              teamList.push(team);
-            }
-          }
-        }
-      }
-      setDepartments(depList);
-      setTeams(teamList);
-      const defaultBranchId = branches?.[0]?._id ? String(branches[0]._id) : '';
-      const defaultDivisionId = branches?.[0]?.divisions?.[0]?._id
-        ? String(branches[0].divisions[0]._id)
-        : '';
-      setSelectedBranchId((prev) => (prev ? prev : defaultBranchId));
-      setSelectedDivisionId((prev) => (prev ? prev : defaultDivisionId));
-
-      const visibleDepts = defaultDivisionId
-        ? depList.filter((d) => String(d.division || '') === defaultDivisionId)
-        : depList;
-      const defaultDeptId = visibleDepts?.[0]?._id ? String(visibleDepts[0]._id) : '';
-      setSelectedDepartmentId((prev) => {
-        if (prev && depList.some((d) => String(d._id) === String(prev))) return prev;
-        return defaultDeptId || '';
-      });
-
-      const visibleTeams = defaultDeptId
-        ? teamList.filter((t) => String(t.department || '') === defaultDeptId)
-        : teamList;
-      const defaultTeamId = visibleTeams?.[0]?._id ? String(visibleTeams[0]._id) : '';
-      setSelectedTeamId((prev) => {
-        if (prev && teamList.some((t) => String(t._id) === String(prev))) return prev;
-        return defaultTeamId || '';
-      });
-    } catch {
-      setWorkspaceStructure([]);
-      setSelectedBranchId('');
-      setSelectedDivisionId('');
-      await loadDepartments(orgId);
-    }
-  };
-
-  const loadTaskWorkspaceScope = async (orgId) => {
-    if (!orgId) {
-      setTaskWorkspaceScope(null);
-      return;
-    }
-    try {
-      const payload = await organizationAPI.getTaskWorkspaceScope(orgId);
-      const body = unwrapData(payload);
-      const data = body?.data ?? body;
-      setTaskWorkspaceScope(data && typeof data === 'object' ? data : null);
-    } catch {
-      setTaskWorkspaceScope({
-        visibility: 'self',
-        canCreateTask: false,
-        canUseAiTask: false,
-        assignableUserIds: [],
-      });
-    }
-  };
-
-  const loadChannelPermissions = async (orgId) => {
-    if (!orgId) return;
-    try {
-      const payload = await organizationAPI.getAccessibleChannelIds(orgId);
-      const body = unwrapData(payload);
-      const data = body?.data ?? body;
-      setChannelPermissionMatrix(data?.permissionsByChannelId || {});
-      const scopedDivs = Array.isArray(data?.scope?.scopedDivisionIds)
-        ? data.scope.scopedDivisionIds.map(String)
-        : [];
-      const scopedDepts = Array.isArray(data?.scope?.scopedDepartmentIds)
-        ? data.scope.scopedDepartmentIds.map(String)
-        : [];
-      const scopedTeams = Array.isArray(data?.scope?.scopedTeamIds)
-        ? data.scope.scopedTeamIds.map(String)
-        : [];
-      setMembershipScope({
-        branchId: data?.scope?.branchId || null,
-        divisionId: data?.scope?.divisionId || null,
-        departmentId: data?.scope?.departmentId || null,
-        teamId: data?.scope?.teamId || null,
-        canSeeAllStructure: Boolean(data?.scope?.canSeeAllStructure),
-        scopedDivisionIds: scopedDivs,
-        scopedDepartmentIds: scopedDepts,
-        scopedTeamIds: scopedTeams,
-      });
-      if (data?.scope?.branchId) setSelectedBranchId(String(data.scope.branchId));
-      const pickDivisionId =
-        data?.scope?.divisionId ||
-        (scopedDivs.length === 1 ? scopedDivs[0] : '') ||
-        '';
-      const pickDepartmentId =
-        data?.scope?.departmentId ||
-        (scopedDepts.length === 1 ? scopedDepts[0] : '') ||
-        '';
-      if (pickDepartmentId && !pickDivisionId && findBranchAndDivisionForDepartment?.get) {
-        const loc = findBranchAndDivisionForDepartment.get(String(pickDepartmentId));
-        if (loc?.branchId) setSelectedBranchId(String(loc.branchId));
-        if (loc?.divisionId) setSelectedDivisionId(String(loc.divisionId));
-      }
-      if (pickDivisionId) setSelectedDivisionId(String(pickDivisionId));
-      if (pickDepartmentId) setSelectedDepartmentId(String(pickDepartmentId));
-      if (data?.scope?.teamId) setSelectedTeamId(String(data.scope.teamId));
-      else if (scopedTeams.length === 1) setSelectedTeamId(String(scopedTeams[0]));
-    } catch {
-      setChannelPermissionMatrix({});
-      setMembershipScope({
-        branchId: null,
-        divisionId: null,
-        departmentId: null,
-        teamId: null,
-        canSeeAllStructure: false,
-        scopedDivisionIds: [],
-        scopedDepartmentIds: [],
-        scopedTeamIds: [],
-      });
-    }
-  };
-
   const findBranchAndDivisionForDepartment = useMemo(() => {
     // Memoized to avoid rebuilding maps on every render; depends on workspaceStructure.
     if (!Array.isArray(workspaceStructure) || workspaceStructure.length === 0) return null;
@@ -768,6 +735,168 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
 
     return departmentIdToBranchAndDivision;
   }, [workspaceStructure]);
+
+  const reloadOrgShell = useCallback(
+    (orgId) => {
+      const id = orgId != null && orgId !== '' ? String(orgId) : '';
+      if (!id) return Promise.resolve();
+      return queryClient.invalidateQueries({ queryKey: queryKeys.org.shell(id) });
+    },
+    [queryClient]
+  );
+
+  const lastShellAppliedRef = useRef('');
+
+  const applyOrgShell = useCallback((shell) => {
+    if (!shell || typeof shell !== 'object') return;
+
+    const struct = shell.structureSummary || {};
+    const branches = Array.isArray(struct?.branches) ? struct.branches : [];
+    setWorkspaceStructure(branches);
+
+    const depList = [];
+    const teamList = [];
+    const departmentIdToBranchAndDivision = new Map();
+    for (const branch of branches) {
+      const branchId = branch?._id ? String(branch._id) : '';
+      for (const division of branch?.divisions || []) {
+        const divisionId = division?._id ? String(division._id) : '';
+        for (const department of division?.departments || []) {
+          depList.push(department);
+          const deptId = department?._id ? String(department._id) : '';
+          if (deptId) departmentIdToBranchAndDivision.set(deptId, { branchId, divisionId });
+          for (const team of department?.teams || []) {
+            teamList.push(team);
+          }
+        }
+      }
+    }
+    setDepartments(depList);
+    setTeams(teamList);
+    setSelectedBranchId((prev) => (prev ? prev : branches?.[0]?._id ? String(branches[0]._id) : ''));
+
+    const access = shell.access || {};
+    const scope = access.scope || {};
+    setChannelPermissionMatrix(access.permissionsByChannelId || {});
+    const scopedDivs = Array.isArray(scope.scopedDivisionIds)
+      ? scope.scopedDivisionIds.map(String)
+      : [];
+    const scopedDepts = Array.isArray(scope.scopedDepartmentIds)
+      ? scope.scopedDepartmentIds.map(String)
+      : [];
+    const scopedTeams = Array.isArray(scope.scopedTeamIds)
+      ? scope.scopedTeamIds.map(String)
+      : [];
+    setMembershipScope({
+      branchId: scope.branchId || null,
+      divisionId: scope.divisionId || null,
+      departmentId: scope.departmentId || null,
+      teamId: scope.teamId || null,
+      canSeeAllStructure: Boolean(scope.canSeeAllStructure),
+      structureMode: String(scope.structureMode || 'none'),
+      scopedDivisionIds: scopedDivs,
+      scopedDepartmentIds: scopedDepts,
+      scopedTeamIds: scopedTeams,
+    });
+    if (scope.branchId) setSelectedBranchId(String(scope.branchId));
+    const pickDivisionId =
+      scope.divisionId || (scopedDivs.length === 1 ? scopedDivs[0] : '') || '';
+    const pickDepartmentId =
+      scope.departmentId || (scopedDepts.length === 1 ? scopedDepts[0] : '') || '';
+    if (pickDepartmentId && !pickDivisionId) {
+      const loc = departmentIdToBranchAndDivision.get(String(pickDepartmentId));
+      if (loc?.branchId) setSelectedBranchId(String(loc.branchId));
+      if (loc?.divisionId) setSelectedDivisionId(String(loc.divisionId));
+    }
+    if (pickDivisionId) setSelectedDivisionId(String(pickDivisionId));
+    if (pickDepartmentId) setSelectedDepartmentId(String(pickDepartmentId));
+    if (scope.teamId) {
+      setSelectedTeamId(String(scope.teamId));
+    } else if (scopedTeams.length === 1) {
+      setSelectedTeamId(String(scopedTeams[0]));
+    } else {
+      setSelectedTeamId('');
+    }
+
+    const taskScope = shell.taskWorkspaceScope;
+    setTaskWorkspaceScope(taskScope && typeof taskScope === 'object' ? taskScope : null);
+
+    const orgUnread = Number(shell?.badges?.notificationsUnreadOrg);
+    if (Number.isFinite(orgUnread) && shell?.organization?.id) {
+      const oid = String(shell.organization.id);
+      queryClient.setQueryData(
+        queryKeys.notifications.badge('organization', oid),
+        { unreadCount: Math.max(0, orgUnread) },
+        { updatedAt: Date.now() }
+      );
+    }
+  }, [queryClient]);
+
+  const { data: orgShellData, isError: orgShellError } = useOrgShell(selectedOrganizationId, {
+    enabled: !landingDemo && !authLoading,
+  });
+
+  const hasAuthToken = Boolean(getResolvedBearerToken());
+
+  const notificationsFetchEnabled =
+    !landingDemo &&
+    !authLoading &&
+    isAuthenticated &&
+    hasAuthToken &&
+    Boolean(selectedOrganizationId) &&
+    workspaceTabView === 'notifications' &&
+    Boolean(orgShellData) &&
+    !orgShellError;
+
+  const orgChannelMessagesQuery = useOrgChannelMessages(
+    selectedChannelId,
+    selectedOrganizationId,
+    {
+      enabled:
+        !landingDemo &&
+        Boolean(selectedChannelId) &&
+        selectedChannel?.type !== 'voice',
+    }
+  );
+
+  useEffect(() => {
+    if (landingDemo) return;
+    if (!selectedOrganizationId) {
+      lastShellAppliedRef.current = '';
+      setTaskWorkspaceScope(null);
+      return;
+    }
+    if (orgShellError) {
+      lastShellAppliedRef.current = '';
+      setWorkspaceStructure([]);
+      setSelectedBranchId('');
+      setSelectedDivisionId('');
+      setTaskWorkspaceScope({
+        visibility: 'self',
+        canCreateTask: false,
+        canUseAiTask: false,
+        assignableUserIds: [],
+      });
+      return;
+    }
+    if (!orgShellData) return;
+    const fingerprint = [
+      selectedOrganizationId,
+      orgShellData?.organization?.id,
+      orgShellData?.version,
+      orgShellData?.structureSummary?.branches?.length,
+      Object.keys(orgShellData?.access?.permissionsByChannelId || {}).length,
+    ].join(':');
+    if (lastShellAppliedRef.current === fingerprint) return;
+    lastShellAppliedRef.current = fingerprint;
+    applyOrgShell(orgShellData);
+  }, [
+    landingDemo,
+    selectedOrganizationId,
+    orgShellData,
+    orgShellError,
+    applyOrgShell,
+  ]);
 
   const handleSelectBranch = (branchId) => {
     setSelectedBranchId(branchId);
@@ -791,9 +920,36 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     setSelectedDivisionId(divisionId);
 
     const division = hitBranch?.divisions?.find((d) => String(d._id) === String(divisionId));
-    const firstDept = division?.departments?.[0];
-    const deptId = firstDept?._id ? String(firstDept._id) : '';
+    const scopedInDivision = (membershipScope?.scopedDepartmentIds || [])
+      .map(String)
+      .filter((deptId) => {
+        const dept = departments.find((d) => String(d._id) === deptId);
+        return dept && String(dept.division || '') === String(divisionId);
+      });
+    const preferredDeptId =
+      membershipScope?.departmentId &&
+      scopedInDivision.includes(String(membershipScope.departmentId))
+        ? String(membershipScope.departmentId)
+        : scopedInDivision.length === 1
+          ? scopedInDivision[0]
+          : membershipScope?.departmentId &&
+              departments.some(
+                (d) =>
+                  String(d._id) === String(membershipScope.departmentId) &&
+                  String(d.division || '') === String(divisionId)
+              )
+            ? String(membershipScope.departmentId)
+            : '';
+    const deptId =
+      preferredDeptId ||
+      (division?.departments?.[0]?._id ? String(division.departments[0]._id) : '');
     setSelectedDepartmentId(deptId);
+    if (membershipScope?.teamId) {
+      const team = teams.find((t) => String(t._id) === String(membershipScope.teamId));
+      if (team && String(team.department || '') === deptId) {
+        setSelectedTeamId(String(membershipScope.teamId));
+      }
+    }
   };
 
   const isOrgStructureAdmin =
@@ -1016,36 +1172,6 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     [chatContacts, user, currentUserId, fetchSenderProfile]
   );
 
-  const loadMessages = async (channelId) => {
-    if (!channelId) {
-      setMessages([]);
-      return;
-    }
-    setLoadingMessages(true);
-    try {
-      const payload = await api.get('/messages', {
-        params: {
-          roomId: channelId,
-          limit: 100,
-          ...(selectedOrganizationId ? { organizationId: selectedOrganizationId } : {}),
-        },
-        skipPermissionDeniedToast: true,
-      });
-      const data = unwrapData(payload);
-      const list = Array.isArray(data?.messages) ? data.messages : Array.isArray(data) ? data : [];
-      // Sắp xếp cũ -> mới để hiển thị tự nhiên trong màn chat
-      list.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-      setMessages(await enrichChannelMessages(list));
-    } catch (error) {
-      setMessages([]);
-      if (error?.status !== 403) {
-        notifyError(t('organizations.loadMessagesFail'));
-      }
-    } finally {
-      setLoadingMessages(false);
-    }
-  };
-
   const loadVoiceRoomMessages = async (channelId) => {
     if (!channelId) {
       setVoiceRoomMessages([]);
@@ -1055,7 +1181,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       const payload = await api.get('/messages', {
         params: {
           roomId: channelId,
-          limit: 100,
+          limit: 50,
+          fields: 'summary',
           ...(selectedOrganizationId ? { organizationId: selectedOrganizationId } : {}),
         },
         skipPermissionDeniedToast: true,
@@ -1088,29 +1215,40 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     }
   };
 
-  const openWorkspaceNotifications = async () => {
-    if (!selectedOrganizationId) return;
-    setWorkspaceNotificationsOpen(true);
-    setLoadingWorkspaceNotifications(true);
-    try {
-      const response = await api.get('/notifications', {
-        params: {
-          scope: 'organization',
-          organizationId: selectedOrganizationId,
-          limit: 50,
-        },
-      });
-      const body = response?.data ?? response;
-      const inner = body?.data ?? body;
-      const list = Array.isArray(inner?.notifications) ? inner.notifications : [];
-      setWorkspaceNotifications(list.map(parseNotificationData));
-    } catch (error) {
-      setWorkspaceNotifications([]);
-      notifyError(error?.response?.data?.message || t('notifications.loadFail'));
-    } finally {
-      setLoadingWorkspaceNotifications(false);
-    }
-  };
+  /** Cùng pattern taskAPI.getTasks — gọi trực tiếp khi có orgId + JWT (không React Query enabled). */
+  const loadWorkspaceDocuments = useCallback(
+    async (organizationId) => {
+      const orgId = String(organizationId || '').trim();
+      if (!orgId) {
+        setWorkspaceDocFiles([]);
+        setWorkspaceDocumentsError('');
+        return;
+      }
+      if (!getResolvedBearerToken()) {
+        setWorkspaceDocFiles([]);
+        setWorkspaceDocumentsError(t('documents.orgLoadError'));
+        setLoadingWorkspaceDocuments(false);
+        return;
+      }
+      setLoadingWorkspaceDocuments(true);
+      setWorkspaceDocumentsError('');
+      try {
+        const overview = await fetchOrganizationDocumentsOverview(orgId);
+        setWorkspaceDocFiles(buildOrgFilesFromOverview(overview, t, locale));
+      } catch (err) {
+        setWorkspaceDocFiles([]);
+        setWorkspaceDocumentsError(
+          err?.response?.data?.message ||
+            err?.response?.data?.error ||
+            err?.message ||
+            t('documents.orgLoadError')
+        );
+      } finally {
+        setLoadingWorkspaceDocuments(false);
+      }
+    },
+    [t, locale]
+  );
 
   const handleMoveWorkspaceTask = async (task, nextStatus) => {
     if (!task?._id || !selectedOrganizationId) return;
@@ -1196,6 +1334,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     setCreateDepartmentNames([[['']]]);
     setCreateTeamNames([[[['']]]]);
     setCreateWorkspaceStep(1);
+    setCreatingWorkspace(false);
     setCreateOrgModalOpen(true);
   };
 
@@ -1211,6 +1350,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       return;
     }
 
+    setCreatingWorkspace(true);
     try {
       const response = await organizationAPI.createWorkspace({
         name: normalizedName,
@@ -1240,6 +1380,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
         error?.message ||
         t('organizations.orgCreateFail');
       notifyError(typeof msg === 'string' ? msg : t('organizations.orgCreateFail'));
+    } finally {
+      setCreatingWorkspace(false);
     }
   };
 
@@ -1350,7 +1492,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       });
       notifySuccess('Đã tạo khối');
       setCreateDivisionModalOpen(false);
-      await loadStructure(selectedOrganizationId);
+      await reloadOrgShell(selectedOrganizationId);
     } catch {
       notifyError('Không thể tạo khối');
     }
@@ -1372,7 +1514,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       });
       notifySuccess(t('organizations.deptCreated'));
       setCreateDeptModalOpen(false);
-      await loadStructure(selectedOrganizationId);
+      await reloadOrgShell(selectedOrganizationId);
     } catch (error) {
       notifyError(t('organizations.deptCreateFail'));
     }
@@ -1407,7 +1549,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       });
       notifySuccess('Đã tạo team');
       setCreateTeamModalOpen(false);
-      await loadStructure(selectedOrganizationId);
+      await reloadOrgShell(selectedOrganizationId);
       setSelectedDepartmentId(createTeamDepartmentId);
       await loadTeams(selectedOrganizationId, createTeamDepartmentId);
     } catch {
@@ -1720,7 +1862,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       }
       notifySuccess('Đã cập nhật tên');
       setRenameModalOpen(false);
-      await loadStructure(selectedOrganizationId);
+      await reloadOrgShell(selectedOrganizationId);
       if (selectedDepartmentId) await loadTeams(selectedOrganizationId, selectedDepartmentId);
       if (selectedDepartmentId) {
         await loadChannels(selectedOrganizationId, selectedDepartmentId, selectedTeamId);
@@ -2089,58 +2231,188 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     []
   );
 
+  const orgsErrorNotifiedRef = useRef(false);
+
   useEffect(() => {
     if (landingDemo) {
-      setOrganizations([
-        {
-          _id: 'demo-org-vh',
-          id: 'demo-org-vh',
-          name: 'VoiceHub Demo',
-          slug: 'voicehub-demo',
-          role: 'admin',
-        },
-      ]);
-      setOrganizationsLoaded(true);
-      setSelectedOrganizationId('demo-org-vh');
+      setSelectedOrganizationId((prev) => (prev === 'demo-org-vh' ? prev : 'demo-org-vh'));
       return;
     }
-    Promise.all([
-      loadOrganizations(),
-      loadPendingInvitations(),
-      loadPendingJoinApplications(),
-      loadJoinApplicationsToReview(),
-    ]);
-    loadChatContacts();
-  }, [landingDemo]);
+    if (!orgsQuery.isError) {
+      orgsErrorNotifiedRef.current = false;
+      return;
+    }
+    if (orgsErrorNotifiedRef.current) return;
+    orgsErrorNotifiedRef.current = true;
+    notifyError(t('organizations.loadOrgsFail'));
+  }, [landingDemo, orgsQuery.isError, t]);
+
+  useEffect(() => {
+    if (landingDemo || !organizationsLoaded || initialWorkspaceSlug) return;
+    if (!organizations.length) {
+      setSelectedOrganizationId((prev) => (prev === '' ? prev : ''));
+      return;
+    }
+    const slugHint = String(lastWorkspaceSlug || '').trim();
+    const matchedBySlug = slugHint ? findOrgBySlug(organizations, slugHint) : null;
+    setSelectedOrganizationId((prev) => {
+      const preferred = orgRecordId(matchedBySlug) || orgRecordId(organizations[0]) || '';
+      if (!preferred) return prev === '' ? prev : '';
+      if (prev && organizations.some((o) => orgRecordId(o) === String(prev))) return prev;
+      return preferred;
+    });
+  }, [landingDemo, organizationsLoaded, organizationIdsKey, lastWorkspaceSlug, initialWorkspaceSlug]);
+
+  useEffect(() => {
+    if (!slugPendingOrg || !Array.isArray(orgsQuery.data)) return;
+    const pendingId = orgRecordId(slugPendingOrg);
+    if (!pendingId) return;
+    if (orgsQuery.data.some((o) => orgRecordId(o) === pendingId)) {
+      setSlugPendingOrg(null);
+    }
+  }, [orgsQuery.data, slugPendingOrg]);
+
+  useEffect(() => {
+    if (inviteModalOpen && !landingDemo) {
+      loadPendingInvitations();
+    }
+  }, [inviteModalOpen, landingDemo]);
+
+  const canReviewJoinForOrg = useMemo(() => {
+    const org = organizations.find((o) => String(o._id) === String(selectedOrganizationId));
+    return ['owner', 'admin'].includes(String(org?.myRole || org?.role || '').toLowerCase());
+  }, [organizations, selectedOrganizationId]);
+
+  const joinReviewFetchRef = useRef('');
+
+  useEffect(() => {
+    if (landingDemo || !canReviewJoinForOrg) return;
+    const key = String(selectedOrganizationId || '');
+    if (joinReviewFetchRef.current === key) return;
+    joinReviewFetchRef.current = key;
+    loadJoinApplicationsToReview();
+  }, [landingDemo, canReviewJoinForOrg, selectedOrganizationId]);
+
+  const friendsListKey = useMemo(() => {
+    const friendList = Array.isArray(friendsQuery.data) ? friendsQuery.data : [];
+    return friendList
+      .map((item) => orgRecordId(item?.friendId || item))
+      .filter(Boolean)
+      .sort()
+      .join(',');
+  }, [friendsQuery.data]);
+  const chatContactsFetchRef = useRef('');
 
   useEffect(() => {
     if (landingDemo) return;
-    loadChatContacts(selectedOrganizationId);
-  }, [selectedOrganizationId, landingDemo]);
+    const fetchKey = `${selectedOrganizationId}|${friendsListKey}`;
+    if (chatContactsFetchRef.current === fetchKey) return;
+    chatContactsFetchRef.current = fetchKey;
+
+    const friendList = Array.isArray(friendsQuery.data) ? friendsQuery.data : [];
+    const mapFriends = friendList
+      .map((item) => item.friendId || item)
+      .filter(Boolean)
+      .map((item) => ({
+        id: item._id || item.id,
+        name: item.displayName || item.name || item.username || t('organizations.userFallback'),
+        username: item.username || '',
+        role: item.role || '',
+        phone: item.phone || item.phoneNumber || item.mobile || '',
+        email: item.email || '',
+        avatar: item.avatar || null,
+        category: 'friend',
+      }))
+      .filter((item) => !!item.id);
+
+    if (!selectedOrganizationId) {
+      setChatContacts(mapFriends);
+      setLoadingChatContacts(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingChatContacts(true);
+    (async () => {
+      try {
+        const memberPayload = await organizationAPI.getMembers(selectedOrganizationId);
+        if (cancelled) return;
+        const memberData = unwrapData(memberPayload);
+        const rawMemberList = Array.isArray(memberData?.data)
+          ? memberData.data
+          : Array.isArray(memberData)
+            ? memberData
+            : [];
+        const memberContacts = rawMemberList
+          .map((item) => item.user || item)
+          .filter(Boolean)
+          .map((item) => ({
+            id: item._id || item.id,
+            name: item.displayName || item.name || item.username || t('organizations.userFallback'),
+            username: item.username || '',
+            role: item.role || '',
+            phone: item.phone || item.phoneNumber || item.mobile || '',
+            email: item.email || '',
+            avatar: item.avatar || null,
+            category: 'member',
+          }))
+          .filter((item) => !!item.id);
+        setChatContacts([...mapFriends, ...memberContacts]);
+      } catch {
+        if (!cancelled) setChatContacts(mapFriends);
+      } finally {
+        if (!cancelled) setLoadingChatContacts(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOrganizationId, landingDemo, friendsListKey, t]);
+
+  const slugResolveAttemptedRef = useRef('');
+  const lastSlugPersistRef = useRef('');
 
   useEffect(() => {
     if (!initialWorkspaceSlug) return;
-    const wantedSlug = String(initialWorkspaceSlug).trim();
+    const wantedSlug = String(initialWorkspaceSlug).trim().toLowerCase();
     if (!wantedSlug) return;
-    const matchedWorkspace = organizations.find((item) => String(item.slug || '') === wantedSlug);
+    const matchedWorkspace = findOrgBySlug(organizations, wantedSlug);
     if (matchedWorkspace) {
-      setSelectedOrganizationId(String(matchedWorkspace._id));
+      slugResolveAttemptedRef.current = wantedSlug;
+      const nextId = orgRecordId(matchedWorkspace);
+      if (!nextId) return;
+      setSelectedOrganizationId((prev) => (prev === nextId ? prev : nextId));
+      const slugNorm = String(matchedWorkspace.slug || '').trim();
+      if (slugNorm && lastSlugPersistRef.current !== slugNorm) {
+        lastSlugPersistRef.current = slugNorm;
+        setLastWorkspaceSlug(slugNorm);
+      }
       return;
     }
     if (!organizationsLoaded) return;
+    if (slugResolveAttemptedRef.current === wantedSlug) return;
+    slugResolveAttemptedRef.current = wantedSlug;
+
     let cancelled = false;
     (async () => {
       try {
         const payload = await organizationAPI.getWorkspaceBySlug(wantedSlug);
         const raw = unwrapData(payload);
         const org = raw?.data ?? raw;
-        if (!org?._id || cancelled) return;
-        setOrganizations((prev) => {
-          if (prev.some((o) => String(o._id) === String(org._id))) return prev;
-          return [org, ...prev];
+        const nextId = orgRecordId(org);
+        if (!nextId || cancelled) return;
+        queryClient.setQueryData(queryKeys.organizations.my(), (old) => {
+          const list = Array.isArray(old) ? old : [];
+          if (list.some((o) => orgRecordId(o) === nextId)) return list;
+          return [org, ...list];
         });
-        setSelectedOrganizationId(String(org._id));
-        if (org?.slug) setLastWorkspaceSlug(org.slug);
+        setSlugPendingOrg((prev) => (orgRecordId(prev) === nextId ? prev : org));
+        setSelectedOrganizationId((prev) => (prev === nextId ? prev : nextId));
+        const slugNorm = String(org?.slug || '').trim();
+        if (slugNorm && lastSlugPersistRef.current !== slugNorm) {
+          lastSlugPersistRef.current = slugNorm;
+          setLastWorkspaceSlug(slugNorm);
+        }
       } catch {
         if (!cancelled) {
           setLastWorkspaceSlug('');
@@ -2150,7 +2422,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     return () => {
       cancelled = true;
     };
-  }, [initialWorkspaceSlug, organizations, organizationsLoaded, t]);
+  }, [initialWorkspaceSlug, organizationIdsKey, organizationsLoaded, queryClient, setLastWorkspaceSlug]);
 
   useEffect(() => {
     if (!forwardModalOpen || !selectedOrganizationId || !departments.length) {
@@ -2200,8 +2472,10 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     if (landingDemo) return;
     const target = location.state?.openWorkspace;
     if (!target?.organizationId || !target?.channelId) return;
-    if (!organizations.length) return;
-    const orgExists = organizations.some((o) => String(o._id) === String(target.organizationId));
+    if (!organizationIdsKey) return;
+    const orgExists = organizations.some(
+      (o) => orgRecordId(o) === String(target.organizationId)
+    );
     if (!orgExists) return;
 
     setSelectedOrganizationId(String(target.organizationId));
@@ -2210,19 +2484,19 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     }
     setSelectedChannelId(String(target.channelId));
     navigate(location.pathname + location.search, { replace: true, state: {} });
-  }, [organizations, location.state, navigate, landingDemo]);
+  }, [organizationIdsKey, location.state, navigate, landingDemo, organizations]);
 
   useEffect(() => {
     if (landingDemo) return;
     const orgId = location.state?.selectOrganizationId;
-    if (!orgId || !organizations.length) return;
-    const exists = organizations.some((o) => String(o._id) === String(orgId));
+    if (!orgId || !organizationIdsKey) return;
+    const exists = organizations.some((o) => orgRecordId(o) === String(orgId));
     if (!exists) return;
     setSelectedOrganizationId(String(orgId));
     const rest = { ...(location.state || {}) };
     delete rest.selectOrganizationId;
     navigate(location.pathname + location.search, { replace: true, state: rest });
-  }, [organizations, location.state, navigate, landingDemo]);
+  }, [organizationIdsKey, location.state, navigate, landingDemo, organizations]);
 
   useEffect(() => {
     if (!shouldRedirectEmptyOrganizations) return;
@@ -2289,24 +2563,24 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     joinOrganizationByLink();
   }, [landingDemo]);
 
-  useEffect(() => {
-    if (landingDemo) return;
-    if (selectedOrganizationId) {
-      loadStructure(selectedOrganizationId);
-      loadChannelPermissions(selectedOrganizationId);
-      loadTaskWorkspaceScope(selectedOrganizationId);
-    }
-  }, [selectedOrganizationId, landingDemo]);
-
-  useEffect(() => {
-    if (landingDemo || !selectedOrganizationId) return;
-    if (!Array.isArray(workspaceStructure) || workspaceStructure.length === 0) return;
-    loadChannelPermissions(selectedOrganizationId, workspaceStructure);
-  }, [workspaceStructure, selectedOrganizationId, landingDemo]);
+  const workspaceStructureKey = useMemo(
+    () =>
+      workspaceStructure
+        .map((b) => orgRecordId(b))
+        .filter(Boolean)
+        .sort()
+        .join(','),
+    [workspaceStructure]
+  );
+  const structureLoadRef = useRef('');
 
   useEffect(() => {
     if (landingDemo) return;
     if (!selectedOrganizationId || !selectedDepartmentId) return;
+    const loadKey = `${selectedOrganizationId}|${selectedDepartmentId}|${selectedDivisionId}|${workspaceStructureKey}`;
+    if (structureLoadRef.current === loadKey) return;
+    structureLoadRef.current = loadKey;
+
     let cancelled = false;
     (async () => {
       const teamId = await loadTeams(selectedOrganizationId, selectedDepartmentId);
@@ -2321,14 +2595,20 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     return () => {
       cancelled = true;
     };
-  }, [selectedOrganizationId, selectedDepartmentId, selectedDivisionId, workspaceStructure, landingDemo]);
+  }, [
+    selectedOrganizationId,
+    selectedDepartmentId,
+    selectedDivisionId,
+    workspaceStructureKey,
+    landingDemo,
+  ]);
 
   useEffect(() => {
     if (landingDemo) return undefined;
     const onStructureChanged = (event) => {
       if (String(event?.detail?.orgId || '') !== String(selectedOrganizationId || '')) return;
       if (!selectedOrganizationId || !selectedDepartmentId) return;
-      loadStructure(selectedOrganizationId);
+      reloadOrgShell(selectedOrganizationId);
       loadChannels(
         selectedOrganizationId,
         selectedDepartmentId,
@@ -2346,46 +2626,91 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     selectedDivisionId,
   ]);
 
-  useEffect(() => {
-    if (landingDemo) return;
-    if (!selectedOrganizationId || !selectedDepartmentId || !selectedTeamId) return;
-    if (!channels.length) return;
-    setSelectedChannelId((prev) => {
-      const current = channels.find((ch) => String(ch._id) === String(prev));
-      if (current) {
-        if (!String(current.team || '')) return prev;
-        if (String(current.team || '') === String(selectedTeamId)) return prev;
-      }
-      return preferDefaultTextChannelId(channels, selectedTeamId, channelPermissionMatrix);
-    });
-  }, [selectedTeamId, channelPermissionMatrix, channels, landingDemo]);
+  const channelMatrixKey = useMemo(
+    () => Object.keys(channelPermissionMatrix || {}).sort().join(','),
+    [channelPermissionMatrix]
+  );
+  const channelsKey = useMemo(
+    () => channels.map((ch) => String(ch._id)).sort().join(','),
+    [channels]
+  );
 
   useEffect(() => {
     if (landingDemo || !channels.length) return;
-    const matrixReady = Object.keys(channelPermissionMatrix || {}).length > 0;
-    if (!matrixReady) return;
-    const currentPerm = channelPermissionMatrix?.[String(selectedChannelId)];
-    if (selectedChannelId && currentPerm?.canRead) return;
-    const next = preferDefaultTextChannelId(channels, selectedTeamId, channelPermissionMatrix);
-    if (String(next || '') !== String(selectedChannelId || '')) {
-      setSelectedChannelId(next);
-    }
-  }, [channelPermissionMatrix, channels, selectedTeamId, selectedChannelId, landingDemo]);
+    setSelectedChannelId((prev) => {
+      const matrixReady = Object.keys(channelPermissionMatrix || {}).length > 0;
+      const current = channels.find((ch) => String(ch._id) === String(prev));
+      if (current) {
+        const teamOk =
+          !String(current.team || '') ||
+          String(current.team || '') === String(selectedTeamId);
+        const perm = channelPermissionMatrix?.[String(prev)];
+        const readable = !matrixReady || Boolean(perm?.canSee ?? perm?.canRead);
+        if (teamOk && readable) return prev;
+      }
+      const next = preferDefaultTextChannelId(
+        channels,
+        selectedTeamId,
+        channelPermissionMatrix
+      );
+      return String(next || '') === String(prev || '') ? prev : next;
+    });
+  }, [landingDemo, selectedTeamId, channelMatrixKey, channelsKey]);
+
+  const lastMessagesEnrichRef = useRef('');
+  const lastMessagesChannelKeyRef = useRef('');
 
   useEffect(() => {
     if (landingDemo) return;
     if (!selectedOrganizationId) return;
     if (!selectedChannelId) {
       setMessages([]);
+      lastMessagesEnrichRef.current = '';
+      lastMessagesChannelKeyRef.current = '';
       return;
     }
     if (selectedChannel?.type === 'voice') {
-      setLoadingMessages(false);
       setMessages([]);
+      lastMessagesEnrichRef.current = '';
+      lastMessagesChannelKeyRef.current = '';
       return;
     }
-    loadMessages(selectedChannelId);
-  }, [selectedOrganizationId, selectedChannelId, selectedChannel?.type, landingDemo]);
+
+    const channelKey = `${selectedOrganizationId}|${selectedChannelId}`;
+    if (lastMessagesChannelKeyRef.current !== channelKey) {
+      lastMessagesChannelKeyRef.current = channelKey;
+      lastMessagesEnrichRef.current = '';
+      setMessages([]);
+    }
+
+    const fingerprint = orgChannelMessagesQuery.messagesFingerprint ?? '';
+    if (!fingerprint && orgChannelMessagesQuery.isLoading) return;
+
+    const enrichKey = `${channelKey}|${fingerprint}`;
+    if (lastMessagesEnrichRef.current === enrichKey) return;
+    lastMessagesEnrichRef.current = enrichKey;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = orgChannelMessagesQuery.messages || [];
+        const enriched = await enrichChannelMessages(list);
+        if (!cancelled) setMessages(enriched);
+      } catch {
+        if (!cancelled) setMessages([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    landingDemo,
+    selectedOrganizationId,
+    selectedChannelId,
+    selectedChannel?.type,
+    orgChannelMessagesQuery.messagesFingerprint,
+    orgChannelMessagesQuery.isLoading,
+  ]);
 
   useEffect(() => {
     if (landingDemo) return;
@@ -2489,14 +2814,31 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   }, [selectedOrganizationId, landingDemo]);
 
   useEffect(() => {
+    if (landingDemo || authLoading || !isAuthenticated) return;
+    if (workspaceTabView !== 'documents') return;
+    const orgId = String(selectedOrganizationId || '').trim();
+    if (!orgId) return;
+    if (!getResolvedBearerToken()) return;
+    loadWorkspaceDocuments(orgId);
+  }, [
+    selectedOrganizationId,
+    workspaceTabView,
+    landingDemo,
+    authLoading,
+    isAuthenticated,
+    accessToken,
+    loadWorkspaceDocuments,
+  ]);
+
+  useEffect(() => {
     if (landingDemo) return;
     if (!on || !off) return;
 
     const refreshOrgData = () => {
-      loadOrganizations();
-      loadPendingInvitations();
+      queryClient.invalidateQueries({ queryKey: queryKeys.organizations.my() });
+      if (inviteModalOpen) loadPendingInvitations();
       loadPendingJoinApplications();
-      loadJoinApplicationsToReview();
+      if (canReviewJoinForOrg) loadJoinApplicationsToReview();
     };
 
     const handleOrgEvent = () => {
@@ -2564,7 +2906,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       if (eventOrgId && String(eventOrgId) !== String(selectedOrganizationId)) return;
       const targetUserId = String(payload?.userId || evt?.userId || '');
       if (!targetUserId || targetUserId === currentUid) {
-        loadChannelPermissions(selectedOrganizationId);
+        reloadOrgShell(selectedOrganizationId);
       }
     };
     on('organization:member_role_updated', refreshIfMatchOrg);
@@ -2618,6 +2960,11 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
           <OrganizationMainPanel
             landingDemo={landingDemo}
             workspaceTabView={workspaceTabView}
+            workspaceDocFiles={workspaceDocFiles}
+            loadingWorkspaceDocuments={loadingWorkspaceDocuments}
+            workspaceDocumentsError={workspaceDocumentsError}
+            onWorkspaceDocumentsReload={() => loadWorkspaceDocuments(selectedOrganizationId)}
+            notificationsFetchEnabled={notificationsFetchEnabled}
             selectedOrganization={selectedOrganization}
             departments={sidebarDepartments}
             selectedDepartment={selectedDepartment}
@@ -2636,7 +2983,12 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             messageInput={messageInput}
             onChangeMessageInput={setMessageInput}
             onSendMessage={handleSendMessage}
-            loadingMessages={loadingMessages}
+            loadingMessages={
+              selectedChannel?.type !== 'voice' && orgChannelMessagesQuery.isLoading
+            }
+            hasMoreOlderMessages={orgChannelMessagesQuery.hasMoreOlder}
+            loadingOlderMessages={orgChannelMessagesQuery.loadingOlder}
+            onLoadOlderMessages={() => orgChannelMessagesQuery.loadOlderMessages()}
             sendingMessage={sendingMessage}
             currentUserId={user?.userId || user?._id || user?.id}
             currentUser={user}
@@ -2649,6 +3001,9 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             onCreateTeam={handleCreateTeam}
             onCreateChannel={handleCreateChannel}
             onOpenChannelSettings={handleOpenChannelSettings}
+            onOpenDivisionSettings={handleOpenDivisionSettings}
+            onOpenDepartmentSettings={handleOpenDepartmentSettings}
+            onOpenTeamSettings={handleOpenTeamSettings}
             onRenameDivision={(division) => openRenameModal('division', division)}
             onRenameDepartment={(department) => openRenameModal('department', department)}
             onRenameTeam={(team) => openRenameModal('team', team)}
@@ -2694,7 +3049,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
               Boolean(membershipScope?.canSeeAllStructure) ||
               isOrgMembershipStructureAdmin(selectedOrganization?.myRole)
             }
-            onWorkspaceTabChange={setWorkspaceTabView}
+            onWorkspaceTabChange={handleWorkspaceTabChange}
+            onOpenDocumentInWorkspace={handleOpenDocumentInWorkspace}
             onDisconnectVoice={() => setSelectedChannelId('')}
             organizationId={selectedOrganizationId}
             onVoiceRoomSessionEnd={handleVoiceRoomSessionEnd}
@@ -2751,6 +3107,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             <OrganizationMemberSidebar
               organizationId={selectedOrganizationId}
               organizationName={selectedOrganization?.name || ''}
+              selectedTeamId={selectedTeamId}
+              teams={teams}
               workspaceSearchOpen={workspaceSearchOpen}
               onWorkspaceSearchOpenChange={setWorkspaceSearchOpen}
               searchChannels={channels.filter((c) => c.type !== 'voice')}
@@ -2795,64 +3153,6 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             : 'w-[280px]'
         }
       />
-      {workspaceNotificationsOpen && (
-        <Modal
-          isOpen={workspaceNotificationsOpen}
-          onClose={() => setWorkspaceNotificationsOpen(false)}
-          title={`Thong bao - ${selectedOrganization?.name || ''}`}
-          size="lg"
-        >
-          <div className="space-y-3">
-            {loadingWorkspaceNotifications ? (
-              <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-gray-300">
-                Dang tai thong bao...
-              </div>
-            ) : workspaceNotifications.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-white/15 bg-white/[0.03] p-5 text-sm text-gray-400">
-                Chua co thong bao trong to chuc nay.
-              </div>
-            ) : (
-              workspaceNotifications.map((item) => (
-                <button
-                  key={item._id || item.id}
-                  type="button"
-                  onClick={() => {
-                    const data = item.data || {};
-                    if (item.type === 'document' || data.documentId) {
-                      navigate(`/documents?organizationId=${encodeURIComponent(selectedOrganizationId)}`);
-                    } else if (item.type === 'task_assigned' || item.type === 'task_completed' || data.taskId) {
-                      navigate(`/w/${encodeURIComponent(selectedOrganization?.slug || selectedOrganizationId)}?tab=tasks`);
-                    } else {
-                      navigate(`/w/${encodeURIComponent(selectedOrganization?.slug || selectedOrganizationId)}`);
-                    }
-                    setWorkspaceNotificationsOpen(false);
-                  }}
-                  className="block w-full rounded-xl border border-white/10 bg-white/[0.04] p-4 text-left transition hover:bg-white/[0.07]"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-white">
-                        {item.title || t('notifications.defaultTitle')}
-                      </div>
-                      {(item.organizationName || item.data?.organizationName || item.data?.workspaceName) && (
-                        <div className="mt-1 truncate text-[11px] uppercase tracking-wide text-cyan-300">
-                          {item.organizationName || item.data?.workspaceName || item.data?.organizationName}
-                        </div>
-                      )}
-                      <div className="mt-1 line-clamp-2 text-sm text-gray-400">
-                        {item.content || item.message || ''}
-                      </div>
-                    </div>
-                    {!item.isRead ? (
-                      <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-cyan-400" />
-                    ) : null}
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </Modal>
-      )}
       {leaveOrgModalOpen && (
         <Modal
           isOpen={leaveOrgModalOpen}
@@ -3026,11 +3326,36 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
 
       <Modal
         isOpen={createOrgModalOpen}
-        onClose={() => setCreateOrgModalOpen(false)}
-        title={`Create Workspace - Step ${createWorkspaceStep}/5`}
+        onClose={() => {
+          if (creatingWorkspace) return;
+          setCreateOrgModalOpen(false);
+        }}
+        title={
+          creatingWorkspace
+            ? t('organizations.creatingWorkspace')
+            : `Create Workspace - Step ${createWorkspaceStep}/5`
+        }
         size="sm"
       >
-        <div className="space-y-3">
+        <div className="relative space-y-3">
+          {creatingWorkspace ? (
+            <div
+              className="absolute inset-0 z-10 flex min-h-[12rem] flex-col items-center justify-center gap-3 rounded-xl bg-slate-950/90 px-4 text-center backdrop-blur-sm"
+              role="status"
+              aria-live="polite"
+              aria-busy="true"
+            >
+              <Loader2
+                className="h-10 w-10 animate-spin text-cyan-400"
+                strokeWidth={1.75}
+                aria-hidden
+              />
+              <p className="text-sm font-semibold text-white">{t('organizations.creatingWorkspace')}</p>
+              <p className="max-w-xs text-xs leading-relaxed text-slate-400">
+                {t('organizations.creatingWorkspaceHint')}
+              </p>
+            </div>
+          ) : null}
           {createWorkspaceStep === 1 ? (
             <input
               value={createOrgName}
@@ -3469,19 +3794,23 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
               <div>Teams/Department: {createTeamPerDepartment}</div>
             </div>
           ) : null}
-          <div className="flex justify-end gap-2">
+          <div
+            className={`flex justify-end gap-2 ${creatingWorkspace ? 'pointer-events-none opacity-40' : ''}`}
+          >
             <button
               type="button"
+              disabled={creatingWorkspace}
               onClick={() => setCreateOrgModalOpen(false)}
-              className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300"
+              className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300 disabled:cursor-not-allowed"
             >
               {t('nav.cancel')}
             </button>
             {createWorkspaceStep > 1 ? (
               <button
                 type="button"
+                disabled={creatingWorkspace}
                 onClick={() => setCreateWorkspaceStep((step) => Math.max(1, step - 1))}
-                className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300"
+                className="rounded-lg border border-white/15 px-3 py-2 text-sm text-gray-300 disabled:cursor-not-allowed"
               >
                 Back
               </button>
@@ -3489,8 +3818,9 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             {createWorkspaceStep < 5 ? (
               <button
                 type="button"
+                disabled={creatingWorkspace}
                 onClick={() => setCreateWorkspaceStep((step) => Math.min(5, step + 1))}
-                className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"
+                className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Next
               </button>
@@ -3498,10 +3828,18 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             {createWorkspaceStep === 5 ? (
               <button
                 type="button"
+                disabled={creatingWorkspace}
                 onClick={handleSubmitCreateOrganization}
-                className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-80"
               >
-                Create Workspace
+                {creatingWorkspace ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} aria-hidden />
+                    {t('organizations.creatingWorkspace')}
+                  </>
+                ) : (
+                  t('organizations.createWorkspaceSubmit')
+                )}
               </button>
             ) : null}
           </div>
@@ -3830,7 +4168,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
         isDarkMode={isDarkMode}
         canManageChannelRoles={canManageChannelRoleAccess}
         onSaved={() => {
-          if (selectedOrganizationId) loadChannelPermissions(selectedOrganizationId);
+          if (selectedOrganizationId) reloadOrgShell(selectedOrganizationId);
         }}
       />
       <OrganizationScopeRoleSettingsModal
@@ -3846,7 +4184,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
         isDarkMode={isDarkMode}
         canManage={canManageChannelRoleAccess}
         onSaved={() => {
-          if (selectedOrganizationId) loadChannelPermissions(selectedOrganizationId);
+          if (selectedOrganizationId) reloadOrgShell(selectedOrganizationId);
         }}
       />
       <ConfirmDialog

@@ -100,6 +100,7 @@ function RadioDeviceRow({ selected, label, sub, onSelect, isDarkMode }) {
 export default function OrganizationSidebarAudioBar({
   isDarkMode,
   t,
+  voiceUserId = '',
   voiceInChannel = false,
   voiceAudioState = {},
   onToggleMute,
@@ -108,7 +109,7 @@ export default function OrganizationSidebarAudioBar({
   onOpenOrganizationSettings,
   onOpenVoiceSettings,
 }) {
-  const initial = loadVoiceAudioPrefs();
+  const initial = loadVoiceAudioPrefs(voiceUserId);
   const [prefMuted, setPrefMuted] = useState(Boolean(initial.micMuted));
   const [prefSpeakerOff, setPrefSpeakerOff] = useState(Boolean(initial.speakerOff));
   const [micId, setMicId] = useState(initial.micDeviceId);
@@ -138,7 +139,7 @@ export default function OrganizationSidebarAudioBar({
 
   const handleMicMainClick = () => {
     const next = !isMuted;
-    saveVoiceAudioPrefs({ micMuted: next });
+    saveVoiceAudioPrefs({ micMuted: next }, voiceUserId);
     if (!voiceInChannel) {
       setPrefMuted(next);
       onAudioPrefChange?.({ micMuted: next, speakerOff: prefSpeakerOff });
@@ -154,7 +155,7 @@ export default function OrganizationSidebarAudioBar({
 
   const handleSpeakerMainClick = () => {
     const next = !isSpeakerOff;
-    saveVoiceAudioPrefs({ speakerOff: next });
+    saveVoiceAudioPrefs({ speakerOff: next }, voiceUserId);
     if (!voiceInChannel) {
       setPrefSpeakerOff(next);
       onAudioPrefChange?.({ micMuted: prefMuted, speakerOff: next });

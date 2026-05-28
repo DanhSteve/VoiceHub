@@ -1,17 +1,33 @@
 const Membership = require('../models/Membership');
 const Department = require('../models/Department');
 const Team = require('../models/Team');
+const { resolveOrgAccess } = require('../utils/orgAccess');
+const {
+  isMultiPlacementReadEnabled,
+  resolveEffectiveScopesFromAssignments,
+} = require('./memberScopePolicy.service');
 
 async function resolveTaskWorkspaceScope(userId, orgId) {
-  const uid = String(userId || '');
-  const oid = String(orgId || '');
+  const uid = String(userId || '').trim();
+  const oid = String(orgId || '').trim();
   if (!uid || !oid) return null;
 
-  const membership = await Membership.findOne({
-    user: uid,
-    organization: oid,
-    status: 'active',
-  }).lean();
+  const access = await resolveOrgAccess(uid, oid);
+  if (!access.ok) return null;
+
+  if (access.rolesOnly && !access.membership) {
+    return {
+      visibility: 'self',
+      canCreateTask: false,
+      canUseAiTask: false,
+      assignableUserIds: [uid],
+      departmentIds: [],
+      teamIds: [],
+      divisionIds: [],
+    };
+  }
+
+  const membership = access.membership;
   if (!membership) return null;
 
   const membershipRole = Membership.normalizeRole(membership.role);
@@ -42,6 +58,35 @@ async function resolveTaskWorkspaceScope(userId, orgId) {
   const departmentIds = headedDepts.map((d) => String(d._id));
   const ledTeamIds = ledTeams.map((t) => String(t._id));
 
+  let scopedDivisionIds = [];
+  if (isMultiPlacementReadEnabled()) {
+    const effectiveScopes = await resolveEffectiveScopesFromAssignments(oid, uid);
+    if (effectiveScopes.teamIds.size) {
+      visibility = 'team';
+      canCreateTask = true;
+    } else if (effectiveScopes.departmentIds.size) {
+      visibility = 'department';
+      canCreateTask = true;
+    } else if (effectiveScopes.divisionIds.size) {
+      visibility = 'division';
+      canCreateTask = true;
+    }
+    if (membershipRole === 'owner' || membershipRole === 'admin') {
+      visibility = 'org';
+      canCreateTask = true;
+    } else if (membershipRole === 'hr') {
+      visibility = 'org';
+      canCreateTask = false;
+    }
+    scopedDivisionIds = [...effectiveScopes.divisionIds];
+    if (visibility === 'department') {
+      departmentIds.splice(0, departmentIds.length, ...effectiveScopes.departmentIds);
+    }
+    if (visibility === 'team') {
+      ledTeamIds.splice(0, ledTeamIds.length, ...effectiveScopes.teamIds);
+    }
+  }
+
   let departmentTeamIds = [];
   if (departmentIds.length) {
     const teamsInDept = await Team.find({
@@ -60,6 +105,7 @@ async function resolveTaskWorkspaceScope(userId, orgId) {
       : ledTeamIds;
 
   const assignableUserIds = await collectAssignableUserIds(oid, visibility, {
+    divisionIds: scopedDivisionIds,
     departmentIds,
     teamIds,
     ledTeams,
@@ -72,14 +118,15 @@ async function resolveTaskWorkspaceScope(userId, orgId) {
     membershipRole,
     departmentIds,
     teamIds,
-    divisionId: membership.division ? String(membership.division) : null,
-    departmentId: membership.department ? String(membership.department) : null,
-    teamId: membership.team ? String(membership.team) : null,
+    divisionIds: scopedDivisionIds,
+    divisionId: scopedDivisionIds[0] || null,
+    departmentId: departmentIds[0] || null,
+    teamId: teamIds[0] || null,
     assignableUserIds,
   };
 }
 
-async function collectAssignableUserIds(orgId, visibility, { departmentIds, teamIds, ledTeams }) {
+async function collectAssignableUserIds(orgId, visibility, { divisionIds, departmentIds, teamIds, ledTeams }) {
   const ids = new Set();
 
   if (visibility === 'org') {
@@ -112,6 +159,22 @@ async function collectAssignableUserIds(orgId, visibility, { departmentIds, team
           if (m) ids.add(String(m));
         }
       }
+    }
+    return [...ids];
+  }
+
+  if (visibility === 'division') {
+    const memberships = await Membership.find({
+      organization: orgId,
+      status: 'active',
+      ...(Array.isArray(divisionIds) && divisionIds.length
+        ? { division: { $in: divisionIds } }
+        : {}),
+    })
+      .select('user division')
+      .lean();
+    for (const row of memberships) {
+      if (row?.user) ids.add(String(row.user));
     }
     return [...ids];
   }

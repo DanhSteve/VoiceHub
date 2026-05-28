@@ -23,6 +23,13 @@ export function tasksFilterTrigger(isDark) {
     : 'w-full min-h-[42px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 flex items-center justify-between gap-2';
 }
 
+/** Rail nav trái — backdrop chỉ phủ vùng nội dung (trái = --vh-nav-rail-width, đo thực tế bởi NavigationSidebar). */
+export const shellNavRailBackdrop =
+  'fixed top-0 right-0 bottom-0 left-[var(--vh-nav-rail-width,3.5rem)]';
+
+/** Rail luôn trên backdrop chat/emoji (z-80) và overlay menu sidebar (z-998). */
+export const shellNavRailZ = 'z-[1100]';
+
 export function navSidebarRail(isDark) {
   return isDark
     ? 'bg-[#101827]/96 backdrop-blur-xl border-r border-slate-700/55'

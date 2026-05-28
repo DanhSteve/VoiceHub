@@ -15,11 +15,15 @@ const {
   isMimeAllowed,
 } = require('../config/fileRetention');
 const { publishTaskAiSyncEvent } = require('../messaging/taskAiSyncPublisher');
-const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
+const {
+  buildTrustedGatewayHeaders,
+  isTrustedGatewayForward,
+} = require('/shared/middleware/gatewayTrust');
 const {
   fetchAccessibleChannelPermissionMatrix,
   assertCanWriteInOrgChannel,
 } = require('../utils/orgChannelPermissions');
+const { resolveOrgChannelAccess } = require('../services/orgAccessReadModel');
 
 /** Header gọi organization-service: tin cậy gateway (giống proxy) hoặc Bearer để /auth/me. */
 function headersForOrganizationForward(req) {
@@ -43,68 +47,23 @@ function headersForOrganizationForward(req) {
   return headers;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Chỉ retry lỗi tạm (mạng / 5xx org); không retry 401/403/404. */
-function shouldRetryAccessibleChannelFetch(err, attempt, maxAttempts) {
-  if (attempt >= maxAttempts) return false;
-  const st = err.response?.status;
-  if (st === 401 || st === 403 || st === 404) return false;
-  if (st >= 500) return true;
-  if (!err.response) return true;
-  const c = err.code;
-  return (
-    c === 'ECONNREFUSED' ||
-    c === 'ENOTFOUND' ||
-    c === 'ETIMEDOUT' ||
-    c === 'ECONNRESET' ||
-    String(err.message || '').toLowerCase().includes('timeout')
-  );
-}
-
 async function fetchAccessibleChannelIds(orgId, req) {
-  const base = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-    /\/$/,
-    ''
-  );
-  const url = `${base}/api/organizations/${orgId}/accessible-channel-ids`;
-  const timeoutMs = Number(process.env.ORG_ACCESSIBLE_CHANNELS_TIMEOUT_MS || 12000);
-  const maxAttempts = Math.max(1, Math.min(5, Number(process.env.ORG_ACCESSIBLE_CHANNELS_RETRY_ATTEMPTS || 3)));
-  let lastErr;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const { data } = await axios.get(url, {
-        headers: headersForOrganizationForward(req),
-        timeout: timeoutMs,
-      });
-      const ids = data?.data?.channelIds;
-      if (!Array.isArray(ids)) {
-        // eslint-disable-next-line no-console
-        console.warn('[fetchAccessibleChannelIds] response không có channelIds[], coi như rỗng', {
-          orgId,
-          attempt,
-        });
-        return [];
-      }
-      return ids.map(String);
-    } catch (e) {
-      lastErr = e;
-      if (shouldRetryAccessibleChannelFetch(e, attempt, maxAttempts)) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[fetchAccessibleChannelIds] lần ${attempt}/${maxAttempts} lỗi, thử lại:`,
-          e.response?.status,
-          e.code
-        );
-        await sleep(350 * attempt);
-        continue;
-      }
-      throw e;
-    }
+  const access = await resolveOrgChannelAccess(orgId, req);
+  return access.channelIds;
+}
+
+/** ACL đã resolve ở org-service (documents-overview S2S) — tránh gọi lại accessible-channel-ids. */
+function parseTrustedAllowedRoomIds(q, req) {
+  if (!isTrustedGatewayForward(req)) return null;
+  if (String(req.headers['x-vh-org-documents-internal'] || '').trim() !== '1') {
+    return null;
   }
-  throw lastErr;
+  const raw = q.allowedRoomIds ?? q.channelIds;
+  if (raw == null || raw === '') return [];
+  return String(raw)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 class MessageController {
@@ -591,16 +550,21 @@ class MessageController {
         });
       }
       let allowedRoomIds;
+      const preResolved = parseTrustedAllowedRoomIds(q, req);
       try {
-        allowedRoomIds = await fetchAccessibleChannelIds(organizationId, req);
+        allowedRoomIds =
+          preResolved !== null
+            ? preResolved
+            : await fetchAccessibleChannelIds(organizationId, req);
       } catch (e) {
-        const upstream = e.response?.status;
+        const upstream = e.response?.status || e.statusCode;
         const body = e.response?.data || {};
         const upstreamMsg =
           (typeof body === 'string' && body) ||
           body.message ||
           body.error ||
           (body.status === 'fail' && body.message) ||
+          e.message ||
           '';
         // eslint-disable-next-line no-console
         console.error(
@@ -609,6 +573,13 @@ class MessageController {
           e.code,
           e.message
         );
+        if (e.code === 'ORG_SERVICE_CIRCUIT_OPEN' || upstream === 503) {
+          return res.status(503).json({
+            success: false,
+            code: e.code || 'ORG_SERVICE_CIRCUIT_OPEN',
+            message: upstreamMsg || 'Organization service temporarily unavailable',
+          });
+        }
         if (upstream === 401) {
           return res.status(401).json({
             success: false,
@@ -682,6 +653,8 @@ class MessageController {
         mentionText: q.mentionText || null,
         page: parseInt(q.page, 10) || 1,
         limit: parseInt(q.limit, 10) || 20,
+        pageToken: q.pageToken || null,
+        fields: q.fields || 'summary',
       });
       const messages = await attachSignedReadUrlsToMessages(result.messages || []);
       res.json({
@@ -707,6 +680,8 @@ class MessageController {
         organizationId,
         page,
         limit,
+        pageToken,
+        fields,
         markConversationRead,
         unreadByPeer,
         search,
@@ -733,6 +708,8 @@ class MessageController {
           q: searchQ || '',
           page: parseInt(page, 10) || 1,
           limit: parseInt(limit, 10) || 30,
+          pageToken: pageToken || null,
+          fields: fields || 'summary',
         });
         const messages = await attachSignedReadUrlsToMessages(result.messages || []);
         return res.json({
@@ -830,8 +807,10 @@ class MessageController {
       }
 
       const options = {
-        page: parseInt(page) || 1,
-        limit: parseInt(limit) || 50,
+        page: parseInt(page, 10) || 1,
+        limit: parseInt(limit, 10) || 50,
+        pageToken: pageToken ? String(pageToken).trim() : null,
+        fields: fields === 'full' ? 'full' : 'summary',
       };
 
       if (receiverId && userId) {

@@ -16,6 +16,7 @@ import ChannelMessageMoreMenu from '../../components/Organization/ChannelMessage
 import ForwardToFriendModal from '../../components/Organization/ForwardToFriendModal';
 import CreateTaskFromAiModal from '../../components/Chat/CreateTaskFromAiModal';
 import FriendChatRightPanel from '../../components/Chat/FriendChatRightPanel';
+import FriendPendingRequestsRail from '../../components/Friends/FriendPendingRequestsRail';
 import UserAvatar from '../../components/Shared/UserAvatar';
 import userService from '../../services/userService';
 import { buildFriendChatAttachments, findViewerIndex } from '../../utils/friendChatMedia';
@@ -27,7 +28,11 @@ import {
 } from '../../utils/dmConversationList';
 import { copyImageToClipboard } from '../../utils/copyMediaToClipboard';
 import { formatMessagePreview } from '../../features/search/formatMessagePreview';
-import organizationService from '../../services/organizationService';
+import { useQueryClient } from '@tanstack/react-query';
+import { useFriendsList, useOrganizationsMy } from '../../hooks/queries';
+import { queryKeys } from '../../lib/queryKeys';
+import { parseMessageListPage } from '../../lib/parseMessageListPage';
+import { STALE_TIME_FRIENDS_MS } from '../../lib/queryClient';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getAiTaskEligibility, AI_TASK_TOOLTIP_SHORT } from '../../utils/aiTaskEligibility';
 import ConfirmDialog from '../../components/Shared/ConfirmDialog';
@@ -130,6 +135,8 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const [blockingFriend, setBlockingFriend] = useState(false);
   const [unblockConfirmOpen, setUnblockConfirmOpen] = useState(false);
   const [unblockingFriend, setUnblockingFriend] = useState(false);
+  const [unfriendConfirmOpen, setUnfriendConfirmOpen] = useState(false);
+  const [removingFriend, setRemovingFriend] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [emojiSearch, setEmojiSearch] = useState('');
   const [emojiPickerTab, setEmojiPickerTab] = useState('emoji');
@@ -168,7 +175,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const [archivedFriendIds, setArchivedFriendIds] = useState(() => loadIdList(DM_ARCHIVE_STORAGE_KEY));
   const [unreadByPeer, setUnreadByPeer] = useState({});
   const [peerTyping, setPeerTyping] = useState(false);
-  const [messagesPage, setMessagesPage] = useState(1);
+  const [nextOlderPageToken, setNextOlderPageToken] = useState(null);
   const [hasMoreOlder, setHasMoreOlder] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const pendingSendsRef = useRef(new Map());
@@ -189,12 +196,14 @@ function FriendChatPage({ landingDemo = false } = {}) {
   /** Cuộc gọi đi: chờ accept / reject / timeout */
   const [outboundCall, setOutboundCall] = useState(null);
   const outboundCallRef = useRef(null);
+  const unfriendInFlightRef = useRef(false);
   const routedDmUserId = String(
     location.state?.openDmUserId || searchParams.get('openDmUserId') || ''
   );
   const routedComposeText = String(
     location.state?.composeText || searchParams.get('composeText') || ''
   );
+  const showPendingRequestsRail = String(searchParams.get('tab') || '').toLowerCase() === 'requests';
 
   const formatDateDividerLabel = useCallback(
     (iso) => {
@@ -359,32 +368,32 @@ function FriendChatPage({ landingDemo = false } = {}) {
     [landingDemo, selectedFriendId, outboundCall?.callId, t]
   );
 
-  // Load org mặc định cho tạo task — không gọi API khi nhúng landing (tránh 401 / không đụng backend)
-  useEffect(() => {
-    if (landingDemo) return undefined;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await organizationService.getMyOrganizations();
-        const payload = r?.data ?? r;
-        const list =
-          payload?.organizations ||
-          payload?.data?.organizations ||
-          (Array.isArray(payload) ? payload : []);
-        const arr = Array.isArray(list) ? list : [];
-        const first = arr[0];
-        const oid = first?._id || first?.id;
-        if (!cancelled && oid) setDefaultOrgIdForTask(String(oid));
-      } catch {
-        /* DM vẫn dùng được; tạo task cần org */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [landingDemo]);
+  const queryClient = useQueryClient();
+  const { data: myOrganizations = [] } = useOrganizationsMy({ enabled: !landingDemo });
+  const acceptedFriendsQuery = useFriendsList({ status: 'accepted', enabled: !landingDemo });
+  const blockedFriendsQuery = useFriendsList({ status: 'blocked', enabled: !landingDemo });
 
-  const loadFriends = useCallback(async () => {
+  const refreshFriendsCache = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.friends.all });
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (landingDemo || !myOrganizations.length) return;
+    const first = myOrganizations[0];
+    const oid = first?._id || first?.id;
+    if (oid) setDefaultOrgIdForTask(String(oid));
+  }, [landingDemo, myOrganizations]);
+
+  const mergedFriendsFromQuery = useMemo(() => {
+    const tag = (rows, relationshipStatus) =>
+      (Array.isArray(rows) ? rows : []).map((row) => ({ ...row, relationshipStatus }));
+    return [
+      ...tag(acceptedFriendsQuery.data, 'accepted'),
+      ...tag(blockedFriendsQuery.data, 'blocked'),
+    ];
+  }, [acceptedFriendsQuery.data, blockedFriendsQuery.data]);
+
+  useEffect(() => {
     if (landingDemo) {
       const fid = 'demo-friend-1';
       setFriends([
@@ -419,31 +428,29 @@ function FriendChatPage({ landingDemo = false } = {}) {
       ]);
       return;
     }
-    setFriendsLoading(true);
-    try {
-      const [acceptedResp, blockedResp] = await Promise.all([
-        friendService.getFriends(),
-        friendService.getFriends({ status: 'blocked' }),
-      ]);
-      const mergeList = (resp, relationshipStatus) => {
-        const payload = resp?.data || resp;
-        const result = payload?.data || payload;
-        const list = result?.friends || result;
-        if (!Array.isArray(list)) return [];
-        return list.map((row) => ({ ...row, relationshipStatus }));
-      };
-      const list = [
-        ...mergeList(acceptedResp, 'accepted'),
-        ...mergeList(blockedResp, 'blocked'),
-      ];
-      setFriends(list);
-    } catch (err) {
-      toast.error(err.response?.data?.message || err.message || t('friendChat.loadFriendsFail'));
+    if (acceptedFriendsQuery.isError || blockedFriendsQuery.isError) {
+      const err = acceptedFriendsQuery.error || blockedFriendsQuery.error;
+      toast.error(
+        err?.response?.data?.message || err?.message || t('friendChat.loadFriendsFail')
+      );
       setFriends([]);
-    } finally {
       setFriendsLoading(false);
+      return;
     }
-  }, [landingDemo, currentUserId, t]);
+    setFriends(mergedFriendsFromQuery);
+    setFriendsLoading(acceptedFriendsQuery.isLoading || blockedFriendsQuery.isLoading);
+  }, [
+    landingDemo,
+    currentUserId,
+    t,
+    mergedFriendsFromQuery,
+    acceptedFriendsQuery.isLoading,
+    blockedFriendsQuery.isLoading,
+    acceptedFriendsQuery.isError,
+    blockedFriendsQuery.isError,
+    acceptedFriendsQuery.error,
+    blockedFriendsQuery.error,
+  ]);
 
   // Map friends + sắp xếp theo tin nhắn gần nhất; presence realtime khớp Dashboard (onlineUsers từ socket)
   const viewFriends = useMemo(() => {
@@ -661,13 +668,14 @@ function FriendChatPage({ landingDemo = false } = {}) {
   }, [friends, currentUserId, fetchLastDmActivity, landingDemo, pinnedFriendIds, t]);
 
   const parseMessagesResponse = useCallback((resp) => {
-    const payload = resp?.data || resp;
-    const result = payload?.data || payload;
-    const list = result?.messages || result || [];
-    const arr = Array.isArray(list) ? list : [];
-    const totalPages = result?.totalPages ?? 1;
-    const currentPage = result?.currentPage ?? 1;
-    return { arr, totalPages, currentPage };
+    const page = parseMessageListPage(resp);
+    return {
+      arr: page.messages,
+      totalPages: page.totalPages ?? 1,
+      currentPage: page.currentPage ?? 1,
+      nextPageToken: page.nextPageToken,
+      hasMore: page.hasMore,
+    };
   }, []);
 
   // Load messages khi chọn bạn (trang mới nhất trước)
@@ -675,17 +683,30 @@ function FriendChatPage({ landingDemo = false } = {}) {
     async (friendId) => {
       if (!friendId) return;
       setLoadingMessages(true);
-      setMessagesPage(1);
+      setNextOlderPageToken(null);
       try {
         const draftRaw = localStorage.getItem(`${DM_DRAFT_PREFIX}${friendId}`);
         if (draftRaw != null) setMessage(draftRaw);
         else setMessage('');
 
-        const resp = await dmMessageService.getConversation(friendId, 1, DM_PAGE_SIZE);
-        const { arr, totalPages, currentPage } = parseMessagesResponse(resp);
+        const cacheKey = queryKeys.dm.messages(friendId);
+        const parsed = await queryClient.fetchQuery({
+          queryKey: cacheKey,
+          queryFn: async () => {
+            const resp = await dmMessageService.getConversation(friendId, {
+              limit: DM_PAGE_SIZE,
+            });
+            return parseMessagesResponse(resp);
+          },
+          staleTime: STALE_TIME_FRIENDS_MS,
+        });
+
+        const { arr, totalPages, currentPage, nextPageToken, hasMore } = parsed;
         setMessages(arr);
-        setHasMoreOlder(currentPage < totalPages);
-        setMessagesPage(currentPage);
+        setNextOlderPageToken(nextPageToken || null);
+        setHasMoreOlder(
+          Boolean(hasMore || (currentPage != null && totalPages != null && currentPage < totalPages))
+        );
         if (arr.length && currentUserId) {
           const sorted = [...arr].sort(
             (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
@@ -701,33 +722,48 @@ function FriendChatPage({ landingDemo = false } = {}) {
         setLoadingMessages(false);
       }
     },
-    [currentUserId, parseMessagesResponse, t]
+    [currentUserId, parseMessagesResponse, t, queryClient]
   );
 
   const loadOlderMessages = useCallback(async () => {
-    if (!selectedFriendId || loadingOlder || !hasMoreOlder) return;
+    if (!selectedFriendId || loadingOlder || !hasMoreOlder || !nextOlderPageToken) return;
     setLoadingOlder(true);
     try {
-      const nextPage = messagesPage + 1;
-      const resp = await dmMessageService.getConversation(selectedFriendId, nextPage, DM_PAGE_SIZE);
-      const { arr, totalPages, currentPage } = parseMessagesResponse(resp);
+      const parsed = await queryClient.fetchQuery({
+        queryKey: [...queryKeys.dm.messages(selectedFriendId), 'token', nextOlderPageToken],
+        queryFn: async () => {
+          const resp = await dmMessageService.getConversation(selectedFriendId, {
+            pageToken: nextOlderPageToken,
+            limit: DM_PAGE_SIZE,
+          });
+          return parseMessagesResponse(resp);
+        },
+        staleTime: STALE_TIME_FRIENDS_MS,
+      });
+      const { arr, totalPages, currentPage, nextPageToken, hasMore } = parsed;
       setMessages((prev) => {
         const ids = new Set(prev.map((x) => String(x._id || x.id)));
         const older = arr.filter((m) => !ids.has(String(m._id || m.id)));
         return [...older, ...prev];
       });
-      setMessagesPage(currentPage);
-      setHasMoreOlder(currentPage < totalPages);
+      setNextOlderPageToken(nextPageToken || null);
+      setHasMoreOlder(
+        Boolean(hasMore || (currentPage != null && totalPages != null && currentPage < totalPages))
+      );
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || t('friendChat.loadOlderFail'));
     } finally {
       setLoadingOlder(false);
     }
-  }, [selectedFriendId, loadingOlder, hasMoreOlder, messagesPage, parseMessagesResponse, t]);
-
-  useEffect(() => {
-    loadFriends();
-  }, [loadFriends]);
+  }, [
+    selectedFriendId,
+    loadingOlder,
+    hasMoreOlder,
+    nextOlderPageToken,
+    parseMessagesResponse,
+    t,
+    queryClient,
+  ]);
 
   useEffect(() => {
     if (!routedDmUserId) return;
@@ -1558,7 +1594,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
           return { ...row, relationshipStatus: 'blocked' };
         })
       );
-      loadFriends();
+      refreshFriendsCache();
       refreshUnread();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || t('friendChat.blockFail'));
@@ -1574,12 +1610,48 @@ function FriendChatPage({ landingDemo = false } = {}) {
       await friendService.unblockFriend(selectedFriendId);
       toast.success(t('friendChat.unblockOk'));
       setBlockedByPeer(false);
-      loadFriends();
+      refreshFriendsCache();
       refreshUnread();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || t('friendChat.unblockFail'));
     } finally {
       setUnblockingFriend(false);
+    }
+  };
+
+  const unfriendGraceHours = 12;
+
+  const confirmUnfriendCurrentFriend = async () => {
+    if (!selectedFriendId || landingDemo || unfriendInFlightRef.current) return;
+    const removedId = String(selectedFriendId);
+    unfriendInFlightRef.current = true;
+    setRemovingFriend(true);
+    try {
+      const resp = await friendService.removeFriend(removedId);
+      const hours = Number(resp?.data?.graceHours) || unfriendGraceHours;
+      toast.success(t('friendChat.unfriendOk', { hours }));
+      setFriends((prev) =>
+        prev.filter((row) => {
+          const uid = row.friendId?._id || row.friendId?.userId || row.friendId;
+          return String(uid || '') !== removedId;
+        })
+      );
+      setArchivedFriendIds((prev) => {
+        const next = prev.filter((id) => id !== removedId);
+        saveIdList(DM_ARCHIVE_STORAGE_KEY, next);
+        return next;
+      });
+      setSelectedFriendId((prev) => (String(prev || '') === removedId ? null : prev));
+      setMessages([]);
+      setOutboundCall(null);
+      refreshFriendsCache();
+      refreshUnread();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || t('friendChat.unfriendFail'));
+      throw err;
+    } finally {
+      unfriendInFlightRef.current = false;
+      setRemovingFriend(false);
     }
   };
 
@@ -1676,6 +1748,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
               variant="subtle"
             />
           </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-2 scrollbar-overlay">
             {friendsLoading ? (
               <div className={`py-4 text-center text-[10px] leading-relaxed ${railMuted}`}>
@@ -1784,6 +1857,17 @@ function FriendChatPage({ landingDemo = false } = {}) {
                 {t('friendChat.friendSearchNoMatch')}
               </div>
             )}
+          </div>
+          {!landingDemo && (
+            <FriendPendingRequestsRail
+              isDarkMode={isDarkMode}
+              defaultExpanded={showPendingRequestsRail}
+              onAccepted={(item) => {
+                if (item?.id) setSelectedFriendId(item.id);
+                refreshFriendsCache();
+              }}
+            />
+          )}
           </div>
         </aside>
 
@@ -2608,6 +2692,9 @@ function FriendChatPage({ landingDemo = false } = {}) {
                 onAttachmentAction={handleAttachmentAction}
                 onOpenCalendarForFriend={openCalendarForFriend}
                 onOpenMutualOrganization={openMutualOrganization}
+                onUnfriend={() => setUnfriendConfirmOpen(true)}
+                unfriendDisabled={landingDemo || removingFriend}
+                unfriendLoading={removingFriend}
               />
             )
           )}
@@ -2739,6 +2826,21 @@ function FriendChatPage({ landingDemo = false } = {}) {
         title={t('friendChat.unblockUser')}
         message={t('friendChat.unblockConfirm', { name: currentFriend?.name || '' })}
         confirmText={t('friendChat.unblockConfirmBtn')}
+        cancelText={t('nav.cancel')}
+      />
+      <ConfirmDialog
+        isOpen={unfriendConfirmOpen}
+        onClose={() => !removingFriend && setUnfriendConfirmOpen(false)}
+        onConfirm={async () => {
+          await confirmUnfriendCurrentFriend();
+          setUnfriendConfirmOpen(false);
+        }}
+        title={t('friendChat.unfriend')}
+        message={t('friendChat.unfriendConfirm', {
+          name: currentFriend?.name || '',
+          hours: unfriendGraceHours,
+        })}
+        confirmText={t('friendChat.unfriendConfirmBtn')}
         cancelText={t('nav.cancel')}
       />
       {inlineToast && (

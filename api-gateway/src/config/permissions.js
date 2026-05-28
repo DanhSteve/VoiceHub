@@ -102,6 +102,8 @@ const noPermissionRoutes = [
   // User profile & avatar không phụ thuộc server/organization
   '/api/users/me',
   '/api/users/avatar',
+  '/api/bootstrap',
+  '/api/dashboard/summary',
   // Friend routes không cần server context
   '/api/friends',
   '/api/notifications',
@@ -114,12 +116,28 @@ const noPermissionRoutes = [
  * @param {string} path - Route path
  * @returns {string|null} Action hoặc null nếu không cần check
  */
+const ORG_SCOPED_ACTION_BY_METHOD = {
+  GET: 'organization:read',
+  HEAD: 'organization:read',
+  POST: 'organization:write',
+  PUT: 'organization:write',
+  PATCH: 'organization:write',
+  DELETE: 'organization:delete',
+};
+
 const getAction = (method, path) => {
   const pathWithoutQuery = path.split('?')[0];
 
   // Kiểm tra routes không cần permission
   if (noPermissionRoutes.some((route) => pathWithoutQuery.startsWith(route))) {
     return null;
+  }
+
+  // Mọi route /api/organizations/:orgId/... (trừ /my) — organization-service tự kiểm tra membership/RBAC
+  const orgScoped = pathWithoutQuery.match(/^\/api\/organizations\/([^/]+)(?:\/|$)/);
+  if (orgScoped && orgScoped[1] && orgScoped[1] !== 'my') {
+    const scopedAction = ORG_SCOPED_ACTION_BY_METHOD[method];
+    if (scopedAction) return scopedAction;
   }
 
   const key = `${method} ${pathWithoutQuery}`;

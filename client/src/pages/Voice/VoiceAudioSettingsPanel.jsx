@@ -35,6 +35,8 @@ export default function VoiceAudioSettingsPanel({
   onSpeakerVolumeChange,
   onApplyMic,
   active = true,
+  /** Đang trong kênh voice — không giữ mic test (tránh tranh Realtek/BT với mediasoup). */
+  voiceSessionActive = false,
 }) {
   const [audioInputs, setAudioInputs] = useState([]);
   const [audioOutputs, setAudioOutputs] = useState([]);
@@ -226,8 +228,14 @@ export default function VoiceAudioSettingsPanel({
 
   /** Chỉ giữ mic khi đang bấm "Kiểm tra mic" */
   useEffect(() => {
+    if (voiceSessionActive && micTesting) {
+      setMicTesting(false);
+    }
+  }, [voiceSessionActive, micTesting]);
+
+  useEffect(() => {
     if (!active) return undefined;
-    if (!micTesting) {
+    if (!micTesting || voiceSessionActive) {
       releaseMicCapture();
       return undefined;
     }
@@ -240,7 +248,7 @@ export default function VoiceAudioSettingsPanel({
       cancelled = true;
       releaseMicCapture();
     };
-  }, [active, micTesting, micId, startPreviewStream, releaseMicCapture]);
+  }, [active, micTesting, micId, voiceSessionActive, startPreviewStream, releaseMicCapture]);
 
   useEffect(() => {
     if (testGainRef.current) {
@@ -378,6 +386,7 @@ export default function VoiceAudioSettingsPanel({
   };
 
   const toggleMicTest = () => {
+    if (voiceSessionActive) return;
     setMicTesting((prev) => !prev);
   };
 
@@ -538,7 +547,9 @@ export default function VoiceAudioSettingsPanel({
         <button
           type="button"
           onClick={toggleMicTest}
-          className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+          disabled={voiceSessionActive}
+          title={voiceSessionActive ? t('voiceRoom.micTestBlockedInCall') : undefined}
+          className={`rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
             micTesting
               ? 'bg-cyan-600 text-white'
               : isDarkMode
@@ -572,7 +583,12 @@ export default function VoiceAudioSettingsPanel({
           {speakerTesting ? t('voiceRoom.speakerTestPlaying') : t('voiceRoom.speakerTestStart')}
         </button>
       </div>
-      {micTesting ? (
+      {voiceSessionActive ? (
+        <p className={`text-xs ${isDarkMode ? 'text-amber-400/90' : 'text-amber-700'}`}>
+          {t('voiceRoom.micTestBlockedInCall')}
+        </p>
+      ) : null}
+      {micTesting && !voiceSessionActive ? (
         <p className={`text-xs ${isDarkMode ? 'text-cyan-400/90' : 'text-cyan-700'}`}>
           {t('voiceRoom.micTestMonitorHint')}
         </p>

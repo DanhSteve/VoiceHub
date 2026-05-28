@@ -15,7 +15,7 @@
 
 // Import axios - HTTP client library
 import axios from 'axios';
-import { getToken, removeToken } from '../utils/tokenStorage';
+import { applyAuthHeader, removeToken } from '../utils/tokenStorage';
 import { mapAuthSessionMessageForLogout } from '../utils/authErrorMessages';
 import { isAutoLogoutDisabled } from '../utils/devAuth';
 import {
@@ -23,6 +23,7 @@ import {
   isLandingEmbedWriteGuardActive,
   isWriteHttpMethod,
 } from '../utils/landingEmbedMode';
+import { getBrowserFrontendOrigin, resolveApiBaseUrl } from '../utils/browserOrigin';
 
 // Import toast để show error notifications
 import toast from 'react-hot-toast';
@@ -40,9 +41,9 @@ import toast from 'react-hot-toast';
    /api/tasks/* → task-service (port 3009)
    /api/friends/* → friend-service (port 3014)
 ======================================== */
-// Dev: dùng '/api' để request cùng origin → Vite proxy forward tới API Gateway (port 3000)
-// Tránh hardcode http://localhost:3000 khi mở UI qua IP LAN.
-const API_URL = import.meta.env.DEV ? '/api' : import.meta.env.VITE_API_URL || '/api';
+
+// Same-origin /api qua Nginx (https://voicehub.local) hoặc Vite proxy — không hardcode :3000.
+const API_URL = resolveApiBaseUrl();
 
 /* ========================================
    TẠO AXIOS INSTANCE
@@ -94,10 +95,6 @@ api.interceptors.request.use(
       return Promise.reject(block);
     }
 
-    // Lấy token từ localStorage (được lưu khi login)
-    const token = getToken();
-    
-    // Danh sách public routes không cần JWT token
     const publicRoutes = [
       '/auth/register',
       '/auth/login',
@@ -105,18 +102,28 @@ api.interceptors.request.use(
       '/auth/forgot-password',
       '/auth/resend-verification',
       '/auth/reset-password',
-      '/auth/verify-email', // Verify email chỉ dùng token trong query, KHÔNG dùng JWT
+      '/auth/verify-email',
     ];
-    
-    // Kiểm tra xem route có phải public route không
-    const isPublicRoute = publicRoutes.some(route => config.url?.includes(route));
-    
-    // Chỉ thêm JWT token nếu:
-    // 1. Token tồn tại và không rỗng
-    // 2. Route KHÔNG phải public route (đặc biệt là verify-email)
-    if (token && token.trim() !== '' && !isPublicRoute) {
-      // Format: "Bearer <token>" (JWT standard)
-      config.headers.Authorization = `Bearer ${token}`;
+    const isPublicRoute = publicRoutes.some((route) => config.url?.includes(route));
+    if (!isPublicRoute) {
+      applyAuthHeader(config);
+    }
+
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      delete config.headers['Content-Type'];
+    }
+
+    const frontendOrigin = getBrowserFrontendOrigin();
+    const authPathsWithEmailLinks = [
+      '/auth/register',
+      '/auth/forgot-password',
+      '/auth/resend-verification',
+    ];
+    if (
+      frontendOrigin &&
+      authPathsWithEmailLinks.some((p) => String(config.url || '').includes(p))
+    ) {
+      config.headers['X-Frontend-Url'] = frontendOrigin;
     }
     
     // Return config để request được gửi đi
@@ -194,18 +201,25 @@ api.interceptors.response.use(
 
     }
 
-    console.error('[API] Request error:', {
-      message: error.message,
-      code: error.code,
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data,
-      config: {
-        url: error.config?.url,
-        method: error.config?.method,
-        baseURL: error.config?.baseURL,
-      },
-    });
+    const requestUrlEarly = error.config?.url || '';
+    const isOptionalProfileMiss =
+      error.config?.skipGlobalAuthFailure &&
+      requestUrlEarly.includes('/users/me') &&
+      error.response?.status === 404;
+    if (!isOptionalProfileMiss) {
+      console.error('[API] Request error:', {
+        message: error.message,
+        code: error.code,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        config: {
+          url: error.config?.url,
+          method: error.config?.method,
+          baseURL: error.config?.baseURL,
+        },
+      });
+    }
 
     // Xử lý ERR_EMPTY_RESPONSE - server không trả về response
     // Thường xảy ra khi: backend crash, không chạy, hoặc connection bị đứt

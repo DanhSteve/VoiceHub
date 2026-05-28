@@ -47,6 +47,10 @@ import {
 } from './voiceMeetingLayout';
 import VoiceAudioSettingsPanel from './VoiceAudioSettingsPanel';
 import { buildAudioConstraints, loadVoiceAudioPrefs, saveVoiceAudioPrefs } from './voiceAudioPrefs';
+import { resolveAppOrigin } from '../../utils/browserOrigin';
+import UserAvatar from '../../components/Shared/UserAvatar';
+import { isAvatarImageUrl } from '../../utils/avatarDisplay';
+import { resolveMediaUrl } from '../../utils/helpers';
 
 /** Nút thanh họp: icon + (badge) + chevron + nhãn — tham chiếu layout Zoom/Teams (hình 1) */
 function VoiceToolbarControl({
@@ -86,17 +90,7 @@ function VoiceToolbarControl({
   );
 }
 
-const getSignalBaseUrl = () => {
-  const explicit = import.meta.env.VITE_VOICE_SIGNAL_URL;
-  if (explicit) return explicit;
-  // Dev: dùng cùng origin (Vite) để tránh hardcode gateway localhost:
-  // client sẽ proxy /voice-socket về API Gateway trong vite.config.js.
-  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
-  }
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-  return apiUrl.replace(/\/api\/?$/, '');
-};
+const getSignalBaseUrl = () => resolveAppOrigin() || 'http://127.0.0.1:3000';
 
 const getSignalPath = () => import.meta.env.VITE_VOICE_SIGNAL_PATH || '/voice-socket';
 const RECENT_VOICE_CALLS_KEY = 'vh.voice.recentCalls';
@@ -659,18 +653,6 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
 
   const generateMeetingCode = () => `room-${Math.random().toString(36).slice(2, 8)}`;
 
-  const buildInitials = (name) => {
-    const words = String(name || '')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-    if (!words.length) return 'U';
-    return words
-      .slice(0, 2)
-      .map((w) => w[0]?.toUpperCase() || '')
-      .join('');
-  };
-
   const stopAudioLevelMonitor = (key) => {
     const monitor = audioLevelMonitorsRef.current.get(key);
     if (!monitor) return;
@@ -689,6 +671,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) return;
       const audioContext = new AudioContextClass();
+      void audioContext.resume?.().catch?.(() => {});
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 1024;
       analyser.smoothingTimeConstant = 0.8;
@@ -895,6 +878,12 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       roomId: currentRoomRef.current,
       consumerId: consumer.id,
     });
+    if (consumer.paused) {
+      consumer.resume();
+    }
+    if (consumer.track && !consumer.track.enabled) {
+      consumer.track.enabled = true;
+    }
   };
 
   const loadInviteCandidates = useCallback(async () => {
@@ -1551,13 +1540,12 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
             />
           ) : (
             <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center gap-4 bg-gradient-to-b from-zinc-900/80 to-black/80 md:min-h-[260px]">
-              <div className="flex h-28 w-28 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-violet-600 text-3xl font-bold text-white shadow-lg">
-                {localAvatar && String(localAvatar).startsWith('http') ? (
-                  <img src={localAvatar} alt="" className="h-full w-full rounded-full object-cover" />
-                ) : (
-                  buildInitials(localDisplayName)
-                )}
-              </div>
+              <UserAvatar
+                avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+                name={localDisplayName}
+                size="hero"
+                className="shadow-lg"
+              />
             </div>
           )}
           <div className="absolute bottom-3 left-3 flex flex-wrap items-center gap-2">
@@ -1600,9 +1588,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
           />
         ) : (
           <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 bg-zinc-900/80 md:min-h-[260px]">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-indigo-600 text-xl font-bold text-white">
-              {buildInitials(participant.displayName || participant.userId || 'P')}
-            </div>
+            <UserAvatar name={participant.displayName || participant.userId || 'P'} size="xl" />
             <span className="text-xs text-gray-500">{t('voiceRoom.camOff')}</span>
           </div>
         )}
@@ -1674,13 +1660,11 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                           isDarkMode ? 'hover:bg-white/[0.06]' : 'hover:bg-slate-100'
                         }`}
                       >
-                        <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-xs font-bold text-white">
-                          {friend.avatar && String(friend.avatar).startsWith('http') ? (
-                            <img src={friend.avatar} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            String(friend.label || '?').slice(0, 1).toUpperCase()
-                          )}
-                        </span>
+                        <UserAvatar
+                          avatar={isAvatarImageUrl(friend.avatar) ? resolveMediaUrl(friend.avatar) : null}
+                          name={friend.label}
+                          size="chip"
+                        />
                         <span className="min-w-0">
                           <span className={`block truncate text-xs font-semibold ${isDarkMode ? 'text-gray-200' : 'text-slate-800'}`}>
                             {friend.label}
@@ -1800,9 +1784,11 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                         />
                       ) : (
                         <div className="flex h-full w-full flex-col items-center justify-center gap-3">
-                          <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-600 text-3xl font-bold text-white">
-                            {buildInitials(displayNameInput || localDisplayName)}
-                          </div>
+                          <UserAvatar
+                            avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+                            name={displayNameInput || localDisplayName}
+                            size="2xl"
+                          />
                           <span
                             className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}
                           >
@@ -2547,13 +2533,11 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                     </p>
                     <div className="rounded-xl border border-white/10 bg-black/30 p-3">
                       <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-violet-600 text-sm font-bold text-white">
-                          {localAvatar && String(localAvatar).startsWith('http') ? (
-                            <img src={localAvatar} alt="" className="h-full w-full rounded-full object-cover" />
-                          ) : (
-                            buildInitials(displayNameInput || localDisplayName)
-                          )}
-                        </div>
+                        <UserAvatar
+                          avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+                          name={displayNameInput || localDisplayName}
+                          size="md"
+                        />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-medium text-white">
                             {displayNameInput || localDisplayName}{' '}
@@ -2568,9 +2552,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                         key={p.socketId}
                         className="mt-2 flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 p-3"
                       >
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-emerald-600 text-sm font-bold text-white">
-                          {buildInitials(p.displayName || p.userId || 'P')}
-                        </div>
+                        <UserAvatar name={p.displayName || p.userId || 'P'} size="md" />
                         <div className="min-w-0 flex-1 truncate text-sm text-white">
                           {p.displayName || p.userId || t('voiceRoom.memberFallback')}
                         </div>
@@ -2634,13 +2616,11 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                               )
                             }
                           >
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-700 text-xs font-semibold text-white">
-                              {row.avatar && String(row.avatar).startsWith('http') ? (
-                                <img src={row.avatar} alt="" className="h-full w-full object-cover" />
-                              ) : (
-                                buildInitials(row.label)
-                              )}
-                            </div>
+                            <UserAvatar
+                              avatar={isAvatarImageUrl(row.avatar) ? resolveMediaUrl(row.avatar) : null}
+                              name={row.label}
+                              size="md"
+                            />
                             <div className="min-w-0 flex-1">
                               <div className="truncate text-sm text-white">{row.label}</div>
                               {row.subtitle ? (

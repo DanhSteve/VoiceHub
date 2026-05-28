@@ -11,6 +11,18 @@ const { mongoose } = mongo;
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
 const { invalidateSignedReadCacheForStoragePath } = require('../utils/attachSignedReadUrls');
+const { toClientMessage } = require('../utils/messageDto');
+const {
+  pageTokenFilter,
+  decodePageToken,
+  encodePageToken,
+  nextPageTokenFromDocs,
+} = require('/shared/pagination/pageToken');
+const {
+  syncAfterCreate,
+  syncAfterUpdate,
+  syncAfterDelete,
+} = require('../search/messageSearchSync');
 
 const MONGO_UNAVAILABLE_MSG = 'Service temporarily unavailable. Please try again later.';
 
@@ -55,14 +67,6 @@ function normalizeMongoError(error) {
 function encryptContentIfEnabled(plain) {
   if (!isEncryptionEnabled()) return plain;
   return encryptField(String(plain ?? ''));
-}
-
-function toClientMessage(doc) {
-  if (!doc) return null;
-  const o = doc.toObject ? doc.toObject() : { ...doc };
-  o.content = unwrapPlaintext(o.content);
-  if (o.originalContent) o.originalContent = unwrapPlaintext(o.originalContent);
-  return o;
 }
 
 async function maybeMigrateMessageContent(doc) {
@@ -129,6 +133,7 @@ class MessageService {
 
       const message = new Message(payload);
       await message.save();
+      void syncAfterCreate(message);
 
       const redis = getRedisClient();
       if (redis) {
@@ -259,10 +264,46 @@ class MessageService {
   async getMessages(filter, options = {}) {
     try {
       await ensureMongoReady();
-      const { page = 1, limit = 50, sort = { createdAt: -1 }, dmCacheKey } = options;
+      const {
+        page = 1,
+        limit = 50,
+        sort = { createdAt: -1, _id: -1 },
+        dmCacheKey,
+        pageToken,
+        fields = 'summary',
+      } = options;
+      const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+      const dtoOpts = { fields: fields === 'full' ? 'full' : 'summary' };
+
+      if (pageToken) {
+        const tokPart = pageTokenFilter(pageToken);
+        if (!tokPart) {
+          return { messages: [], nextPageToken: null, hasMore: false };
+        }
+        const combined = { $and: [filter, tokPart] };
+        const batch = await Message.find(combined)
+          .sort(sort)
+          .limit(lim + 1)
+          .exec();
+        for (const m of batch) await maybeMigrateMessageContent(m);
+        const hasMore = batch.length > lim;
+        const slice = hasMore ? batch.slice(0, lim) : batch;
+        return {
+          messages: slice.map((m) => toClientMessage(m, dtoOpts)),
+          nextPageToken: nextPageTokenFromDocs(slice, { hasMore }),
+          hasMore,
+        };
+      }
+
+      const pageNum = Math.max(1, parseInt(page, 10) || 1);
+      if (pageNum > 1) {
+        console.warn(
+          '[chat-service] GET /messages: query `page` is deprecated; use `pageToken` + `nextPageToken`.'
+        );
+      }
 
       const redis = getRedisClient();
-      if (redis && dmCacheKey && page === 1 && limit <= 50) {
+      if (redis && dmCacheKey && pageNum === 1 && lim <= 50) {
         const ck = `dm:last:${dmCacheKey}`;
         try {
           const cached = await redis.get(ck);
@@ -274,7 +315,10 @@ class MessageService {
         }
       }
 
-      const messages = await Message.find(filter).sort(sort).limit(limit * 1).skip((page - 1) * limit);
+      const messages = await Message.find(filter)
+        .sort(sort)
+        .limit(lim)
+        .skip((pageNum - 1) * lim);
 
       for (const m of messages) {
         await maybeMigrateMessageContent(m);
@@ -282,14 +326,22 @@ class MessageService {
 
       const total = await Message.countDocuments(filter);
 
+      const mapped = messages.map((m) => toClientMessage(m, dtoOpts));
+      const hasMore = pageNum * lim < total;
+      const lastDoc = messages.length ? messages[messages.length - 1] : null;
       const result = {
-        messages: messages.map((m) => toClientMessage(m)),
-        totalPages: Math.ceil(total / limit),
-        currentPage: page,
+        messages: mapped,
+        totalPages: Math.ceil(total / lim) || 1,
+        currentPage: pageNum,
         total,
+        hasMore,
+        nextPageToken:
+          hasMore && lastDoc
+            ? encodePageToken({ createdAt: lastDoc.createdAt, id: lastDoc._id })
+            : null,
       };
 
-      if (redis && dmCacheKey && page === 1 && limit <= 50) {
+      if (redis && dmCacheKey && pageNum === 1 && lim <= 50) {
         try {
           await redis.setex(`dm:last:${dmCacheKey}`, 60, JSON.stringify(result));
         } catch {
@@ -516,6 +568,8 @@ class MessageService {
         await redis.del(cacheKey);
       }
 
+      void syncAfterDelete(message);
+
       const out = toClientMessage(message);
       if (out?.fileMeta?.storagePath) {
         await invalidateSignedReadCacheForStoragePath(out.fileMeta.storagePath);
@@ -557,6 +611,8 @@ class MessageService {
         const cacheKey = `message:${messageId}`;
         await redis.del(cacheKey);
       }
+
+      void syncAfterUpdate(message);
 
       return toClientMessage(message);
     } catch (error) {
@@ -630,6 +686,8 @@ class MessageService {
         await redis.del(cacheKey);
       }
 
+      void syncAfterUpdate(message);
+
       return toClientMessage(message);
     } catch (error) {
       const err = normalizeMongoError(error);
@@ -675,6 +733,18 @@ class MessageService {
    */
   async searchOrgMessages(params) {
     try {
+      const { isMeiliSearchReady, searchOrgMessagesViaMeili } = require('./messageSearchEngine.service');
+      if (await isMeiliSearchReady()) {
+        try {
+          return await searchOrgMessagesViaMeili(params);
+        } catch (meiliErr) {
+          console.warn(
+            '[chat-service] Meilisearch search failed, fallback Mongo:',
+            meiliErr.message
+          );
+        }
+      }
+
       await ensureMongoReady();
       const {
         organizationId,
@@ -691,7 +761,10 @@ class MessageService {
         mentionText,
         page = 1,
         limit = 20,
+        pageToken,
+        fields = 'summary',
       } = params;
+      const dtoOpts = { fields: fields === 'full' ? 'full' : 'summary' };
 
       const oid = mongoose.Types.ObjectId.isValid(organizationId)
         ? new mongoose.Types.ObjectId(String(organizationId))
@@ -756,14 +829,46 @@ class MessageService {
       const lim = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
       if (!enc) {
+        if (pageToken) {
+          const tokPart = pageTokenFilter(pageToken);
+          if (!tokPart) {
+            return { messages: [], nextPageToken: null, hasMore: false };
+          }
+          const combined = { $and: [filter, tokPart] };
+          const batch = await Message.find(combined)
+            .sort({ createdAt: -1, _id: -1 })
+            .limit(lim + 1)
+            .exec();
+          for (const m of batch) await maybeMigrateMessageContent(m);
+          const hasMore = batch.length > lim;
+          const slice = hasMore ? batch.slice(0, lim) : batch;
+          let out = slice.map((m) => toClientMessage(m, dtoOpts));
+          out = postFilterSearchMessages(out, {
+            qTrim: null,
+            mentionTrim: null,
+            hasLink,
+            hasEmbed,
+          });
+          return {
+            messages: out,
+            nextPageToken: nextPageTokenFromDocs(slice, { hasMore }),
+            hasMore,
+          };
+        }
+
+        if (pageNum > 1) {
+          console.warn(
+            '[chat-service] GET /messages/search: query `page` is deprecated; use `pageToken`.'
+          );
+        }
         const skip = (pageNum - 1) * lim;
         const messages = await Message.find(filter)
-          .sort({ createdAt: -1 })
+          .sort({ createdAt: -1, _id: -1 })
           .skip(skip)
           .limit(lim)
           .exec();
         for (const m of messages) await maybeMigrateMessageContent(m);
-        let out = messages.map((m) => toClientMessage(m));
+        let out = messages.map((m) => toClientMessage(m, dtoOpts));
         out = postFilterSearchMessages(out, { qTrim: null, mentionTrim: null, hasLink, hasEmbed });
         const total = await Message.countDocuments(filter);
         return {
@@ -771,6 +876,8 @@ class MessageService {
           total,
           currentPage: pageNum,
           totalPages: Math.max(1, Math.ceil(total / lim)),
+          hasMore: pageNum * lim < total,
+          nextPageToken: null,
         };
       }
 
@@ -780,16 +887,30 @@ class MessageService {
         .limit(scanCap)
         .exec();
       for (const m of raw) await maybeMigrateMessageContent(m);
-      let out = raw.map((m) => toClientMessage(m));
+      let out = raw.map((m) => toClientMessage(m, dtoOpts));
       out = postFilterSearchMessages(out, { qTrim, mentionTrim, hasLink, hasEmbed });
       const total = out.length;
-      const skip = (pageNum - 1) * lim;
-      const paged = out.slice(skip, skip + lim);
+      if (pageToken) {
+        const tok = decodePageToken(pageToken);
+        if (tok) {
+          const t = tok.createdAt.getTime();
+          const tid = tok.id;
+          out = out.filter((m) => {
+            const ca = new Date(m.createdAt).getTime();
+            const mid = String(m._id || m.id || '');
+            return ca < t || (ca === t && mid < tid);
+          });
+        }
+      }
+      const hasMore = out.length > lim;
+      const paged = out.slice(0, lim);
       return {
         messages: paged,
-        total,
-        currentPage: pageNum,
-        totalPages: Math.max(1, Math.ceil(total / lim)),
+        total: null,
+        currentPage: null,
+        totalPages: null,
+        hasMore,
+        nextPageToken: nextPageTokenFromDocs(paged, { hasMore }),
       };
     } catch (error) {
       const err = normalizeMongoError(error);
@@ -801,7 +922,8 @@ class MessageService {
   async searchDmMessages(userId, peerId, options = {}) {
     try {
       await ensureMongoReady();
-      const { q, page = 1, limit = 30 } = options;
+      const { q, page = 1, limit = 30, pageToken, fields = 'summary' } = options;
+      const dtoOpts = { fields: fields === 'full' ? 'full' : 'summary' };
       if (!userId || !peerId) {
         return { messages: [], total: 0, currentPage: 1, totalPages: 0 };
       }
@@ -836,37 +958,67 @@ class MessageService {
       const lim = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
 
       if (!enc) {
+        if (pageToken) {
+          const tokPart = pageTokenFilter(pageToken);
+          if (!tokPart) {
+            return { messages: [], nextPageToken: null, hasMore: false };
+          }
+          const combined = { $and: [filter, tokPart] };
+          const batch = await Message.find(combined)
+            .sort({ createdAt: -1, _id: -1 })
+            .limit(lim + 1)
+            .exec();
+          for (const m of batch) await maybeMigrateMessageContent(m);
+          const hasMore = batch.length > lim;
+          const slice = hasMore ? batch.slice(0, lim) : batch;
+          return {
+            messages: slice.map((m) => toClientMessage(m, dtoOpts)),
+            nextPageToken: nextPageTokenFromDocs(slice, { hasMore }),
+            hasMore,
+          };
+        }
+        if (pageNum > 1) {
+          console.warn(
+            '[chat-service] DM search: query `page` is deprecated; use `pageToken`.'
+          );
+        }
         const skip = (pageNum - 1) * lim;
         const messages = await Message.find(filter)
-          .sort({ createdAt: -1 })
+          .sort({ createdAt: -1, _id: -1 })
           .skip(skip)
           .limit(lim)
           .exec();
         for (const m of messages) await maybeMigrateMessageContent(m);
         const total = await Message.countDocuments(filter);
         return {
-          messages: messages.map((m) => toClientMessage(m)),
+          messages: messages.map((m) => toClientMessage(m, dtoOpts)),
           total,
           currentPage: pageNum,
           totalPages: Math.max(1, Math.ceil(total / lim)),
+          hasMore: pageNum * lim < total,
+          nextPageToken: null,
         };
       }
 
       const scanCap = Math.min(parseInt(process.env.CHAT_SEARCH_SCAN_CAP || '400', 10) || 400, 2000);
       const raw = await Message.find(filter).sort({ createdAt: -1 }).limit(scanCap).exec();
       for (const m of raw) await maybeMigrateMessageContent(m);
-      let out = raw.map((m) => toClientMessage(m));
+      let out = raw.map((m) => toClientMessage(m, dtoOpts));
       if (qTrim) {
         const low = qTrim.toLowerCase();
         out = out.filter((m) => String(m.content || '').toLowerCase().includes(low));
       }
       const total = out.length;
       const skip = (pageNum - 1) * lim;
+      const slice = out.slice(skip, skip + lim);
+      const hasMore = skip + lim < total;
       return {
-        messages: out.slice(skip, skip + lim),
+        messages: slice,
         total,
         currentPage: pageNum,
         totalPages: Math.max(1, Math.ceil(total / lim)),
+        hasMore,
+        nextPageToken: null,
       };
     } catch (error) {
       const err = normalizeMongoError(error);

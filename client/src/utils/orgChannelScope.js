@@ -43,14 +43,14 @@ export function mergeChannelsById(...lists) {
 }
 
 /**
- * Lọc cây workspace theo phạm vi suy ra từ kênh user được xem.
- * Chỉ cần gán quyền trên kênh — khối/phòng/team cha vẫn hiện trong sidebar.
+ * Lọc cây workspace theo phạm vi role hierarchy (thu hẹp dần: team → phòng → khối).
  */
 export function filterWorkspaceStructureByScope(branches, scope) {
   if (!scope || scope.canSeeAllStructure) return Array.isArray(branches) ? branches : [];
   const scopedDivs = new Set((scope.scopedDivisionIds || []).map(String));
   const scopedDepts = new Set((scope.scopedDepartmentIds || []).map(String));
   const scopedTeams = new Set((scope.scopedTeamIds || []).map(String));
+  const structureMode = String(scope.structureMode || 'none');
   if (!scopedDivs.size && !scopedDepts.size && !scopedTeams.size) return [];
 
   return (branches || [])
@@ -58,21 +58,51 @@ export function filterWorkspaceStructureByScope(branches, scope) {
       const nextDivisions = (branch?.divisions || [])
         .map((division) => {
           const divId = String(division._id);
-          const divisionOpen = scopedDivs.has(divId);
-          const departments = (division.departments || [])
+          const allDepartments = Array.isArray(division.departments) ? division.departments : [];
+
+          if (structureMode === 'division' && scopedDivs.has(divId)) {
+            return {
+              ...division,
+              departments: allDepartments.map((dept) => ({
+                ...dept,
+                teams: Array.isArray(dept.teams) ? dept.teams : [],
+              })),
+            };
+          }
+
+          const departments = allDepartments
             .map((dept) => {
               const deptId = String(dept._id);
-              const deptOpen = divisionOpen || scopedDepts.has(deptId);
               const allTeams = Array.isArray(dept.teams) ? dept.teams : [];
-              if (deptOpen || divisionOpen) {
+
+              if (structureMode === 'department' && scopedDepts.has(deptId)) {
                 return { ...dept, teams: allTeams };
               }
-              const teamsOnly = allTeams.filter((team) => scopedTeams.has(String(team._id)));
-              if (!teamsOnly.length) return null;
-              return { ...dept, teams: teamsOnly };
+              if (structureMode === 'team') {
+                const teamsFiltered = allTeams.filter((team) =>
+                  scopedTeams.has(String(team._id))
+                );
+                if (!teamsFiltered.length) return null;
+                return { ...dept, teams: teamsFiltered };
+              }
+
+              const teamsInScope = allTeams.filter((team) =>
+                scopedTeams.has(String(team._id))
+              );
+              if (scopedDepts.has(deptId)) {
+                return {
+                  ...dept,
+                  teams: teamsInScope.length ? teamsInScope : allTeams,
+                };
+              }
+              if (teamsInScope.length) {
+                return { ...dept, teams: teamsInScope };
+              }
+              return null;
             })
             .filter(Boolean);
-          if (!divisionOpen && departments.length === 0) return null;
+
+          if (!departments.length) return null;
           return { ...division, departments };
         })
         .filter(Boolean);

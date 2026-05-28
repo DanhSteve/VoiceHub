@@ -1,43 +1,14 @@
-const axios = require('axios');
-const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
-
-function headersForOrganizationForward(req) {
-  const headers = {};
-  const uid = String(req.user?.id || req.user?.userId || req.user?._id || '').trim();
-  const gwTok = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
-  if (uid && gwTok) {
-    Object.assign(headers, buildTrustedGatewayHeaders(uid));
-  } else {
-    const fx = req.headers['x-user-id'];
-    const fgw = String(req.headers['x-gateway-internal-token'] || '').trim();
-    if (fx && fgw) {
-      headers['x-user-id'] = String(fx).trim();
-      headers['x-gateway-internal-token'] = fgw;
-      const em = req.headers['x-user-email'];
-      if (em) headers['x-user-email'] = em;
-    }
-  }
-  const auth = req.headers?.authorization;
-  if (auth) headers.Authorization = auth;
-  return headers;
-}
+const {
+  resolveOrgChannelAccess,
+  resolveUserIdFromReq,
+} = require('../services/orgAccessReadModel');
 
 async function fetchAccessibleChannelPermissionMatrix(orgId, req) {
-  const base = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-    /\/$/,
-    ''
-  );
-  const url = `${base}/api/organizations/${orgId}/accessible-channel-ids`;
-  const { data } = await axios.get(url, {
-    headers: headersForOrganizationForward(req),
-    timeout: Number(process.env.ORG_ACCESSIBLE_CHANNELS_TIMEOUT_MS || 12000),
-  });
-  const ids = Array.isArray(data?.data?.channelIds) ? data.data.channelIds.map(String) : [];
-  const matrix =
-    data?.data?.permissionsByChannelId && typeof data.data.permissionsByChannelId === 'object'
-      ? data.data.permissionsByChannelId
-      : {};
-  return { ids, matrix };
+  const access = await resolveOrgChannelAccess(orgId, req);
+  return {
+    ids: access.channelIds,
+    matrix: access.permissionsByChannelId,
+  };
 }
 
 async function assertCanWriteInOrgChannel(orgId, roomId, req) {
@@ -54,4 +25,5 @@ async function assertCanWriteInOrgChannel(orgId, roomId, req) {
 module.exports = {
   fetchAccessibleChannelPermissionMatrix,
   assertCanWriteInOrgChannel,
+  resolveUserIdFromReq,
 };

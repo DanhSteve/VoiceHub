@@ -1,83 +1,16 @@
 const Membership = require('../models/Membership');
+const Division = require('../models/Division');
 const Department = require('../models/Department');
 const Team = require('../models/Team');
-const Division = require('../models/Division');
 const {
   fetchUserRoleNamesInOrg,
   resolveUserHierarchyScopes,
 } = require('../utils/memberPlacementScope');
+const { upsertAssignmentsFromScopes, pickPrimaryScope } = require('./memberScopePolicy.service');
 const { logger } = require('/shared');
 
-function pickPrimaryPlacement(scopes, { teams = [], departments = [] } = {}) {
-  if (!scopes) {
-    return { branchId: null, divisionId: null, departmentId: null, teamId: null };
-  }
-
-  if (scopes.teamIds?.size) {
-    const teamId = [...scopes.teamIds][0];
-    const team = teams.find((t) => String(t._id) === String(teamId));
-    return {
-      branchId: team?.branch ? String(team.branch) : null,
-      divisionId: team?.division ? String(team.division) : null,
-      departmentId: team?.department ? String(team.department) : null,
-      teamId: String(teamId),
-    };
-  }
-
-  if (scopes.departmentIds?.size) {
-    const departmentId = [...scopes.departmentIds][0];
-    const dept = departments.find((d) => String(d._id) === String(departmentId));
-    return {
-      branchId: dept?.branch ? String(dept.branch) : null,
-      divisionId: dept?.division ? String(dept.division) : null,
-      departmentId: String(departmentId),
-      teamId: null,
-    };
-  }
-
-  if (scopes.divisionIds?.size) {
-    const divisionId = [...scopes.divisionIds][0];
-    return {
-      branchId: null,
-      divisionId: String(divisionId),
-      departmentId: null,
-      teamId: null,
-    };
-  }
-
-  return { branchId: null, divisionId: null, departmentId: null, teamId: null };
-}
-
-async function addUserToEntityMembers(Model, entityId, userId) {
-  if (!entityId || !userId) return;
-  await Model.updateOne({ _id: entityId }, { $addToSet: { members: userId } });
-}
-
-async function removeUserFromOtherTeams(orgId, userId, keepTeamId) {
-  await Team.updateMany(
-    {
-      organization: orgId,
-      isActive: true,
-      _id: keepTeamId ? { $ne: keepTeamId } : { $exists: true },
-      members: userId,
-    },
-    { $pull: { members: userId } }
-  );
-}
-
-async function removeUserFromOtherDepartments(orgId, userId, keepDeptId) {
-  await Department.updateMany(
-    {
-      organization: orgId,
-      _id: keepDeptId ? { $ne: keepDeptId } : { $exists: true },
-      members: userId,
-    },
-    { $pull: { members: userId } }
-  );
-}
-
 /**
- * Đồng bộ Membership + Department.members / Team.members từ các role hierarchy (div_/dep_/team_).
+ * Đồng bộ RoleScopeAssignment từ các role hierarchy (div_/dep_/team_).
  * Gọi sau khi gán/gỡ role vị trí trong role-permission-service.
  */
 async function syncMembershipPlacementFromRoles(userId, organizationId) {
@@ -106,30 +39,71 @@ async function syncMembershipPlacementFromRoles(userId, organizationId) {
     departments,
     teams,
   });
-  const placement = pickPrimaryPlacement(scopes, { teams, departments });
 
-  const prevTeamId = membership.team ? String(membership.team) : null;
-  const prevDeptId = membership.department ? String(membership.department) : null;
+  const targetDivisionIds = [...(scopes.divisionIds || [])].map(String).filter(Boolean);
+  const targetDepartmentIds = [...(scopes.departmentIds || [])].map(String).filter(Boolean);
+  const targetTeamIds = [...(scopes.teamIds || [])].map(String).filter(Boolean);
 
-  membership.branch = placement.branchId || null;
-  membership.division = placement.divisionId || null;
-  membership.department = placement.departmentId || null;
-  membership.team = placement.teamId || null;
-  await membership.save();
+  // Đồng bộ member list theo scope role hiện tại:
+  // - role còn scope: giữ user trong cấp tương ứng
+  // - role bị gỡ: tự động pull user ra khỏi cấp không còn thuộc scope
+  await Promise.all([
+    Division.updateMany(
+      {
+        organization: oid,
+        isActive: true,
+        members: uid,
+        ...(targetDivisionIds.length ? { _id: { $nin: targetDivisionIds } } : {}),
+      },
+      { $pull: { members: uid } }
+    ),
+    Department.updateMany(
+      {
+        organization: oid,
+        members: uid,
+        ...(targetDepartmentIds.length ? { _id: { $nin: targetDepartmentIds } } : {}),
+      },
+      { $pull: { members: uid } }
+    ),
+    Team.updateMany(
+      {
+        organization: oid,
+        isActive: true,
+        members: uid,
+        ...(targetTeamIds.length ? { _id: { $nin: targetTeamIds } } : {}),
+      },
+      { $pull: { members: uid } }
+    ),
+  ]);
 
-  if (placement.teamId) {
-    await addUserToEntityMembers(Team, placement.teamId, uid);
-    await removeUserFromOtherTeams(oid, uid, placement.teamId);
-  } else {
-    await removeUserFromOtherTeams(oid, uid, null);
-  }
-
-  if (placement.departmentId) {
-    await addUserToEntityMembers(Department, placement.departmentId, uid);
-    await removeUserFromOtherDepartments(oid, uid, placement.departmentId);
-  } else if (!placement.teamId) {
-    await removeUserFromOtherDepartments(oid, uid, null);
-  }
+  await Promise.all([
+    targetDivisionIds.length
+      ? Division.updateMany(
+          { organization: oid, isActive: true, _id: { $in: targetDivisionIds } },
+          { $addToSet: { members: uid } }
+        )
+      : null,
+    targetDepartmentIds.length
+      ? Department.updateMany(
+          { organization: oid, _id: { $in: targetDepartmentIds } },
+          { $addToSet: { members: uid } }
+        )
+      : null,
+    targetTeamIds.length
+      ? Team.updateMany(
+          { organization: oid, isActive: true, _id: { $in: targetTeamIds } },
+          { $addToSet: { members: uid } }
+        )
+      : null,
+  ]);
+  await upsertAssignmentsFromScopes({
+    organizationId: oid,
+    userId: uid,
+    roleNames,
+    scopeSets: scopes,
+    source: 'role_sync',
+  });
+  const placement = pickPrimaryScope(scopes);
 
   logger.info('[membershipPlacementSync] synced', {
     userId: uid,
@@ -137,8 +111,6 @@ async function syncMembershipPlacementFromRoles(userId, organizationId) {
     teamId: placement.teamId,
     departmentId: placement.departmentId,
     divisionId: placement.divisionId,
-    prevTeamId,
-    prevDeptId,
     roleCount: roleNames.length,
   });
 
@@ -151,5 +123,4 @@ async function syncMembershipPlacementFromRoles(userId, organizationId) {
 
 module.exports = {
   syncMembershipPlacementFromRoles,
-  pickPrimaryPlacement,
 };

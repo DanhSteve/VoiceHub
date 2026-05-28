@@ -11,7 +11,7 @@ router.use(protect);
 router.get('/search', friendControllerLegacy.searchByPhone);
 
 // Backward-compatible aliases (client đang dùng các path legacy)
-router.get('/pending', friendControllerLegacy.getPendingRequests);
+router.get('/pending', friendController.getFriendRequests.bind(friendController));
 router.post('/accept/:id', friendControllerLegacy.acceptRequest);
 router.delete('/reject/:id', friendControllerLegacy.rejectRequest);
 router.post('/block', friendControllerLegacy.blockUser);

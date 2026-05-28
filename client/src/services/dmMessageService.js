@@ -10,9 +10,29 @@ const DM_PAGE_SIZE = 50;
 export const dmMessageService = {
   pageSize: DM_PAGE_SIZE,
 
-  /** GET /messages?receiverId=&page=&limit= */
-  getConversation(peerId, page = 1, limit = DM_PAGE_SIZE) {
-    return api.get('/messages', { params: { receiverId: peerId, page, limit } });
+  /**
+   * GET /messages?receiverId=&limit=
+   * @param {string} peerId
+   * @param {{ pageToken?: string|null, page?: number, limit?: number }} opts
+   */
+  getConversation(peerId, opts = {}) {
+    const normalized =
+      typeof opts === 'number'
+        ? { page: opts, limit: arguments[2] ?? DM_PAGE_SIZE }
+        : opts && typeof opts === 'object'
+          ? opts
+          : {};
+    const params = {
+      receiverId: peerId,
+      limit: normalized.limit ?? DM_PAGE_SIZE,
+      fields: 'summary',
+    };
+    if (normalized.pageToken) {
+      params.pageToken = normalized.pageToken;
+    } else {
+      params.page = normalized.page ?? 1;
+    }
+    return api.get('/messages', { params });
   },
 
   /** GET /messages?receiverId=&markConversationRead=1 */

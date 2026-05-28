@@ -1,5 +1,5 @@
 const httpProxy = require('http-proxy');
-const { getServiceByPath } = require('../config/services');
+const { getServiceByPath, resolveReqApiPath } = require('../config/services');
 const { URL } = require('url');
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -41,14 +41,15 @@ function isUpstreamUnavailableError(err) {
  * Middleware proxy request đến microservice
  */
 const proxyMiddleware = (req, res, next) => {
+  const apiPath = resolveReqApiPath(req);
   // Tìm service phù hợp với path
-  const service = getServiceByPath(req.path);
+  const service = getServiceByPath(apiPath);
 
   // Debug log: xem request đang đi đâu
   // eslint-disable-next-line no-console
-  console.log(`[API-Gateway] Incoming ${req.method} ${req.path} -> service:`, service?.name || 'NONE');
+  console.log(`[API-Gateway] Incoming ${req.method} ${apiPath} -> service:`, service?.name || 'NONE');
   console.log(`[API-Gateway] Service URL:`, service?.url);
-  console.log(`[API-Gateway] Full target URL will be:`, service?.url ? `${service.url}${req.path}` : 'N/A');
+  console.log(`[API-Gateway] Full target URL will be:`, service?.url ? `${service.url}${apiPath}` : 'N/A');
 
   if (!service) {
     return res.status(404).json({
@@ -76,7 +77,10 @@ const proxyMiddleware = (req, res, next) => {
   const proxyHost = targetUrlObj.hostname;
   const proxyPort = parseInt(targetUrlObj.port) || (targetUrlObj.protocol === 'https:' ? 443 : 80);
   const proxyTarget = `${targetUrlObj.protocol}//${proxyHost}:${proxyPort}`;
-  const fullTargetUrl = `${targetUrl}${req.path}`;
+  const queryStart = String(req.originalUrl || req.url || '').indexOf('?');
+  const queryString = queryStart >= 0 ? String(req.originalUrl || req.url || '').slice(queryStart) : '';
+  req.url = `${apiPath}${queryString}`;
+  const fullTargetUrl = `${targetUrl}${req.url}`;
   
   console.log(`[API-Gateway] Creating proxy to: ${targetUrl}`);
   console.log(`[API-Gateway] Full target URL: ${fullTargetUrl}`);
@@ -166,7 +170,11 @@ const proxyMiddleware = (req, res, next) => {
   }
   if (req.user) {
     req.headers['x-user-id'] = req.user.id;
-    req.headers['x-user-email'] = req.user.email;
+    if (req.user.email) {
+      req.headers['x-user-email'] = req.user.email;
+    } else {
+      delete req.headers['x-user-email'];
+    }
   }
   
   // Đảm bảo Content-Type được forward

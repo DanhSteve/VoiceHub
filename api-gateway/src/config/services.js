@@ -56,6 +56,7 @@ const publicRoutes = [
   '/api/auth/login',
   '/api/auth/refresh-token',
   '/api/auth/forgot-password',
+  '/api/auth/resend-verification',
   '/api/auth/reset-password',
   '/api/auth/verify-email',
   '/api/health/gateway-trust',
@@ -66,6 +67,15 @@ const publicRoutes = [
 
 // Chuẩn hóa path: gateway có thể mount tại '/' hoặc '/api', route luôn có dạng /api/...
 const normalizePath = (path) => (path.startsWith('/api') ? path : `/api${path.startsWith('/') ? path : `/${path}`}`);
+
+/** Path API đầy đủ từ request (Express 5 / proxy: ưu tiên originalUrl). */
+const resolveReqApiPath = (req) => {
+  const fromOriginal = String(req.originalUrl || req.url || '')
+    .split('?')[0]
+    .replace(/\/+/g, '/');
+  if (fromOriginal.startsWith('/api')) return fromOriginal;
+  return normalizePath(String(req.path || '').split('?')[0]);
+};
 
 // Tìm service theo path
 const getServiceByPath = (path) => {
@@ -93,6 +103,7 @@ module.exports = {
   getServiceByPath,
   isPublicRoute,
   normalizePath,
+  resolveReqApiPath,
 };
 
 

@@ -1,4 +1,6 @@
 const axios = require('axios');
+const MULTI_PLACEMENT_READ =
+  String(process.env.RBAC_MULTI_PLACEMENT_READ || 'false').toLowerCase() === 'true';
 
 const ROLE_PERMISSION_BASE = String(
   process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015'
@@ -48,9 +50,9 @@ function extractScopedSuffixes(roleNames) {
   const teamSuffixes = new Set();
   for (const name of roleNames || []) {
     const lower = String(name || '').toLowerCase();
-    const divMatch = lower.match(/div_([a-f0-9]{6})/);
-    const depMatch = lower.match(/dep_([a-f0-9]{6})/);
-    const teamMatch = lower.match(/team_([a-f0-9]{6})/);
+    const divMatch = lower.match(/div_([a-z0-9_-]{6,})/);
+    const depMatch = lower.match(/dep_([a-z0-9_-]{6,})/);
+    const teamMatch = lower.match(/team_([a-z0-9_-]{6,})/);
     if (divMatch) divSuffixes.add(divMatch[1]);
     if (depMatch) depSuffixes.add(depMatch[1]);
     if (teamMatch) teamSuffixes.add(teamMatch[1]);
@@ -154,20 +156,15 @@ function resolvePlacementFromRoleTags(roleNames, divisionBySuffix, departmentByS
 
 function resolveMembershipPlacement(membership, teamById) {
   if (!membership) return { divisionId: null, departmentId: null };
-  const divisionId = membership.division ? String(membership.division) : null;
-  const departmentId = membership.department ? String(membership.department) : null;
-  if (divisionId && departmentId) {
-    return { divisionId, departmentId };
-  }
   const teamId = membership.team ? String(membership.team) : null;
   if (teamId && teamById?.has(teamId)) {
     const team = teamById.get(teamId);
     return {
-      divisionId: team?.division ? String(team.division) : divisionId,
-      departmentId: team?.department ? String(team.department) : departmentId,
+      divisionId: team?.division ? String(team.division) : null,
+      departmentId: team?.department ? String(team.department) : null,
     };
   }
-  return { divisionId, departmentId };
+  return { divisionId: null, departmentId: null };
 }
 
 /**
@@ -195,7 +192,7 @@ function resolveMemberPlacementScope(
 }
 
 function placementsMatch(a, b) {
-  if (!a?.divisionId || !a?.departmentId || !b?.departmentId || !b?.departmentId) return false;
+  if (!a?.divisionId || !a?.departmentId || !b?.divisionId || !b?.departmentId) return false;
   return a.divisionId === b.divisionId && a.departmentId === b.departmentId;
 }
 
@@ -265,16 +262,298 @@ function resolveUserHierarchyScopes(roleNames, { divisions = [], departments = [
   };
 }
 
+/** Cấp gắn trên tên role (Khối / Phòng / Team / tag div_|dep_|team_). */
+function getRoleHierarchyLevel(roleName) {
+  const raw = String(roleName || '').trim();
+  const lower = raw.toLowerCase();
+  if (/(?:^|\s|[•·_-])team_[a-z0-9_-]{6,}\b/.test(lower)) return 'team';
+  if (/(?:^|\s|[•·_-])dep_[a-z0-9_-]{6,}\b/.test(lower)) return 'department';
+  if (/(?:^|\s|[•·_-])div_[a-z0-9_-]{6,}\b/.test(lower)) return 'division';
+  if (/^\s*team\s+/i.test(raw)) return 'team';
+  if (/^\s*(phòng ban|phong ban|phòng|phong)\s+/i.test(raw)) return 'department';
+  if (/^\s*(phòng ban|phong ban|phòng|phong)\s*:/i.test(raw)) return 'department';
+  if (/^\s*(khối|khoi)\s+/i.test(raw)) return 'division';
+  if (/^\s*(khối|khoi)\s*:/i.test(raw)) return 'division';
+  return null;
+}
+
+function resolveEntityIdForRoleLevel(roleName, level, divisions, departments, teams) {
+  const key = normalizeEntityLabel(roleName);
+  if (!key) return null;
+
+  const divisionBySuffix = buildSuffixToIdMap(divisions);
+  const departmentBySuffix = buildSuffixToIdMap(departments);
+  const teamBySuffix = buildSuffixToIdMap(teams);
+  const lower = String(roleName || '').toLowerCase();
+  const divTag = lower.match(/(?:^|\s|[•·_-])div_([a-z0-9_-]{6,})\b/);
+  const depTag = lower.match(/(?:^|\s|[•·_-])dep_([a-z0-9_-]{6,})\b/);
+  const teamTag = lower.match(/(?:^|\s|[•·_-])team_([a-z0-9_-]{6,})\b/);
+
+  if (level === 'division') {
+    if (divTag) {
+      const id = divisionBySuffix.get(divTag[1]);
+      return id ? { divisionId: id } : null;
+    }
+    for (const division of divisions || []) {
+      if (normalizeEntityLabel(division.name) === key) {
+        return { divisionId: String(division._id) };
+      }
+    }
+    return null;
+  }
+
+  if (level === 'department') {
+    if (depTag) {
+      const departmentId = departmentBySuffix.get(depTag[1]);
+      if (!departmentId) return null;
+      const dept = (departments || []).find((d) => String(d._id) === departmentId);
+      return {
+        departmentId,
+        divisionId: dept?.division ? String(dept.division) : null,
+      };
+    }
+    for (const dept of departments || []) {
+      if (normalizeEntityLabel(dept.name) === key) {
+        return {
+          departmentId: String(dept._id),
+          divisionId: dept.division ? String(dept.division) : null,
+        };
+      }
+    }
+    return null;
+  }
+
+  if (level === 'team') {
+    if (teamTag) {
+      const teamId = teamBySuffix.get(teamTag[1]);
+      if (!teamId) return null;
+      const team = (teams || []).find((t) => String(t._id) === teamId);
+      return {
+        teamId,
+        departmentId: team?.department ? String(team.department) : null,
+        divisionId: team?.division ? String(team.division) : null,
+      };
+    }
+    for (const team of teams || []) {
+      if (normalizeEntityLabel(team.name) === key) {
+        return {
+          teamId: String(team._id),
+          departmentId: team.department ? String(team.department) : null,
+          divisionId: team.division ? String(team.division) : null,
+        };
+      }
+    }
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Phạm vi HIỂN THỊ cây tổ chức — thu hẹp dần: team > phòng > khối.
+ * Kênh vẫn khóa nếu không có quyền đọc trên kênh/scope role (xử lý ở controller).
+ */
+function resolveStructureVisibilityFromRoles(roleNames, { divisions = [], departments = [], teams = [] } = {}) {
+  const divisionIds = new Set();
+  const departmentIds = new Set();
+  const teamIds = new Set();
+  const levels = new Set();
+
+  for (const roleName of roleNames || []) {
+    const level = getRoleHierarchyLevel(roleName);
+    if (!level) continue;
+    levels.add(level);
+    const hit = resolveEntityIdForRoleLevel(roleName, level, divisions, departments, teams);
+    if (!hit) continue;
+    if (hit.divisionId) divisionIds.add(String(hit.divisionId));
+    if (hit.departmentId) departmentIds.add(String(hit.departmentId));
+    if (hit.teamId) teamIds.add(String(hit.teamId));
+  }
+
+  let mode = 'none';
+  if (MULTI_PLACEMENT_READ) {
+    if (levels.size > 0) mode = 'multi';
+  } else if (levels.has('team')) mode = 'team';
+  else if (levels.has('department')) mode = 'department';
+  else if (levels.has('division')) mode = 'division';
+
+  const outDivisions = new Set();
+  const outDepartments = new Set();
+  const outTeams = new Set();
+
+  if (mode === 'multi') {
+    for (const divId of divisionIds) outDivisions.add(divId);
+    for (const deptId of departmentIds) {
+      outDepartments.add(deptId);
+      const dept = departments.find((d) => String(d._id) === String(deptId));
+      if (dept?.division) outDivisions.add(String(dept.division));
+      for (const team of teams) {
+        if (String(team.department || '') === String(deptId)) outTeams.add(String(team._id));
+      }
+    }
+    for (const teamId of teamIds) {
+      outTeams.add(teamId);
+      const team = teams.find((t) => String(t._id) === String(teamId));
+      if (team?.department) outDepartments.add(String(team.department));
+      if (team?.division) outDivisions.add(String(team.division));
+    }
+  } else if (mode === 'team') {
+    for (const teamId of teamIds) {
+      outTeams.add(teamId);
+      const team = teams.find((t) => String(t._id) === String(teamId));
+      if (team?.department) outDepartments.add(String(team.department));
+      if (team?.division) outDivisions.add(String(team.division));
+    }
+  } else if (mode === 'department') {
+    for (const deptId of departmentIds) {
+      outDepartments.add(deptId);
+      const dept = departments.find((d) => String(d._id) === String(deptId));
+      if (dept?.division) outDivisions.add(String(dept.division));
+      for (const team of teams) {
+        if (String(team.department || '') === String(deptId)) outTeams.add(String(team._id));
+      }
+    }
+  } else if (mode === 'division') {
+    for (const divId of divisionIds) {
+      outDivisions.add(divId);
+      for (const dept of departments) {
+        if (String(dept.division || '') !== String(divId)) continue;
+        outDepartments.add(String(dept._id));
+        for (const team of teams) {
+          if (String(team.department || '') === String(dept._id)) {
+            outTeams.add(String(team._id));
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    mode,
+    divisionIds: outDivisions,
+    departmentIds: outDepartments,
+    teamIds: outTeams,
+  };
+}
+
+function channelInStructureVisibility(channel, structureVisibility) {
+  if (!channel || !structureVisibility || structureVisibility.mode === 'none') {
+    return false;
+  }
+  const teamId = channel.team ? String(channel.team) : '';
+  const depId = channel.department ? String(channel.department) : '';
+  const divId = channel.division ? String(channel.division) : '';
+  const { divisionIds, departmentIds, teamIds } = structureVisibility;
+
+  if (teamId) return teamIds.has(teamId);
+  if (depId) return departmentIds.has(depId);
+  if (divId) return divisionIds.has(divId);
+  return false;
+}
+
 function channelInHierarchyScope(channel, scopes) {
   if (!channel || !scopes) return false;
+  const teamSet =
+    scopes.teamIds instanceof Set ? scopes.teamIds : new Set(scopes.teamIds || []);
+  const depSet =
+    scopes.departmentIds instanceof Set ? scopes.departmentIds : new Set(scopes.departmentIds || []);
+  const divSet =
+    scopes.divisionIds instanceof Set ? scopes.divisionIds : new Set(scopes.divisionIds || []);
+
   const teamId = channel.team ? String(channel.team) : '';
   const depId = channel.department ? String(channel.department) : '';
   const divId = channel.division ? String(channel.division) : '';
 
-  if (teamId) return scopes.teamIds.has(teamId);
-  if (depId) return scopes.departmentIds.has(depId);
-  if (divId) return scopes.divisionIds.has(divId);
+  if (teamId) return teamSet.has(teamId);
+  if (depId) return depSet.has(depId);
+  if (divId) return divSet.has(divId);
   return false;
+}
+
+/**
+ * Vị trí chính để mở sidebar — ưu tiên team/phòng khớp nhãn role (Team BA, Phòng BA), không lấy Set[0] ngẫu nhiên.
+ */
+function pickPrimaryPlacement(scopes, { teams = [], departments = [], roleNames = [] } = {}) {
+  if (!scopes) {
+    return { branchId: null, divisionId: null, departmentId: null, teamId: null };
+  }
+
+  const teamSet =
+    scopes.teamIds instanceof Set ? scopes.teamIds : new Set(scopes.teamIds || []);
+  const depSet =
+    scopes.departmentIds instanceof Set ? scopes.departmentIds : new Set(scopes.departmentIds || []);
+  const divSet =
+    scopes.divisionIds instanceof Set ? scopes.divisionIds : new Set(scopes.divisionIds || []);
+
+  for (const roleName of roleNames || []) {
+    const key = normalizeEntityLabel(roleName);
+    if (!key) continue;
+    for (const teamId of teamSet) {
+      const team = teams.find((t) => String(t._id) === String(teamId));
+      const teamNorm = normalizeEntityLabel(team?.name);
+      if (!teamNorm) continue;
+      if (key === teamNorm || key.includes(teamNorm) || teamNorm.includes(key)) {
+        return {
+          branchId: team?.branch ? String(team.branch) : null,
+          divisionId: team?.division ? String(team.division) : null,
+          departmentId: team?.department ? String(team.department) : null,
+          teamId: String(teamId),
+        };
+      }
+    }
+  }
+
+  for (const roleName of roleNames || []) {
+    const key = normalizeEntityLabel(roleName);
+    if (!key) continue;
+    for (const departmentId of depSet) {
+      const dept = departments.find((d) => String(d._id) === String(departmentId));
+      const deptNorm = normalizeEntityLabel(dept?.name);
+      if (!deptNorm) continue;
+      if (key === deptNorm || key.includes(deptNorm) || deptNorm.includes(key)) {
+        return {
+          branchId: dept?.branch ? String(dept.branch) : null,
+          divisionId: dept?.division ? String(dept.division) : null,
+          departmentId: String(departmentId),
+          teamId: null,
+        };
+      }
+    }
+  }
+
+  if (teamSet.size) {
+    const teamId = [...teamSet][0];
+    const team = teams.find((t) => String(t._id) === String(teamId));
+    return {
+      branchId: team?.branch ? String(team.branch) : null,
+      divisionId: team?.division ? String(team.division) : null,
+      departmentId: team?.department ? String(team.department) : null,
+      teamId: String(teamId),
+    };
+  }
+
+  if (depSet.size) {
+    const departmentId = [...depSet][0];
+    const dept = departments.find((d) => String(d._id) === String(departmentId));
+    return {
+      branchId: dept?.branch ? String(dept.branch) : null,
+      divisionId: dept?.division ? String(dept.division) : null,
+      departmentId: String(departmentId),
+      teamId: null,
+    };
+  }
+
+  if (divSet.size) {
+    const divisionId = [...divSet][0];
+    return {
+      branchId: null,
+      divisionId: String(divisionId),
+      departmentId: null,
+      teamId: null,
+    };
+  }
+
+  return { branchId: null, divisionId: null, departmentId: null, teamId: null };
 }
 
 module.exports = {
@@ -284,6 +563,10 @@ module.exports = {
   placementsMatch,
   buildSuffixToIdMap,
   normalizeEntityLabel,
+  getRoleHierarchyLevel,
   resolveUserHierarchyScopes,
+  resolveStructureVisibilityFromRoles,
+  channelInStructureVisibility,
   channelInHierarchyScope,
+  pickPrimaryPlacement,
 };

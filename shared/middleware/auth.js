@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
+const { isTrustedGatewayForward } = require('./gatewayTrust');
 
 const getJwtSecret = () => String(process.env.JWT_SECRET || '').trim();
 
@@ -34,8 +35,26 @@ const normalizeToken = (rawToken) => {
  * @param {Object} res - Express response object
  * @param {Function} next - Next middleware function
  */
+const getHeader = (headers, key) =>
+  headers?.[key] ?? headers?.[key.toLowerCase()];
+
 const authenticate = (req, res, next) => {
   try {
+    const existingId = req.user?.id || req.user?.userId || req.user?._id;
+    if (existingId) {
+      return next();
+    }
+
+    const forwardedUserId = getHeader(req.headers, 'x-user-id');
+    if (forwardedUserId && isTrustedGatewayForward(req)) {
+      req.user = {
+        id: String(forwardedUserId).trim(),
+        userId: String(forwardedUserId).trim(),
+        email: getHeader(req.headers, 'x-user-email') || null,
+      };
+      return next();
+    }
+
     const jwtSecret = getJwtSecret();
     if (!jwtSecret) {
       logger.error('JWT_SECRET is not configured');
@@ -71,7 +90,7 @@ const authenticate = (req, res, next) => {
       
       // Gắn user info vào request
       req.user = {
-        id: decoded.id,
+        id: decoded.id || decoded.userId || decoded._id,
         email: decoded.email,
         ...decoded,
       };

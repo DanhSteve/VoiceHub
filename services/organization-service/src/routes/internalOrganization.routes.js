@@ -1,15 +1,33 @@
 const express = require('express');
+const Organization = require('../models/Organization');
 const { buildAiTaskExtractContext } = require('../services/memberContext.service');
 const { syncMembershipPlacementFromRoles } = require('../services/membershipPlacementSync');
+const { backfillRoleScopeAssignmentsForOrg } = require('../services/roleScopeAssignmentBackfill.service');
 
 const router = express.Router();
 
+/** Tên tổ chức cho webhook / service nội bộ (serverId RBAC = organizationId). */
+router.get('/org/:organizationId/summary', async (req, res) => {
+  try {
+    const org = await Organization.findById(req.params.organizationId).select('name').lean();
+    if (!org) {
+      return res.status(404).json({ success: false, message: 'Organization not found' });
+    }
+    return res.json({
+      success: true,
+      data: { organizationId: String(req.params.organizationId), name: org.name || 'Organization' },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Internal error' });
+  }
+});
+
 /**
- * POST body: { organizationId, userIds?, mentionLabels?, channelId? }
+ * POST body: { organizationId, userIds?, mentionLabels?, channelId?, messageText? }
  */
 router.post('/ai-task-context', async (req, res) => {
   try {
-    const { organizationId, userIds, mentionLabels, channelId } = req.body || {};
+    const { organizationId, userIds, mentionLabels, channelId, messageText } = req.body || {};
     if (!organizationId) {
       return res.status(400).json({ success: false, message: 'organizationId is required' });
     }
@@ -18,6 +36,7 @@ router.post('/ai-task-context', async (req, res) => {
       userIds,
       mentionLabels,
       channelId,
+      messageText,
     });
     if (!data) {
       return res.status(404).json({ success: false, message: 'Organization not found' });
@@ -67,6 +86,23 @@ router.post('/sync-membership-placement-org', async (req, res) => {
       results.push({ userId: uid, ok: r.ok, placement: r.placement || null });
     }
     return res.json({ success: true, data: { synced: results.length, results } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Internal error' });
+  }
+});
+
+/** Backfill RoleScopeAssignment từ hierarchy roles hiện có. */
+router.post('/backfill-role-scope-assignments', async (req, res) => {
+  try {
+    const { organizationId } = req.body || {};
+    if (!organizationId) {
+      return res.status(400).json({ success: false, message: 'organizationId is required' });
+    }
+    const result = await backfillRoleScopeAssignmentsForOrg(organizationId);
+    if (!result.ok) {
+      return res.status(400).json({ success: false, message: result.reason || 'backfill_failed' });
+    }
+    return res.json({ success: true, data: result });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message || 'Internal error' });
   }

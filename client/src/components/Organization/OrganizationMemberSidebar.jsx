@@ -1,17 +1,27 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 import { organizationAPI } from '../../services/api/organizationAPI';
+import {
+  taskAPI,
+  unwrapTaskBoardDetailPayload,
+  unwrapTaskBoardListPayload,
+} from '../../services/api/taskAPI';
 import roleAPI from '../../services/api/roleAPI';
 import userService from '../../services/userService';
 import friendService from '../../services/friendService';
 import { ConfirmDialog } from '../Shared';
 import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
+import { shellNavRailBackdrop } from '../../theme/shellTheme';
 import OrgWorkspaceSearchSidebar from '../../features/search/components/OrgWorkspaceSearchSidebar';
 import OrgMemberSidebarAttachments from '../../features/orgAttachments/OrgMemberSidebarAttachments';
+import UserAvatar from '../Shared/UserAvatar';
+import { isAvatarImageUrl } from '../../utils/avatarDisplay';
+import { resolveMediaUrl } from '../../utils/helpers';
+import { usePresenceSubscribe } from '../../hooks/usePresenceSubscribe';
 
 const unwrapBody = (payload) => payload?.data ?? payload;
 
@@ -52,11 +62,16 @@ function memberUserId(m) {
   return String(u || '');
 }
 
-async function fetchMembersRaw(orgId) {
-  const payload = await organizationAPI.getMembers(orgId);
+async function fetchMembersWithRolesBundle(orgId) {
+  const payload = await organizationAPI.getMembersWithRoles(orgId);
   const body = unwrapBody(payload);
-  const list = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
-  return list.filter((m) => String(m?.status || 'active') === 'active');
+  const bundle = body?.data ?? body;
+  const list = Array.isArray(bundle?.members)
+    ? bundle.members
+    : normalizeApiList(payload);
+  const roles = Array.isArray(bundle?.roles) ? bundle.roles : [];
+  const members = list.filter((m) => String(m?.status || 'active') === 'active');
+  return { members, roles };
 }
 
 async function enrichMembersWithProfiles(members, memberFallback) {
@@ -87,6 +102,9 @@ async function enrichMembersWithProfiles(members, memberFallback) {
         membershipId: String(m._id),
         userId: uid,
         role: String(m.role || 'member').toLowerCase(),
+        divisionId: m?.division ? String(m.division) : '',
+        departmentId: m?.department ? String(m.department) : '',
+        teamId: m?.team ? String(m.team) : '',
         displayName,
         username,
         avatar,
@@ -153,9 +171,26 @@ function normalizeApiList(payload) {
   return [];
 }
 
+function safeArray(input) {
+  return Array.isArray(input) ? input : [];
+}
+
+function formatTaskDueDate(input) {
+  if (!input) return '';
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('vi-VN');
+}
+
+function toLowerStr(input) {
+  return String(input || '').trim().toLowerCase();
+}
+
 function OrganizationMemberSidebar({
   organizationId,
   organizationName = '',
+  selectedTeamId = '',
+  teams = [],
   onlineUsers = [],
   socketConnected = false,
   refreshKey = 0,
@@ -184,6 +219,7 @@ function OrganizationMemberSidebar({
   const { t } = useAppStrings();
   const { isDarkMode } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [rows, setRows] = useState([]);
@@ -227,6 +263,17 @@ function OrganizationMemberSidebar({
   const [sidebarTab, setSidebarTab] = useState('people');
   const [orgPermissions, setOrgPermissions] = useState([]);
   const [orgPermissionsLoaded, setOrgPermissionsLoaded] = useState(false);
+  const [teamTaskSections, setTeamTaskSections] = useState([]);
+  const [loadingSidebarTasks, setLoadingSidebarTasks] = useState(false);
+  const [sidebarTasksError, setSidebarTasksError] = useState('');
+  const memberUserIds = useMemo(
+    () => rows.map((m) => String(m.userId || '')).filter(Boolean),
+    [rows]
+  );
+  usePresenceSubscribe(memberUserIds, {
+    enabled: Boolean(organizationId) && sidebarTab === 'people' && memberDockOpen !== false,
+  });
+
   const pendingReviewCount = canReviewJoinApplications ? joinApplicationsToReview.length : 0;
   const joinReviewKey = (orgId, applicationId) => `${orgId}:${applicationId}`;
   const [selectedJoinApplication, setSelectedJoinApplication] = useState(null);
@@ -283,6 +330,115 @@ function OrganizationMemberSidebar({
   }, [orgPermissions, orgPermissionsLoaded, myRole, hasReadableChannel]);
 
   const showSidebarTabs = true;
+  const teamNameById = useMemo(() => {
+    const map = new Map();
+    for (const row of safeArray(teams)) {
+      const id = String(row?._id || '');
+      if (!id) continue;
+      map.set(id, String(row?.name || '').trim() || 'Team');
+    }
+    return map;
+  }, [teams]);
+
+  const currentUserIdStr = String(currentUserId || '').trim();
+
+  useEffect(() => {
+    if (sidebarTab !== 'tasks') return;
+    if (!organizationId || !currentUserIdStr) {
+      setTeamTaskSections([]);
+      setSidebarTasksError('');
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setLoadingSidebarTasks(true);
+      setSidebarTasksError('');
+      try {
+        const boardRes = await taskAPI.getBoards({
+          organizationId: String(organizationId),
+          ...(selectedTeamId ? { teamId: String(selectedTeamId) } : {}),
+        });
+        const boards = unwrapTaskBoardListPayload(boardRes);
+        const detailResults = await Promise.allSettled(
+          boards.map(async (board) => {
+            const detailRes = await taskAPI.getBoardDetail(String(board?._id || ''));
+            return {
+              board,
+              detail: unwrapTaskBoardDetailPayload(detailRes),
+            };
+          })
+        );
+
+        if (cancelled) return;
+
+        const teamBuckets = new Map();
+        for (const result of detailResults) {
+          if (result.status !== 'fulfilled') continue;
+          const board = result.value?.board || {};
+          const detail = result.value?.detail || null;
+          if (!detail?.board?._id) continue;
+
+          const boardData = detail.board || board;
+          const boardVisibility = toLowerStr(boardData.visibility);
+          const isTeamPublicBoard = boardVisibility === 'workspace' || boardVisibility === 'public';
+          const listsMap = new Map(
+            safeArray(detail.lists).map((list) => [String(list?._id || ''), String(list?.title || '')])
+          );
+          const cards = safeArray(detail.cards)
+            .filter((card) => {
+              const assigneeId = String(card?.assigneeId || '');
+              return assigneeId === currentUserIdStr || isTeamPublicBoard;
+            })
+            .map((card) => ({
+              _id: String(card?._id || ''),
+              title: String(card?.title || '').trim() || 'Untitled',
+              status: String(card?.status || 'todo'),
+              dueDate: card?.dueDate || null,
+              listTitle: listsMap.get(String(card?.listId || '')) || '',
+              boardTitle: String(boardData?.title || board?.title || '').trim(),
+              assigneeId: String(card?.assigneeId || ''),
+              createdAt: card?.createdAt || null,
+            }))
+            .filter((card) => Boolean(card._id));
+
+          if (!cards.length) continue;
+          const teamId = String(boardData?.teamId || board?.teamId || '') || 'no-team';
+          const existing = teamBuckets.get(teamId) || [];
+          teamBuckets.set(teamId, existing.concat(cards));
+        }
+
+        const nextSections = [...teamBuckets.entries()]
+          .map(([teamId, tasks]) => {
+            const sorted = [...tasks].sort((a, b) => {
+              const aDue = a.dueDate ? new Date(a.dueDate).getTime() : Number.POSITIVE_INFINITY;
+              const bDue = b.dueDate ? new Date(b.dueDate).getTime() : Number.POSITIVE_INFINITY;
+              if (aDue !== bDue) return aDue - bDue;
+              return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+            });
+            return {
+              teamId,
+              teamName: teamNameById.get(teamId) || 'Team chưa xác định',
+              tasks: sorted,
+            };
+          })
+          .sort((a, b) => a.teamName.localeCompare(b.teamName, 'vi'));
+
+        setTeamTaskSections(nextSections);
+      } catch (err) {
+        if (cancelled) return;
+        setTeamTaskSections([]);
+        setSidebarTasksError(err?.response?.data?.message || 'Không tải được danh sách việc cần làm');
+      } finally {
+        if (!cancelled) setLoadingSidebarTasks(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sidebarTab, organizationId, currentUserIdStr, selectedTeamId, teamNameById]);
+
   const activityFeedItems = useMemo(
     () => [
       { id: 'a1', kind: 'join', label: t('organizations.memberActivityJoined', { name: rows[0]?.displayName || '—' }) },
@@ -299,24 +455,17 @@ function OrganizationMemberSidebar({
   }, [sidebarTab, canShowTasksTab, canShowFilesTab]);
 
   useEffect(() => {
-    if (!organizationId) return;
+    if (!organizationId || sidebarTab !== 'people') return;
+    if (memberDockOpen === false) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
       setError('');
       try {
-        const [rawMembers, rolesPayload] = await Promise.all([
-          fetchMembersRaw(organizationId),
-          roleAPI.getRolesByOrganization(organizationId).catch(() => null),
-        ]);
+        const { members: rawMembers, roles: rolesList } =
+          await fetchMembersWithRolesBundle(organizationId);
         if (cancelled) return;
 
-        const rolesBody = rolesPayload ? unwrapBody(rolesPayload) : null;
-        const rolesList = Array.isArray(rolesBody?.data)
-          ? rolesBody.data
-          : Array.isArray(rolesBody)
-            ? rolesBody
-            : [];
         const normalizedRoles = rolesList.map(normalizeRoleRecord).filter(Boolean);
         setOrganizationRoles(normalizedRoles);
         const hasCustomRoles = Array.isArray(rolesList) && rolesList.length > 0;
@@ -337,7 +486,7 @@ function OrganizationMemberSidebar({
     return () => {
       cancelled = true;
     };
-  }, [organizationId, refreshKey, t]);
+  }, [organizationId, refreshKey, sidebarTab, memberDockOpen, t]);
 
   useEffect(() => {
     if (!selectedJoinApplication) return;
@@ -418,6 +567,11 @@ function OrganizationMemberSidebar({
       selectedRoleIds: {},
     }));
   }, []);
+
+  useEffect(() => {
+    closeMenu();
+    setSelectedJoinApplication(null);
+  }, [location.pathname, closeMenu]);
 
   const prevMenuOpenRef = useRef(false);
 
@@ -741,11 +895,15 @@ function OrganizationMemberSidebar({
       const isSelected = Boolean(rolesSubmenu.selectedRoleIds?.[roleId]);
       setRolesSubmenu((prev) => ({ ...prev, busyRoleId: roleId }));
       try {
+        let roleRes = null;
         if (isSelected) {
-          await roleAPI.removeRoleFromUser(roleId, member.userId, organizationId);
+          roleRes = await roleAPI.removeRoleFromUser(roleId, member.userId, organizationId);
         } else {
-          await roleAPI.assignRoleToUser(roleId, member.userId, organizationId);
+          roleRes = await roleAPI.assignRoleToUser(roleId, member.userId, organizationId);
         }
+        const rolePayload = unwrapBody(roleRes);
+        const roleData = rolePayload?.data ?? rolePayload ?? {};
+        const placementSync = roleData?.placementSync || null;
         setRolesSubmenu((prev) => ({
           ...prev,
           busyRoleId: '',
@@ -763,6 +921,23 @@ function OrganizationMemberSidebar({
           else nameSet.add(displayName);
           return { ...prev, assignedRoleNames: Array.from(nameSet) };
         });
+        if (placementSync?.attempted) {
+          if (placementSync?.success) {
+            toast.success(
+              isSelected
+                ? 'Đã gỡ vai trò và cập nhật danh sách member theo scope'
+                : 'Đã gán vai trò và thêm member vào scope tương ứng'
+            );
+          } else {
+            toast.error(
+              isSelected
+                ? 'Đã gỡ vai trò nhưng chưa đồng bộ member theo scope'
+                : 'Đã gán vai trò nhưng chưa đồng bộ member theo scope'
+            );
+          }
+        } else {
+          toast.success(isSelected ? 'Đã gỡ vai trò thành công' : 'Đã gán vai trò thành công');
+        }
       } catch (err) {
         setRolesSubmenu((prev) => ({ ...prev, busyRoleId: '' }));
         const msg = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Không thể cập nhật vai trò';
@@ -791,7 +966,7 @@ function OrganizationMemberSidebar({
     createPortal(
       <>
         <div
-          className="fixed inset-0 z-[9997]"
+          className={`${shellNavRailBackdrop} z-[9997]`}
           aria-hidden
           onClick={closeMenu}
           onContextMenu={(e) => {
@@ -1035,7 +1210,7 @@ function OrganizationMemberSidebar({
     createPortal(
       <>
         <div
-          className="fixed inset-0 z-[9997] bg-black/40"
+          className={`${shellNavRailBackdrop} z-[9997] bg-black/40`}
           onClick={() => setSelectedJoinApplication(null)}
           aria-hidden
         />
@@ -1151,15 +1326,16 @@ function OrganizationMemberSidebar({
         <div className={`h-16 ${isDarkMode ? 'bg-slate-700/70' : 'bg-slate-200'}`} />
         <div className="px-3 pb-3">
           <div className="-mt-8 flex items-end justify-between">
-            <div className={`h-16 w-16 overflow-hidden rounded-full border-4 ${isDarkMode ? 'border-[#1d1f28]' : 'border-white'}`}>
-              {memberCard.member.avatar ? (
-                <img src={memberCard.member.avatar} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-violet-600 to-fuchsia-700 text-xl font-bold text-white">
-                  {(memberCard.member.displayName || '?').charAt(0).toUpperCase()}
-                </div>
-              )}
-            </div>
+            <UserAvatar
+              avatar={
+                isAvatarImageUrl(memberCard.member.avatar)
+                  ? resolveMediaUrl(memberCard.member.avatar)
+                  : null
+              }
+              name={memberCard.member.displayName}
+              size="profile"
+              ringClassName={`border-4 ${isDarkMode ? 'border-[#1d1f28]' : 'border-white'}`}
+            />
             <button
               type="button"
               className={`rounded-md px-2 py-1 text-xs ${isDarkMode ? 'bg-white/10 hover:bg-white/15' : 'bg-slate-100 hover:bg-slate-200'}`}
@@ -1343,11 +1519,76 @@ function OrganizationMemberSidebar({
           </ul>
         )}
         {sidebarTab === 'tasks' && canShowTasksTab && (
-          <p
-            className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
-          >
-            {t('organizations.memberSidebarTasksEmpty')}
-          </p>
+          <div className="space-y-3 px-1">
+            {loadingSidebarTasks ? (
+              <div className="space-y-2 pt-1">
+                <div className={`h-8 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                <div className={`h-16 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`} />
+                <div className={`h-16 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`} />
+              </div>
+            ) : sidebarTasksError ? (
+              <p className="py-2 text-xs text-rose-300">{sidebarTasksError}</p>
+            ) : teamTaskSections.length === 0 ? (
+              <p
+                className={`py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
+              >
+                Không có việc cần làm phù hợp. Bạn chỉ thấy task được giao cho bạn hoặc task public của team.
+              </p>
+            ) : (
+              teamTaskSections.map((section) => (
+                <div key={section.teamId}>
+                  <div
+                    className={`mb-1.5 text-[11px] font-bold uppercase tracking-wide ${
+                      isDarkMode ? 'text-[#8e9297]' : 'text-slate-600'
+                    }`}
+                  >
+                    {section.teamName} ({section.tasks.length})
+                  </div>
+                  <ul className="space-y-1.5">
+                    {section.tasks.map((task) => {
+                      const isMine = String(task.assigneeId || '') === currentUserIdStr;
+                      return (
+                        <li
+                          key={task._id}
+                          className={`rounded-lg border px-2 py-2 ${
+                            isDarkMode
+                              ? 'border-white/[0.08] bg-[#171B24]'
+                              : 'border-slate-200 bg-white'
+                          }`}
+                        >
+                          <p
+                            className={`line-clamp-2 text-xs font-semibold ${
+                              isDarkMode ? 'text-white' : 'text-slate-900'
+                            }`}
+                          >
+                            {task.title}
+                          </p>
+                          <div
+                            className={`mt-1 flex items-center justify-between gap-2 text-[10px] ${
+                              isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'
+                            }`}
+                          >
+                            <span className="truncate">{task.boardTitle || 'Task Board'}</span>
+                            <span className={isMine ? 'text-emerald-400' : ''}>
+                              {isMine ? 'Được giao cho bạn' : 'Public team'}
+                            </span>
+                          </div>
+                          <div
+                            className={`mt-0.5 flex items-center justify-between gap-2 text-[10px] ${
+                              isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'
+                            }`}
+                          >
+                            <span className="truncate">{task.listTitle || 'Không có danh sách'}</span>
+                            <span>{formatTaskDueDate(task.dueDate) || 'Không hạn'}</span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))
+            )}
+          </div>
         )}
         {sidebarTab === 'files' && canShowFilesTab && organizationId && (
           <OrgMemberSidebarAttachments
@@ -1417,25 +1658,14 @@ function OrganizationMemberSidebar({
                       onContextMenu={(e) => openMemberMenu(e, m)}
                       onClick={(e) => openMemberCard(m, e.currentTarget.getBoundingClientRect())}
                     >
-                      <div className="relative h-9 w-9 shrink-0 rounded-lg">
-                        {m.avatar ? (
-                          <img
-                            src={m.avatar}
-                            alt=""
-                            className="h-9 w-9 rounded-lg object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-semibold text-white">
-                            {(m.displayName || '?').charAt(0).toUpperCase()}
-                          </div>
-                        )}
-                        <span
-                          className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 ${
-                            isDarkMode ? 'border-[#11141C]' : 'border-white'
-                          } ${online ? 'bg-emerald-400' : 'bg-gray-600'}`}
-                          aria-hidden
-                        />
-                      </div>
+                      <UserAvatar
+                        avatar={isAvatarImageUrl(m.avatar) ? resolveMediaUrl(m.avatar) : null}
+                        name={m.displayName}
+                        size="sm"
+                        showOnline
+                        status={online ? 'online' : 'offline'}
+                        ringClassName={isDarkMode ? 'border-[#11141C]' : 'border-white'}
+                      />
                       <div className="min-w-0 flex-1">
                         <div
                           className={`truncate text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}

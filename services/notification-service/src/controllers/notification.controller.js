@@ -94,7 +94,8 @@ class NotificationController {
   async getUserNotifications(req, res) {
     try {
       const userId = req.user?.id || req.userContext?.userId || req.params.userId;
-      const { isRead, type, page, limit, organizationId, scope } = req.query;
+      const { isRead, type, page, limit, organizationId, scope, before, fields } =
+        req.query;
 
       if (!userId) {
         return res.status(400).json({
@@ -108,8 +109,10 @@ class NotificationController {
         type,
         organizationId,
         scope,
-        page: parseInt(page) || 1,
-        limit: parseInt(limit) || 50,
+        page: parseInt(page, 10) || 1,
+        limit: parseInt(limit, 10) || 20,
+        before: before || undefined,
+        fields: fields === 'full' ? 'full' : 'summary',
       });
 
       res.json({

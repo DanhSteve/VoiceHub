@@ -8,6 +8,13 @@ const {
   ensureDepartmentRole,
   ensureTeamRole,
 } = require('../services/hierarchyRoleSync');
+const { invalidateOrgReadCache } = require('../services/orgReadCache.service');
+const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
+
+const bumpOrgReadCache = (orgId) =>
+  invalidateOrgReadCache(orgId, { eventType: ORG_EVENT_TYPES.CHANNEL_PROVISIONED }).catch(
+    () => null
+  );
 
 const unwrapName = (v, fallback) => {
   const s = String(v || '').trim();
@@ -31,6 +38,7 @@ exports.createBranch = async (req, res, next) => {
       name: unwrapName(req.body?.name, 'Chi nhánh mới'),
       location: String(req.body?.location || '').trim(),
     });
+    await bumpOrgReadCache(req.params.orgId);
     res.status(201).json({ status: 'success', data: doc });
   } catch (error) {
     next(error);
@@ -58,6 +66,7 @@ exports.createDivision = async (req, res, next) => {
       name: unwrapName(req.body?.name, 'Khối mới'),
     });
     await ensureDivisionRole(req.params.orgId, doc._id, doc.name);
+    await bumpOrgReadCache(req.params.orgId);
     res.status(201).json({ status: 'success', data: doc });
   } catch (error) {
     next(error);
@@ -83,6 +92,7 @@ exports.updateDivision = async (req, res, next) => {
       return res.status(404).json({ status: 'fail', message: 'Division not found' });
     }
     await ensureDivisionRole(req.params.orgId, doc._id, doc.name);
+    await bumpOrgReadCache(req.params.orgId);
     return res.json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);
@@ -120,6 +130,7 @@ exports.createDepartmentByDivision = async (req, res, next) => {
       head: req.body?.head || null,
     });
     await ensureDepartmentRole(req.params.orgId, doc._id, doc.name);
+    await bumpOrgReadCache(req.params.orgId);
     return res.status(201).json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);
@@ -182,6 +193,7 @@ exports.createTeamByDepartment = async (req, res, next) => {
         leader: req.body?.leader || null,
       },
     ]);
+    await bumpOrgReadCache(req.params.orgId);
     return res.status(201).json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);
@@ -207,6 +219,7 @@ exports.updateTeamByHierarchy = async (req, res, next) => {
       return res.status(404).json({ status: 'fail', message: 'Team not found' });
     }
     await ensureTeamRole(req.params.orgId, doc._id, doc.name);
+    await bumpOrgReadCache(req.params.orgId);
     return res.json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);
@@ -247,6 +260,7 @@ exports.createChannelByTeam = async (req, res, next) => {
       type: ['chat', 'voice', 'announcement'].includes(req.body?.type) ? req.body.type : 'chat',
       leader: req.body?.leader || team.leader || null,
     });
+    await bumpOrgReadCache(req.params.orgId);
     return res.status(201).json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);
@@ -286,6 +300,7 @@ exports.createChannelByScope = async (req, res, next) => {
         type,
         leader: req.body?.leader || team.leader || actorId,
       });
+      await bumpOrgReadCache(req.params.orgId);
       return res.status(201).json({ status: 'success', data: doc });
     }
 
@@ -312,6 +327,7 @@ exports.createChannelByScope = async (req, res, next) => {
         type,
         leader: req.body?.leader || actorId,
       });
+      await bumpOrgReadCache(req.params.orgId);
       return res.status(201).json({ status: 'success', data: doc });
     }
 
@@ -338,6 +354,7 @@ exports.createChannelByScope = async (req, res, next) => {
       type,
       leader: req.body?.leader || actorId,
     });
+    await bumpOrgReadCache(req.params.orgId);
     return res.status(201).json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);
@@ -362,6 +379,7 @@ exports.updateChannelByScope = async (req, res, next) => {
     if (!doc) {
       return res.status(404).json({ status: 'fail', message: 'Channel not found' });
     }
+    await bumpOrgReadCache(req.params.orgId);
     return res.json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);
@@ -387,6 +405,7 @@ exports.updateChannelByTeam = async (req, res, next) => {
     if (!doc) {
       return res.status(404).json({ status: 'fail', message: 'Channel not found' });
     }
+    await bumpOrgReadCache(req.params.orgId);
     return res.json({ status: 'success', data: doc });
   } catch (error) {
     return next(error);

@@ -10,28 +10,84 @@ const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http:
 );
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 
+/** Role gắn vị trí cây tổ chức (tag div_/dep_/team_ hoặc nhãn Khối/Phòng/Team). */
 function isHierarchyRoleName(name) {
-  const lower = String(name || '').toLowerCase();
-  return /(?:^|\s)(div|dep|team)_[a-f0-9]{6}\b/.test(lower);
+  const lower = String(name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Hỗ trợ cả id dài (ObjectId 24 chars) và slug scope bất kỳ.
+  if (/(?:^|\s|[•·_-])(div|dep|team)_[a-z0-9_-]{6,}\b/.test(lower)) return true;
+  if (/^(khoi|khối|phong ban|phòng ban|phong|phòng|team|chi nhanh|chi nhánh)\b/.test(lower)) return true;
+  if (/\b(khoi|khối|phong ban|phòng ban|phong|phòng|team)\s*:/.test(lower)) return true;
+  return false;
+}
+
+function internalOrgHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    ...(GATEWAY_INTERNAL_TOKEN ? { 'x-gateway-internal-token': GATEWAY_INTERNAL_TOKEN } : {}),
+  };
+}
+
+/** serverId trong RBAC = organizationId (không có /api/servers trên organization-service). */
+async function fetchOrganizationDisplayName(serverId, role) {
+  const orgId = String(role?.organizationId || serverId || '').trim();
+  if (!orgId) return 'Organization';
+  if (!GATEWAY_INTERNAL_TOKEN) return 'Organization';
+  try {
+    const res = await axios.get(
+      `${ORGANIZATION_SERVICE_URL}/api/organizations/internal/org/${encodeURIComponent(orgId)}/summary`,
+      { headers: internalOrgHeaders(), timeout: 5000, validateStatus: () => true }
+    );
+    if (res.status === 200) {
+      return res.data?.data?.name || res.data?.name || 'Organization';
+    }
+  } catch (e) {
+    logger.warn('[role.service] fetchOrganizationDisplayName failed', e.message);
+  }
+  return 'Organization';
 }
 
 async function syncOrgMembershipPlacement(userId, organizationId) {
-  if (!GATEWAY_INTERNAL_TOKEN || !userId || !organizationId) return;
+  if (!GATEWAY_INTERNAL_TOKEN || !userId || !organizationId) {
+    return {
+      attempted: false,
+      success: false,
+      reason: 'missing_internal_token_or_ids',
+    };
+  }
   try {
-    await axios.post(
+    const res = await axios.post(
       `${ORGANIZATION_SERVICE_URL}/api/organizations/internal/sync-membership-placement`,
       { userId: String(userId), organizationId: String(organizationId) },
       {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-gateway-internal-token': GATEWAY_INTERNAL_TOKEN,
-        },
+        headers: internalOrgHeaders(),
         timeout: 15000,
         validateStatus: () => true,
       }
     );
+    const ok = res.status >= 200 && res.status < 300 && res.data?.success !== false;
+    if (!ok) {
+      logger.warn('[role.service] syncOrgMembershipPlacement non-2xx', {
+        status: res.status,
+        userId: String(userId),
+        organizationId: String(organizationId),
+        message: res.data?.message,
+      });
+    }
+    return {
+      attempted: true,
+      success: ok,
+      status: res.status,
+      message: res.data?.message || '',
+      data: res.data?.data || null,
+    };
   } catch (e) {
     logger.warn('[role.service] syncOrgMembershipPlacement failed', e.message);
+    return {
+      attempted: true,
+      success: false,
+      reason: 'request_failed',
+      message: e.message,
+    };
   }
 }
 
@@ -111,12 +167,23 @@ class RoleService {
 
       // Kiểm tra đã có role chưa
       const existing = await UserRole.findOne({ userId, serverId, roleId });
+      const isHierarchyRole = isHierarchyRoleName(role.name);
       if (existing) {
         logger.info(`Role already assigned (idempotent): user ${userId}, role ${roleId}, server ${serverId}`);
-        if (isHierarchyRoleName(role.name)) {
-          void syncOrgMembershipPlacement(userId, serverId);
-        }
-        return existing;
+        const placementSync = isHierarchyRole
+          ? await syncOrgMembershipPlacement(userId, serverId)
+          : {
+              attempted: false,
+              success: true,
+              reason: 'non_hierarchy_role',
+            };
+        return {
+          userRole: existing,
+          roleName: role.name,
+          hierarchyRole: isHierarchyRole,
+          placementSync,
+          idempotent: true,
+        };
       }
 
       const userRole = new UserRole({
@@ -136,10 +203,20 @@ class RoleService {
       }
 
       logger.info(`Role assigned: user ${userId}, role ${roleId}, server ${serverId}`);
-      if (isHierarchyRoleName(role.name)) {
-        void syncOrgMembershipPlacement(userId, serverId);
-      }
-      return userRole;
+      const placementSync = isHierarchyRole
+        ? await syncOrgMembershipPlacement(userId, serverId)
+        : {
+            attempted: false,
+            success: true,
+            reason: 'non_hierarchy_role',
+          };
+      return {
+        userRole,
+        roleName: role.name,
+        hierarchyRole: isHierarchyRole,
+        placementSync,
+        idempotent: false,
+      };
     } catch (error) {
       logger.error('Error assigning role:', error);
       throw new Error(`Error assigning role: ${error.message}`);
@@ -173,29 +250,39 @@ class RoleService {
         /* ignore */
       }
 
-      // Gửi webhook
       try {
         const role = removedRole || (await Role.findById(roleId));
-        const serverResponse = await axios.get(`${ORGANIZATION_SERVICE_URL}/api/servers/${serverId}`);
-        const serverName = serverResponse.data?.data?.name || 'Server';
-        
-        await roleWebhook.removed(
-          userId.toString(),
-          role.name,
-          serverId.toString(),
-          serverName,
-          null, // removedBy - có thể lấy từ context
-          role.organizationId?.toString()
-        );
+        if (role?.name) {
+          const orgId = String(role.organizationId || serverId || '');
+          const serverName = await fetchOrganizationDisplayName(serverId, role);
+          await roleWebhook.removed(
+            userId.toString(),
+            role.name,
+            serverId.toString(),
+            serverName,
+            null,
+            orgId || undefined
+          );
+        }
       } catch (error) {
-        logger.error('Error sending role removed webhook:', error);
+        logger.warn('[role.service] role removed webhook skipped:', error.message);
       }
 
       logger.info(`Role removed: user ${userId}, role ${roleId}, server ${serverId}`);
-      if (removedRole && isHierarchyRoleName(removedRole.name)) {
-        void syncOrgMembershipPlacement(userId, serverId);
-      }
-      return userRole;
+      const isHierarchyRole = Boolean(removedRole && isHierarchyRoleName(removedRole.name));
+      const placementSync = isHierarchyRole
+        ? await syncOrgMembershipPlacement(userId, serverId)
+        : {
+            attempted: false,
+            success: true,
+            reason: 'non_hierarchy_role',
+          };
+      return {
+        userRole,
+        roleName: removedRole?.name || '',
+        hierarchyRole: isHierarchyRole,
+        placementSync,
+      };
     } catch (error) {
       logger.error('Error removing role:', error);
       throw new Error(`Error removing role: ${error.message}`);

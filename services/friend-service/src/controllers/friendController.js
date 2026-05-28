@@ -31,12 +31,12 @@ exports.getFriends = async (req, res, next) => {
 
 exports.getPendingRequests = async (req, res, next) => {
   try {
-    const requests = await Friendship.find({
-      recipient: req.user._id,
-      status: 'pending',
-    }).populate('requester', 'name avatar email');
-
-    res.json({ status: 'success', data: requests });
+    const userId = req.user?.id || req.user?._id || req.userContext?.userId;
+    if (!userId) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+    const requests = await friendService.getFriendRequests(String(userId), 'received');
+    res.json({ status: 'success', success: true, data: requests });
   } catch (error) {
     next(error);
   }
@@ -158,7 +158,8 @@ exports.searchByPhone = async (req, res, next) => {
     }
 
     // get relationship to requesting user
-    const relationship = await friendService.getRelationship(req.user._id, userData.userId || userData._id);
+    const actorId = req.user?.id || req.user?._id;
+    const relationship = await friendService.getRelationship(actorId, userData.userId || userData._id);
 
     res.json({
       status: 'success',

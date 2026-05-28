@@ -7,7 +7,7 @@ class EmailService {
   constructor() {
     // Kiểm tra email config trước khi tạo transporter
     const emailUser = process.env.EMAIL_USER;
-    const emailPassword = process.env.EMAIL_PASSWORD;
+    const emailPassword = String(process.env.EMAIL_PASSWORD || '').replace(/\s+/g, '');
     
     if (emailUser && emailPassword) {
       console.log(`[EmailService] Initializing with user: ${emailUser}`);
@@ -16,7 +16,7 @@ class EmailService {
         service: 'gmail',
         auth: {
           user: emailUser, // Gmail của bạn
-          pass: emailPassword, // App Password (không phải mật khẩu thường)
+          pass: emailPassword, // App Password (bỏ khoảng trắng trong .env nếu có)
         },
         // Thêm timeout để tránh chờ SMTP quá lâu
         connectionTimeout: 10000, // 10 seconds

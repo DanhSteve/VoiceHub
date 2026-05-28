@@ -42,6 +42,22 @@ async function refreshTtl(userId) {
   }
 }
 
+async function isOnline(userId) {
+  let redis;
+  try {
+    redis = getRedisClient();
+  } catch {
+    return false;
+  }
+  if (!redis) return false;
+  try {
+    const v = await redis.get(keyFor(userId));
+    return v === 'online';
+  } catch {
+    return false;
+  }
+}
+
 async function clear(userId) {
   let redis;
   try {
@@ -61,6 +77,7 @@ async function clear(userId) {
 module.exports = {
   setOnline,
   refreshTtl,
+  isOnline,
   clear,
   keyFor,
   TTL_SEC,

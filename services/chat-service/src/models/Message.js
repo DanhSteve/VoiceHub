@@ -110,8 +110,19 @@ const messageSchema = new mongoose.Schema(
 messageSchema.index({ senderId: 1, createdAt: -1 });
 messageSchema.index({ receiverId: 1, createdAt: -1 });
 messageSchema.index({ roomId: 1, createdAt: -1 });
+messageSchema.index({ roomId: 1, createdAt: -1, _id: -1 });
 messageSchema.index({ conversationId: 1, createdAt: -1 });
 messageSchema.index({ organizationId: 1, createdAt: -1 });
+messageSchema.index({ organizationId: 1, createdAt: -1, _id: -1 });
+messageSchema.index(
+  { organizationId: 1, createdAt: -1 },
+  {
+    partialFilterExpression: {
+      'fileMeta.storagePath': { $exists: true, $type: 'string', $ne: '' },
+    },
+    name: 'org_attachments_by_createdAt',
+  }
+);
 messageSchema.index({ 'fileMeta.expiresAt': 1 });
 messageSchema.index({ 'fileMeta.storagePath': 1 });
 

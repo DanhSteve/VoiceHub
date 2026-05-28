@@ -3,6 +3,7 @@ const router = express.Router();
 const authMiddleware = require('../middlewares/auth.middleware');
 const permissionMiddleware = require('../middlewares/permission.middleware');
 const proxyMiddleware = require('../middlewares/proxy.middleware');
+const { publicBffRouter, orgBffRouter } = require('../bff');
 
 // Health check
 router.get('/health', (req, res) => {
@@ -27,8 +28,14 @@ router.get('/metrics', (req, res) => {
 // Apply authentication middleware cho tất cả routes (trừ public routes)
 router.use(authMiddleware);
 
+// BFF — bootstrap / dashboard (trước permission)
+router.use(publicBffRouter);
+
 // Apply permission middleware để kiểm tra quyền truy cập
 router.use(permissionMiddleware);
+
+// BFF — org shell / documents-overview (cache + coalesce, trước proxy)
+router.use(orgBffRouter);
 
 // Apply proxy middleware cho tất cả routes
 // Dùng router.use() với path pattern để match tất cả routes

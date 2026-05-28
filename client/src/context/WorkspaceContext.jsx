@@ -38,10 +38,12 @@ export function WorkspaceProvider({ children }) {
         String(prev?.slug || '') === String(next?.slug || '') &&
         String(prev?.name || '') === String(next?.name || '') &&
         String(prev?.myRole || '') === String(next?.myRole || '');
+      if (!same && next?.slug) {
+        const slug = String(next.slug).trim();
+        queueMicrotask(() => setLastWorkspaceSlug(slug));
+      }
       return same ? prev : next;
     });
-    const slug = workspace?.slug;
-    if (slug) setLastWorkspaceSlug(slug);
   }, [setLastWorkspaceSlug]);
 
   const getLastWorkspacePath = useCallback(() => {

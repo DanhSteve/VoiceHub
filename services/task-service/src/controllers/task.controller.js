@@ -115,6 +115,19 @@ class TaskController {
       }
 
       const { taskId } = req.params;
+      const reserved = new Set(['boards', 'statistics', 'from-chat-file', 'internal']);
+      if (reserved.has(String(taskId || '').toLowerCase())) {
+        return res.status(404).json({
+          success: false,
+          message: 'Not found',
+        });
+      }
+      if (!mongoose.isValidObjectId(String(taskId || ''))) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid task id',
+        });
+      }
       const task = await taskService.getTaskById(taskId);
 
       if (!task) {
@@ -192,6 +205,13 @@ class TaskController {
       };
 
       const filter = { isActive: true };
+      const includeBoardCards = String(process.env.TASK_BOARD_CARDS_IN_TASKS_API || '')
+        .toLowerCase()
+        .trim() === 'true';
+      if (!includeBoardCards) {
+        // Compatibility: keep legacy /tasks listing (kanban) showing only "plain" tasks.
+        filter.boardId = null;
+      }
       let workspaceScope = null;
 
       if (organizationId) {
@@ -340,7 +360,15 @@ class TaskController {
 
       const orgOid = new mongoose.Types.ObjectId(oid);
       const stats = await Task.aggregate([
-        { $match: { organizationId: orgOid, isActive: true } },
+        {
+          $match: {
+            organizationId: orgOid,
+            isActive: true,
+            ...(String(process.env.TASK_BOARD_CARDS_IN_TASKS_API || '').toLowerCase().trim() === 'true'
+              ? {}
+              : { boardId: null }),
+          },
+        },
         {
           $group: {
             _id: '$status',

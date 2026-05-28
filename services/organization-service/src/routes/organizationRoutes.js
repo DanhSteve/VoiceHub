@@ -48,6 +48,8 @@ router.patch(
   joinApplicationController.reviewJoinApplication
 );
 
+router.get('/:orgId/shell', organizationController.getOrgShell);
+router.get('/:orgId/documents-overview', organizationController.getDocumentsOverview);
 router.get('/:orgId/structure', organizationController.getOrganizationStructure);
 router.get('/:orgId/accessible-channel-ids', organizationController.getAccessibleChannelIds);
 router.get('/:orgId/task-workspace-scope', organizationController.getTaskWorkspaceScope);

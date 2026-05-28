@@ -35,6 +35,21 @@ function buildTaskVisibilityFilter(scope, userId) {
   switch (scope.visibility) {
     case 'org':
       return base;
+    case 'division': {
+      const or = [];
+      const divIds = Array.isArray(scope.divisionIds) ? scope.divisionIds.map(String) : [];
+      const deptIds = Array.isArray(scope.departmentIds) ? scope.departmentIds.map(String) : [];
+      const teamIds = Array.isArray(scope.teamIds) ? scope.teamIds.map(String) : [];
+      const assignees = Array.isArray(scope.assignableUserIds)
+        ? scope.assignableUserIds.map(String)
+        : [];
+      if (divIds.length) or.push({ divisionId: { $in: divIds } });
+      if (deptIds.length) or.push({ departmentId: { $in: deptIds } });
+      if (teamIds.length) or.push({ teamId: { $in: teamIds } });
+      if (assignees.length) or.push({ assigneeId: { $in: assignees } });
+      if (!or.length) return { ...base, assigneeId: uid };
+      return { ...base, $or: or };
+    }
     case 'department': {
       const or = [];
       const deptIds = Array.isArray(scope.departmentIds) ? scope.departmentIds.map(String) : [];
@@ -96,6 +111,19 @@ function userCanAccessTask(task, userId, scope) {
     const deptIds = new Set((scope.departmentIds || []).map(String));
     const teamIds = new Set((scope.teamIds || []).map(String));
     const assignees = new Set((scope.assignableUserIds || []).map(String));
+    if (deptId && deptIds.has(deptId)) return true;
+    if (teamId && teamIds.has(teamId)) return true;
+    if (assigneeId && assignees.has(assigneeId)) return true;
+    return false;
+  }
+
+  if (scope.visibility === 'division') {
+    const divIds = new Set((scope.divisionIds || []).map(String));
+    const deptIds = new Set((scope.departmentIds || []).map(String));
+    const teamIds = new Set((scope.teamIds || []).map(String));
+    const assignees = new Set((scope.assignableUserIds || []).map(String));
+    const divId = task.divisionId ? String(task.divisionId) : '';
+    if (divId && divIds.has(divId)) return true;
     if (deptId && deptIds.has(deptId)) return true;
     if (teamId && teamIds.has(teamId)) return true;
     if (assigneeId && assignees.has(assigneeId)) return true;

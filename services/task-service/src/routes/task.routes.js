@@ -2,6 +2,7 @@ const express = require('express');
 const internalGatewayAuth = require('/shared/middleware/internalGatewayAuth');
 const router = express.Router();
 const taskController = require('../controllers/task.controller');
+const taskBoardRoutes = require('./taskBoard.routes');
 
 // Nội bộ: xóa toàn bộ task của tổ chức (organization-service khi owner xóa org)
 router.delete(
@@ -21,6 +22,9 @@ router.get('/statistics', taskController.getStatistics.bind(taskController));
 
 // Tạo task từ file chat (async queue)
 router.post('/from-chat-file', taskController.createTaskFromChatFile.bind(taskController));
+
+// Task boards — mount trước /:taskId (tránh GET /api/tasks/boards → getTaskById("boards") → 500)
+router.use('/boards', taskBoardRoutes);
 
 // Lấy task theo ID
 router.get('/:taskId', taskController.getTaskById.bind(taskController));

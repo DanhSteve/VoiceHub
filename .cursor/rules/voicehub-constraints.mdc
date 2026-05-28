@@ -17,3 +17,22 @@ alwaysApply: true
 - **Không sửa service/module ngoài scope task**: Ví dụ task chat/DM thì không refactor org-service, auth, gateway permissions trừ khi yêu cầu nói rõ. Sửa tối thiểu trong service sở hữu feature (thường `client/`, `chat-service`, `friend-service`, `socket-service` cho DM).
 - **Trước khi code**: Đọc route + `client/src/services/*` + `api-gateway` permissions liên quan; ưu tiên mở rộng handler hiện có thay vì file/route song song.
 - **Diff nhỏ**: Tránh drive-by refactor, đổi contract API công khai, hoặc đụng luồng ổn định (chat, voice, friend, org) khi không cần.
+
+## Dev LAN — `https://voicehub.local` (bắt buộc khi build plan perf từ wave-1b)
+
+Môi trường dev: máy khác trong WiFi truy cập qua **HTTPS + hostname** (Nginx `devops/nginx/dev-https.conf`), không qua IP:port trực tiếp. IP LAN có thể đổi theo DHCP — client dùng file **hosts** (`<IP-máy-dev> voicehub.local`), không hardcode IP trong code.
+
+**Trước khi implement** mọi plan từ [wave-1b](../plans/wave-1b-bootstrap-gateway.plan.md) trở đi (và PR liên quan):
+
+| Phải | Không |
+|------|--------|
+| API browser: `VITE_API_URL=/api` (same-origin qua Nginx) | `axios`/`fetch` baseURL `http://localhost:3000` hoặc `http://<IP-LAN>:3000` |
+| Socket/voice dev: `VITE_SOCKET_USE_GATEWAY=true`; khi `https:` dùng `window.location.origin` (`SocketContext.jsx`, voice components) | Socket cố định `:3000` / `:3017` trên máy client LAN |
+| HMR qua Nginx: `VITE_HMR_HOST=voicehub.local`, `VITE_HMR_PROTOCOL=wss`, `VITE_HMR_CLIENT_PORT=443` | HMR trỏ `localhost:5173` khi user mở `https://voicehub.local` |
+| `VITE_ALLOWED_HOSTS` có `voicehub.local` (IP trong list chỉ phụ trợ mở thẳng `:5173`) | Giả định mọi người chỉ mở `127.0.0.1:5173` |
+| Link mời/redirect: `Origin` / slug (`memberController.resolveFrontendUrl`) | URL tuyệt đối gắn IP LAN hoặc localhost trong payload trả client |
+| Storage/CORS: origin `https://voicehub.local` khi đụng upload (`docs/firebase-storage-cors.json`) | Chỉ whitelist localhost |
+
+**Kiểm thử tối thiểu:** `devops/nginx/verify-lan-https.ps1 -BaseUrl https://voicehub.local` (sau khi có `hosts`); một máy LAN khác mở cùng URL. Chi tiết: [docs/lan-https-voicehub.local.md](../../docs/lan-https-voicehub.local.md).
+
+**Gateway BFF / bootstrap (1b, 3d):** client chỉ gọi `/api/...` relative; gọi nội bộ gateway → service vẫn dùng URL Docker (`http://*-service:port`), không đổi vì browser đổi IP.

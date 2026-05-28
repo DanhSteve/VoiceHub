@@ -4,20 +4,38 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
 import { GradientButton, NotificationModal } from '../../components/Shared';
-import { getUserDisplayName, getInitials, getAvatarColor, formatBirthDateSafe } from '../../utils/helpers';
+import UserAvatar from '../Shared/UserAvatar';
+import AvatarCropModal from './AvatarCropModal';
+import {
+  getUserDisplayName,
+  formatBirthDateSafe,
+  mergeAuthUserFromProfile,
+  unwrapApiData,
+} from '../../utils/helpers';
+import { AVATAR_FILE_ACCEPT } from '../../utils/avatarDisplay';
 import { useAppStrings } from '../../locales/appStrings';
+import { notify } from '../../utils/appToast';
 
 function ProfileModal({ isOpen, onClose }) {
-  const { user: authUser } = useAuth();
+  const { user: authUser, updateUser } = useAuth();
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
-  const [form, setForm] = useState({ displayName: '', bio: '', phone: '', status: 'online', isInvisible: false });
+  const [form, setForm] = useState({
+    displayName: '',
+    bio: '',
+    phone: '',
+    location: '',
+    status: 'online',
+    isInvisible: false,
+  });
   const [activeProfileTab, setActiveProfileTab] = useState('main');
   const [notice, setNotice] = useState(null);
+  const [avatarCrop, setAvatarCrop] = useState(null);
+  const [avatarCacheBust, setAvatarCacheBust] = useState(null);
 
   const inputClass =
     'w-full rounded-xl border px-4 py-3 outline-none transition-all ' +
@@ -76,7 +94,6 @@ function ProfileModal({ isOpen, onClose }) {
   const previewBioClass = isDarkMode
     ? 'h-24 overflow-hidden rounded-xl border border-white/5 bg-black/40 p-3 text-xs text-gray-300'
     : 'h-24 overflow-hidden rounded-xl border border-slate-200 bg-white/90 p-3 text-xs text-slate-600';
-  const avatarRing = isDarkMode ? 'border-slate-900' : 'border-white';
   const avatarOverlay = isDarkMode
     ? 'absolute inset-0 flex cursor-pointer flex-col items-center justify-center rounded-full bg-black/50 text-center text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100'
     : 'absolute inset-0 flex cursor-pointer flex-col items-center justify-center rounded-full bg-slate-900/45 text-center text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100';
@@ -94,16 +111,11 @@ function ProfileModal({ isOpen, onClose }) {
     });
   }, [t]);
 
-  const unwrapProfilePayload = (payload) => {
-    const body = payload?.data ?? payload;
-    return body?.data ?? body;
-  };
-
   const fetchProfile = useCallback(async () => {
     try {
       setLoading(true);
       const res = await api.get('/users/me');
-      const data = unwrapProfilePayload(res);
+      const data = unwrapApiData(res);
       setProfile(data);
       const phoneValue =
         data?.phone ??
@@ -113,10 +125,14 @@ function ProfileModal({ isOpen, onClose }) {
         data?.mobile ??
         data?.profile?.mobile ??
         '';
+      const bioRaw = data?.bio ?? '';
+      const bioPlain =
+        typeof bioRaw === 'string' && bioRaw.startsWith('enc:v1:') ? '' : bioRaw;
       setForm({
         displayName: data?.displayName ?? data?.username ?? '',
-        bio: data?.bio ?? '',
+        bio: bioPlain,
         phone: phoneValue,
+        location: data?.location ?? '',
         status: data?.status ?? 'online',
         isInvisible: data?.isInvisible ?? false,
       });
@@ -131,23 +147,39 @@ function ProfileModal({ isOpen, onClose }) {
   useEffect(() => {
     if (isOpen) {
       fetchProfile();
+    } else {
+      setNotice(null);
     }
   }, [isOpen, fetchProfile]);
+
+  useEffect(() => {
+    if (isOpen) return undefined;
+    return () => {
+      setAvatarCrop((prev) => {
+        if (prev?.src) URL.revokeObjectURL(prev.src);
+        return null;
+      });
+    };
+  }, [isOpen]);
 
   const handleSaveProfile = async () => {
     try {
       setSaving(true);
       const res = await api.patch('/users/me', {
         displayName: form.displayName?.trim() || undefined,
-        bio: form.bio?.trim() || undefined,
+        bio: form.bio?.trim() ?? undefined,
         phone: form.phone?.trim() || undefined,
+        location: form.location?.trim() || undefined,
         status: form.status,
         isInvisible: form.isInvisible,
       });
-      const updated = unwrapProfilePayload(res);
+      const updated = unwrapApiData(res);
       setProfile(updated);
-      showNotice(t('profileModal.saveOk'), 'success');
-      if (onClose) onClose();
+      if (authUser) {
+        updateUser(mergeAuthUserFromProfile(authUser, updated));
+      }
+      notify.success(t('profileModal.saveOk'));
+      onClose?.();
     } catch (err) {
       showNotice(err?.message || t('profileModal.saveFail'), 'fail');
     } finally {
@@ -157,44 +189,56 @@ function ProfileModal({ isOpen, onClose }) {
 
   const displayName = profile?.displayName || profile?.username || getUserDisplayName(authUser);
   const email = profile?.email || authUser?.email;
-  const initials = getInitials(displayName || email || 'U');
-  const avatarColor = getAvatarColor(displayName || email);
 
-  const handleAvatarChange = async (event) => {
+  const handleAvatarFilePick = (event) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
+    const okMime = file.type.startsWith('image/') || file.type === 'application/octet-stream';
+    const okExt = /\.(jpe?g|png|gif|webp|bmp|svg|ico|avif|heic|heif)$/i.test(file.name || '');
+    if (!okMime && !okExt) {
       showNotice(t('profileModal.imageOnly'), 'fail');
       return;
     }
 
+    if (avatarCrop?.src) URL.revokeObjectURL(avatarCrop.src);
+    setAvatarCrop({ src: URL.createObjectURL(file) });
+  };
+
+  const handleAvatarCropClose = () => {
+    if (avatarCrop?.src) URL.revokeObjectURL(avatarCrop.src);
+    setAvatarCrop(null);
+  };
+
+  const handleAvatarCropApply = async (blob) => {
     try {
       setAvatarUploading(true);
       const formData = new FormData();
-      formData.append('avatar', file);
+      formData.append('avatar', blob, 'avatar.jpg');
 
-      const res = await api.post('/users/avatar', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      const data = res?.data || res;
-      const avatarUrl = data?.avatarUrl || data?.data?.avatarUrl;
+      const res = await api.post('/users/avatar', formData);
+      const updated = unwrapApiData(res);
+      const avatarUrl = updated?.avatar || updated?.avatarUrl;
 
       if (!avatarUrl) {
         showNotice(t('profileModal.avatarUrlMissing'), 'fail');
         return;
       }
 
-      setProfile((prev) => (prev ? { ...prev, avatar: avatarUrl } : prev));
-      showNotice(t('profileModal.avatarOk'), 'success');
+      const bust = Date.now();
+      setAvatarCacheBust(bust);
+      const merged = { ...updated, avatar: avatarUrl };
+      setProfile((prev) => (prev ? { ...prev, ...merged } : merged));
+      if (authUser) {
+        updateUser(mergeAuthUserFromProfile(authUser, merged, { avatarBust: bust }));
+      }
+      notify.success(t('profileModal.avatarOk'));
+      handleAvatarCropClose();
     } catch (error) {
       showNotice(error?.message || t('profileModal.avatarUploadFail'), 'fail');
     } finally {
       setAvatarUploading(false);
-      event.target.value = '';
     }
   };
 
@@ -293,6 +337,17 @@ function ProfileModal({ isOpen, onClose }) {
                     onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
                     className={inputClass}
                     placeholder={t('profileModal.phonePh')}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>{t('profileModal.location')}</label>
+                  <input
+                    type="text"
+                    value={form.location}
+                    onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
+                    className={inputClass}
+                    placeholder={t('profileModal.locationPh')}
+                    maxLength={200}
                   />
                 </div>
               </>
@@ -478,13 +533,22 @@ function ProfileModal({ isOpen, onClose }) {
             <div className={previewCardClass}>
               <div className="flex items-center gap-4">
                 <div className="group relative cursor-pointer">
-                  <div className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl font-bold text-white ${avatarColor}`}>
-                    {profile?.avatar ? <img src={profile.avatar} alt="" className="h-full w-full rounded-full object-cover" /> : initials}
-                  </div>
-                  <span className={`absolute -bottom-1 -right-1 h-5 w-5 rounded-full border-2 ${avatarRing} bg-green-500`} />
+                  <UserAvatar
+                    avatar={profile?.avatar}
+                    name={displayName || email || 'U'}
+                    size="profile"
+                    showOnline
+                    status={form.status === 'online' && !form.isInvisible ? 'online' : 'offline'}
+                    cacheBust={avatarCacheBust}
+                  />
                   <label className={`${avatarOverlay} whitespace-pre-line`}>
                     {avatarUploading ? t('profileModal.changeAvatarUploading') : t('profileModal.changeAvatarCta')}
-                    <input type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
+                    <input
+                      type="file"
+                      accept={AVATAR_FILE_ACCEPT}
+                      className="hidden"
+                      onChange={handleAvatarFilePick}
+                    />
                   </label>
                 </div>
                 <div className="min-w-0">
@@ -522,6 +586,19 @@ function ProfileModal({ isOpen, onClose }) {
         notice={notice}
         onClose={() => setNotice(null)}
         layerClassName="z-[99999]"
+      />
+      <AvatarCropModal
+        isOpen={Boolean(avatarCrop?.src)}
+        imageSrc={avatarCrop?.src}
+        isDarkMode={isDarkMode}
+        title={t('profileModal.cropAvatarTitle')}
+        resetLabel={t('profileModal.cropAvatarReset')}
+        cancelLabel={t('profileModal.cropAvatarCancel')}
+        applyLabel={t('profileModal.cropAvatarApply')}
+        hint={t('profileModal.cropAvatarHint')}
+        applying={avatarUploading}
+        onClose={handleAvatarCropClose}
+        onApply={handleAvatarCropApply}
       />
     </div>
   );

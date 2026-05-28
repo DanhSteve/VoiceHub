@@ -64,7 +64,7 @@ const authService = {
   /* ----- REGISTER: Đăng ký user mới -----
      
      Gọi: POST /auth/register
-     Body: { name, email, password }
+     Body: { firstName, lastName, email, password, dateOfBirth (YYYY-MM-DD) }
      Return: { token, user: { id, name, email, avatar } }
      
      Được gọi từ: AuthContext.register()
@@ -124,15 +124,17 @@ const authService = {
      - Cần refresh user info
      - Sau khi update profile */
   getCurrentUser: async () => {
-    // 1) Xác thực JWT trước qua auth-service — 401 thật thì interceptor vẫn logout đúng.
-    // 2) Sau đó thử user-service profile; lỗi /users/me không được xóa token toàn cục (skipGlobalAuthFailure).
-    const authRes = await api.get('/auth/me');
-    try {
-      const profileRes = await api.get('/users/me', { skipGlobalAuthFailure: true });
-      return profileRes;
-    } catch {
-      return authRes;
+    const [authSettled, profileSettled] = await Promise.allSettled([
+      api.get('/auth/me'),
+      api.get('/users/me', { skipGlobalAuthFailure: true }),
+    ]);
+    if (profileSettled.status === 'fulfilled') {
+      return profileSettled.value;
     }
+    if (authSettled.status === 'fulfilled') {
+      return authSettled.value;
+    }
+    throw authSettled.reason || profileSettled.reason;
   },
 
   /* ----- UPDATE PROFILE: Cập nhật thông tin cá nhân -----

@@ -40,10 +40,32 @@ const taskSchema = new mongoose.Schema(
       ref: 'Department',
       default: null,
     },
+    divisionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Division',
+      default: null,
+    },
     teamId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Team',
       default: null,
+    },
+    boardId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaskBoard',
+      default: null,
+      index: true,
+    },
+    listId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaskBoardList',
+      default: null,
+      index: true,
+    },
+    position: {
+      type: Number,
+      default: 1000,
+      index: true,
     },
     departmentName: {
       type: String,
@@ -118,8 +140,11 @@ const taskSchema = new mongoose.Schema(
 // Indexes
 taskSchema.index({ assigneeId: 1, status: 1 });
 taskSchema.index({ organizationId: 1, status: 1 });
+taskSchema.index({ organizationId: 1, divisionId: 1, status: 1 });
 taskSchema.index({ organizationId: 1, departmentId: 1, status: 1 });
 taskSchema.index({ organizationId: 1, teamId: 1, status: 1 });
+taskSchema.index({ boardId: 1, listId: 1, position: 1, isActive: 1 });
+taskSchema.index({ boardId: 1, status: 1, createdAt: -1 });
 taskSchema.index({ serverId: 1 });
 taskSchema.index({ createdBy: 1 });
 taskSchema.index({ dueDate: 1 });
