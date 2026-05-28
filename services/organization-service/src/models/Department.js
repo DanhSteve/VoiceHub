@@ -22,7 +22,7 @@ const departmentSchema = new mongoose.Schema(
     division: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Division',
-      default: null,
+      required: true,
       index: true,
     },
     head: {

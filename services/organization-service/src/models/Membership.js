@@ -17,26 +17,6 @@ const membershipSchema = new mongoose.Schema(
       enum: ['owner', 'admin', 'hr', 'member'],
       default: 'member',
     },
-    department: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Department',
-      default: null,
-    },
-    branch: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Branch',
-      default: null,
-    },
-    division: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Division',
-      default: null,
-    },
-    team: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Team',
-      default: null,
-    },
     joinedAt: {
       type: Date,
       default: Date.now,

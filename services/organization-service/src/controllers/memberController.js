@@ -5,12 +5,7 @@ const Branch = require('../models/Branch');
 const Division = require('../models/Division');
 const Team = require('../models/Team');
 const Department = require('../models/Department');
-const {
-  fetchUserRoleNamesInOrg,
-  resolveMemberPlacementScope,
-  placementsMatch,
-  buildSuffixToIdMap,
-} = require('../utils/memberPlacementScope');
+const { resolveEffectiveScopesFromAssignments } = require('../services/memberScopePolicy.service');
 const { resolveOrgAccess } = require('../utils/orgAccess');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
@@ -210,7 +205,7 @@ async function listMembersForOrg(req) {
   }
 
   const members = await Membership.find({ organization: orgId, status: 'active' })
-    .select('user organization role department branch division team joinedAt status invitedBy createdAt updatedAt')
+    .select('user organization role joinedAt status invitedBy createdAt updatedAt')
     .lean();
 
   const viewerRole = Membership.normalizeRole(viewerMembership.role);
@@ -218,64 +213,50 @@ async function listMembersForOrg(req) {
     return members;
   }
 
-  const teamIds = [
-    ...new Set(
-      [viewerMembership, ...members]
-        .map((row) => (row?.team ? String(row.team) : ''))
-        .filter(Boolean)
-    ),
-  ];
-  const teams =
-    teamIds.length > 0
-      ? await Team.find({ _id: { $in: teamIds }, organization: orgId })
-          .select('_id division department')
-          .lean()
-      : [];
-  const teamById = new Map(teams.map((team) => [String(team._id), team]));
-
-  const [divisions, departments, viewerRoleNames] = await Promise.all([
-    Division.find({ organization: orgId }).select('_id name').lean(),
-    Department.find({ organization: orgId }).select('_id name division').lean(),
-    fetchUserRoleNamesInOrg(userId, orgId),
-  ]);
-
-  const scopeContext = {
-    divisionBySuffix: buildSuffixToIdMap(divisions),
-    departmentBySuffix: buildSuffixToIdMap(departments),
-    divisions,
-    departments,
-  };
-
-  const viewerPlacement = resolveMemberPlacementScope(
-    viewerMembership,
-    teamById,
-    viewerRoleNames,
-    scopeContext
-  );
+  const viewerEffectiveScopes = await resolveEffectiveScopesFromAssignments(orgId, userId);
 
   const memberUserIds = [
     ...new Set(members.map((row) => String(row.user?._id || row.user || '')).filter(Boolean)),
   ];
-  const roleNamesByUserId = new Map();
+  const scopeByUserId = new Map();
   await Promise.all(
     memberUserIds.map(async (uid) => {
-      const names = uid === userId ? viewerRoleNames : await fetchUserRoleNamesInOrg(uid, orgId);
-      roleNamesByUserId.set(uid, names);
+      const scopes =
+        uid === userId ? viewerEffectiveScopes : await resolveEffectiveScopesFromAssignments(orgId, uid);
+      scopeByUserId.set(uid, scopes);
     })
   );
 
-  return members.filter((member) => {
+  const filtered = members.filter((member) => {
     const memberUserId = String(member.user?._id || member.user || '');
     if (memberUserId === userId) return true;
-    if (!viewerPlacement.divisionId || !viewerPlacement.departmentId) return false;
-    const memberRoleNames = roleNamesByUserId.get(memberUserId) || [];
-    const memberPlacement = resolveMemberPlacementScope(
-      member,
-      teamById,
-      memberRoleNames,
-      scopeContext
-    );
-    return placementsMatch(viewerPlacement, memberPlacement);
+    const memberScopes = scopeByUserId.get(memberUserId);
+    if (!memberScopes) return false;
+    for (const tid of viewerEffectiveScopes.teamIds) {
+      if (memberScopes.teamIds.has(String(tid))) return true;
+    }
+    for (const did of viewerEffectiveScopes.departmentIds) {
+      if (memberScopes.departmentIds.has(String(did))) return true;
+    }
+    for (const vid of viewerEffectiveScopes.divisionIds) {
+      if (memberScopes.divisionIds.has(String(vid))) return true;
+    }
+    return false;
+  });
+
+  return filtered.map((member) => {
+    const memberUserId = String(member.user?._id || member.user || '');
+    const scopes = scopeByUserId.get(memberUserId);
+    const teamId = scopes?.teamIds?.values?.().next?.().value || null;
+    const departmentId = scopes?.departmentIds?.values?.().next?.().value || null;
+    const divisionId = scopes?.divisionIds?.values?.().next?.().value || null;
+    return {
+      ...member,
+      team: teamId ? String(teamId) : null,
+      department: departmentId ? String(departmentId) : null,
+      division: divisionId ? String(divisionId) : null,
+      branch: null,
+    };
   });
 }
 
@@ -693,8 +674,6 @@ exports.joinViaLink = async (req, res, next) => {
         organization: req.params.orgId,
         role: 'member',
         status: 'active',
-        branch: inviteContext?.branchId || null,
-        division: inviteContext?.divisionId || null,
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
@@ -738,7 +717,7 @@ exports.joinViaLink = async (req, res, next) => {
 
 exports.updateMemberRole = async (req, res, next) => {
   try {
-    const { role, department, team } = req.body;
+    const { role } = req.body;
     const requesterId = req.user?.id || req.user?.userId || req.user?._id;
     const requesterMembership = await Membership.findOne({
       user: requesterId,
@@ -787,7 +766,7 @@ exports.updateMemberRole = async (req, res, next) => {
 
     const membership = await Membership.findOneAndUpdate(
       { user: req.params.userId, organization: req.params.orgId },
-      { role: normalizedRole, department, team },
+      { role: normalizedRole },
       { new: true }
     );
 

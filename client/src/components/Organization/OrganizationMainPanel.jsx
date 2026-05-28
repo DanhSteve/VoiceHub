@@ -48,6 +48,14 @@ import { loadVoiceAudioPrefs } from '../../pages/Voice/voiceAudioPrefs';
 import { entShell, roleBadgeClass, roleBadgeLabel } from '../../theme/enterpriseWorkspace';
 import { parseMessageMentions } from '../../utils/parseMessageMentions';
 import { collectMentionLabelsFromContacts } from '../../utils/tokenizeMessageMentions';
+import {
+  taskAPI,
+  unwrapTaskApiPayload,
+  unwrapTaskBoardDetailPayload,
+  unwrapTaskBoardListPayload,
+} from '../../services/api/taskAPI';
+import CreateTaskBoardModal from './CreateTaskBoardModal';
+import TaskBoardWorkspacePanel from './TaskBoardWorkspacePanel';
 
 function messageDayKey(iso) {
   if (!iso) return '';
@@ -146,6 +154,9 @@ const OrganizationMainPanel = ({
   onCreateDepartment,
   onCreateChannel,
   onOpenChannelSettings,
+  onOpenDivisionSettings,
+  onOpenDepartmentSettings,
+  onOpenTeamSettings,
   onSendChatOption,
   chatContacts = [],
   loadingChatContacts = false,
@@ -188,6 +199,8 @@ const OrganizationMainPanel = ({
   onRegisterVoiceComposerHelpers,
   /** Gắn emoji vào ô nhập đang active (text hoặc voice sidebar) */
   onAppendComposerEmoji,
+  onCreateTaskBoardFromTeamMenu,
+  initialTaskBoardTeam = null,
 }) => {
   const { locale } = useLocale();
   const { t } = useAppStrings();
@@ -258,6 +271,15 @@ const OrganizationMainPanel = ({
   const [taskSearchQuery, setTaskSearchQuery] = useState('');
   const [taskDepartmentFilter, setTaskDepartmentFilter] = useState('all');
   const [taskCreateOpen, setTaskCreateOpen] = useState(false);
+  const [taskBoardCreateOpen, setTaskBoardCreateOpen] = useState(false);
+  const [creatingTaskBoard, setCreatingTaskBoard] = useState(false);
+  const [taskBoards, setTaskBoards] = useState([]);
+  const [loadingTaskBoards, setLoadingTaskBoards] = useState(false);
+  const [selectedTaskBoardId, setSelectedTaskBoardId] = useState('');
+  const [taskBoardDetail, setTaskBoardDetail] = useState(null);
+  const [accessibleTaskBoards, setAccessibleTaskBoards] = useState([]);
+  const [loadingTaskBoardDetail, setLoadingTaskBoardDetail] = useState(false);
+  const [taskBoardTeam, setTaskBoardTeam] = useState(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskForm, setTaskForm] = useState({
     title: '',
@@ -521,7 +543,227 @@ const OrganizationMainPanel = ({
   }, [workspaceTasks]);
 
 
-  const orgIdForTask = selectedOrganization?._id || selectedOrganization?.id || null;
+  const orgIdForTask =
+    organizationId || selectedOrganization?._id || selectedOrganization?.id || null;
+  useEffect(() => {
+    if (!initialTaskBoardTeam) return;
+    setTaskBoardTeam(initialTaskBoardTeam);
+    setTaskBoardCreateOpen(true);
+  }, [initialTaskBoardTeam]);
+
+  const loadTaskBoards = useCallback(async () => {
+    if (!orgIdForTask) {
+      setTaskBoards([]);
+      setSelectedTaskBoardId('');
+      setTaskBoardDetail(null);
+      return;
+    }
+    setLoadingTaskBoards(true);
+    try {
+      const filters = { organizationId: String(orgIdForTask) };
+      if (selectedTeamId) filters.teamId = String(selectedTeamId);
+      const res = await taskAPI.getBoards(filters);
+      const list = unwrapTaskBoardListPayload(res);
+      setTaskBoards(list);
+      if (!list.some((b) => String(b._id) === String(selectedTaskBoardId))) {
+        setSelectedTaskBoardId(list[0]?._id ? String(list[0]._id) : '');
+      }
+    } catch (err) {
+      setTaskBoards([]);
+      toast.error(err?.response?.data?.message || 'Không tải được Task Board');
+    } finally {
+      setLoadingTaskBoards(false);
+    }
+  }, [orgIdForTask, selectedTeamId, organizationId, selectedTaskBoardId]);
+
+  const loadTaskBoardDetail = useCallback(async (boardId, options = {}) => {
+    const silent = Boolean(options?.silent);
+    if (!boardId) {
+      setTaskBoardDetail(null);
+      return;
+    }
+    if (!silent) setLoadingTaskBoardDetail(true);
+    try {
+      const res = await taskAPI.getBoardDetail(String(boardId));
+      setTaskBoardDetail(unwrapTaskBoardDetailPayload(res));
+    } catch (err) {
+      setTaskBoardDetail(null);
+      toast.error(err?.response?.data?.message || err?.message || 'Không tải được chi tiết Task Board');
+    } finally {
+      if (!silent) setLoadingTaskBoardDetail(false);
+    }
+  }, []);
+
+  const loadAccessibleTaskBoards = useCallback(async () => {
+    if (!orgIdForTask) {
+      setAccessibleTaskBoards([]);
+      return;
+    }
+    try {
+      const res = await taskAPI.getBoards({ organizationId: String(orgIdForTask) });
+      setAccessibleTaskBoards(unwrapTaskBoardListPayload(res));
+    } catch {
+      setAccessibleTaskBoards([]);
+    }
+  }, [orgIdForTask]);
+
+  useEffect(() => {
+    if (workspaceTab !== 'tasks') return;
+    loadTaskBoards();
+    loadAccessibleTaskBoards();
+  }, [workspaceTab, loadTaskBoards, loadAccessibleTaskBoards]);
+
+  useEffect(() => {
+    if (workspaceTab !== 'tasks') return;
+    loadTaskBoardDetail(selectedTaskBoardId);
+  }, [workspaceTab, selectedTaskBoardId, loadTaskBoardDetail]);
+
+  const refreshTaskBoardView = useCallback(async () => {
+    if (!selectedTaskBoardId) return;
+    await loadTaskBoardDetail(selectedTaskBoardId, { silent: true });
+  }, [selectedTaskBoardId, loadTaskBoardDetail]);
+
+  const handleReorderBoardList = useCallback(
+    async (listId, position) => {
+      if (!selectedTaskBoardId || !listId) return;
+      let rollbackLists = null;
+      try {
+        setTaskBoardDetail((prev) => {
+          if (!prev?.lists) return prev;
+          const source = [...prev.lists];
+          rollbackLists = source;
+          const ids = source.map((l) => String(l._id));
+          const fromIdx = ids.indexOf(String(listId));
+          if (fromIdx < 0) return prev;
+          const next = source.filter((l) => String(l._id) !== String(listId));
+          const targetIdx = Math.max(0, Math.min(Number(position || 1) - 1, next.length));
+          next.splice(targetIdx, 0, source[fromIdx]);
+          return {
+            ...prev,
+            lists: next.map((l, idx) => ({ ...l, order: (idx + 1) * 1000 })),
+          };
+        });
+        await taskAPI.reorderBoardList(String(selectedTaskBoardId), String(listId), {
+          position,
+        });
+      } catch (err) {
+        if (rollbackLists) {
+          setTaskBoardDetail((prev) => (prev ? { ...prev, lists: rollbackLists } : prev));
+        }
+        toast.error(err?.response?.data?.message || 'Không thể sắp xếp danh sách');
+      }
+    },
+    [selectedTaskBoardId]
+  );
+
+  const handleCreateTaskBoard = async (payload) => {
+    if (!orgIdForTask || !taskBoardTeam?._id) return;
+    setCreatingTaskBoard(true);
+    try {
+      const scopeType = String(taskBoardTeam.scopeType || 'team').toLowerCase();
+      const res = await taskAPI.createBoard({
+        organizationId: String(orgIdForTask),
+        ...(scopeType === 'team'
+          ? { teamId: String(taskBoardTeam._id) }
+          : { scopeType, scopeId: String(taskBoardTeam._id) }),
+        ...payload,
+      });
+      const board = unwrapTaskApiPayload(res);
+      setTaskBoardCreateOpen(false);
+      await loadTaskBoards();
+      if (board?._id) setSelectedTaskBoardId(String(board._id));
+      onCreateTaskBoardFromTeamMenu?.(null);
+      toast.success('Tạo Task Board thành công');
+    } catch (err) {
+      toast.error(err?.response?.data?.message || err?.message || 'Không tạo được Task Board');
+    } finally {
+      setCreatingTaskBoard(false);
+    }
+  };
+
+  const handleAddBoardList = async (title) => {
+    if (!selectedTaskBoardId) return null;
+    try {
+      const res = await taskAPI.createBoardList(selectedTaskBoardId, { title });
+      const list = unwrapTaskApiPayload(res);
+      if (list?._id) {
+        setTaskBoardDetail((prev) => {
+          if (!prev) return prev;
+          const lists = [...(Array.isArray(prev.lists) ? prev.lists : []), list].sort(
+            (a, b) => Number(a.order || 0) - Number(b.order || 0)
+          );
+          return { ...prev, lists };
+        });
+        return list;
+      }
+      await loadTaskBoardDetail(selectedTaskBoardId);
+      return null;
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Không thêm được danh sách');
+      throw err;
+    }
+  };
+
+  const handleAddBoardCard = async (listId, cardData) => {
+    if (!selectedTaskBoardId) return;
+    try {
+      const res = await taskAPI.createBoardCard(selectedTaskBoardId, cardData);
+      const card = unwrapTaskApiPayload(res);
+      if (!card?._id) return;
+      setTaskBoardDetail((prev) => {
+        if (!prev) return prev;
+        const cards = Array.isArray(prev.cards) ? [...prev.cards, card] : [card];
+        const lists = Array.isArray(prev.lists)
+          ? prev.lists.map((l) =>
+              String(l._id) === String(listId)
+                ? { ...l, cardCount: Number(l.cardCount || 0) + 1 }
+                : l
+            )
+          : prev.lists;
+        return { ...prev, cards, lists };
+      });
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Không thêm được công việc');
+    }
+  };
+
+  const handleMoveBoardCard = async (cardId, toListId, index) => {
+    if (!cardId || !toListId || !selectedTaskBoardId) return;
+    try {
+      const payload = { toListId: String(toListId) };
+      if (index != null && Number.isFinite(Number(index))) {
+        payload.index = Number(index);
+      }
+      await taskAPI.moveBoardCard(String(cardId), payload);
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Không thể chuyển card');
+      throw err;
+    }
+  };
+
+  const handleUpdateBoardCard = async (cardId, updates) => {
+    if (!cardId || !selectedTaskBoardId) return;
+    try {
+      const res = await taskAPI.updateBoardCard(String(cardId), updates || {});
+      const updated = unwrapTaskApiPayload(res);
+      setTaskBoardDetail((prev) => {
+        if (!prev?.cards) return prev;
+        const cards = prev.cards.map((c) =>
+          String(c._id) === String(cardId)
+            ? {
+                ...c,
+                ...(updates || {}),
+                ...(updated && typeof updated === 'object' ? updated : {}),
+              }
+            : c
+        );
+        return { ...prev, cards };
+      });
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Không thể cập nhật card');
+      throw err;
+    }
+  };
   const canCreateWorkspaceTask = Boolean(taskWorkspaceScope?.canCreateTask);
   const canUseAiWorkspaceTask = Boolean(taskWorkspaceScope?.canUseAiTask ?? taskWorkspaceScope?.canCreateTask);
 
@@ -948,9 +1190,17 @@ const OrganizationMainPanel = ({
               onSelectChannel={onSelectChannel}
               onCreateChannel={onCreateChannel}
               onOpenChannelSettings={onOpenChannelSettings}
+              onOpenDivisionSettings={onOpenDivisionSettings}
+              onOpenDepartmentSettings={onOpenDepartmentSettings}
+              onOpenTeamSettings={onOpenTeamSettings}
               canManageWorkspaceStructure={canManageWorkspaceStructure}
               canManageChannelRoleAccess={canManageChannelRoleAccess}
               canSeeAllStructure={canSeeAllStructure}
+              canCreateTaskBoard={canCreateWorkspaceTask}
+              onCreateTaskBoard={(team) => {
+                setTaskBoardTeam(team ? { ...team, scopeType: team.scopeType || 'team' } : null);
+                setTaskBoardCreateOpen(true);
+              }}
             />
           </div>
 
@@ -1042,7 +1292,34 @@ const OrganizationMainPanel = ({
                   </p>
                 ) : null}
               </div>
-              <div className="flex shrink-0 items-center gap-0.5">
+              <div className="flex shrink-0 items-center gap-2">
+                {workspaceTab === 'tasks' ? (
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={selectedTaskBoardId}
+                      onChange={(e) => setSelectedTaskBoardId(e.target.value)}
+                      className={`max-w-[200px] rounded-lg border px-2.5 py-1.5 text-xs font-medium outline-none sm:max-w-[240px] sm:text-sm ${
+                        isDarkMode
+                          ? 'border-white/15 bg-[#1a1d26] text-white'
+                          : 'border-slate-200 bg-white text-slate-900'
+                      }`}
+                      aria-label="Chọn Task Board"
+                    >
+                      <option value="">Chọn Task Board</option>
+                      {taskBoards.map((b) => (
+                        <option key={b._id} value={String(b._id)}>
+                          {b.title}
+                        </option>
+                      ))}
+                    </select>
+                    {loadingTaskBoards ? (
+                      <span className={`text-[10px] sm:text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Đang tải...
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="flex items-center gap-0.5">
                 <button
                   type="button"
                   title={t('orgPanel.workspaceSearchAria')}
@@ -1073,6 +1350,7 @@ const OrganizationMainPanel = ({
                 >
                   <Bell className="h-5 w-5" strokeWidth={2} />
                 </button>
+                </div>
               </div>
             </div>
           </header>
@@ -1100,141 +1378,26 @@ const OrganizationMainPanel = ({
                 fetchEnabled={notificationsFetchEnabled}
               />
             ) : workspaceTab === 'tasks' ? (
-              <div className="min-h-0 px-4 py-3">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold ${isDarkMode ? 'bg-[#5865F2]/25 text-white' : 'bg-indigo-100 text-indigo-800'}`}
-                    >
-                      <LayoutGrid className="h-3.5 w-3.5" />
-                      Bảng
-                    </button>
-                    <button
-                      type="button"
-                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold ${isDarkMode ? 'bg-white/[0.05] text-[#aab0bf]' : 'bg-slate-100 text-slate-600'}`}
-                    >
-                      <List className="h-3.5 w-3.5" />
-                      Danh sách
-                    </button>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div
-                      className={`flex items-center gap-2 rounded-xl px-3 py-2 ${isDarkMode ? 'bg-white/[0.04] text-[#9aa0ae]' : 'bg-white border border-slate-200 text-slate-600'}`}
-                    >
-                      <Search className="h-3.5 w-3.5" />
-                      <input
-                        value={taskSearchQuery}
-                        onChange={(e) => setTaskSearchQuery(e.target.value)}
-                        placeholder="Tìm task..."
-                        className={`w-40 bg-transparent text-xs outline-none ${isDarkMode ? 'placeholder:text-[#6d7380]' : 'placeholder:text-slate-400'}`}
-                      />
-
-                    </div>
-                    <div
-                      className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs ${isDarkMode ? 'bg-white/[0.04] text-[#aab0bf]' : 'bg-white border border-slate-200 text-slate-600'}`}
-                    >
-                      <Filter className="h-3.5 w-3.5" />
-                      <select
-                        value={taskDepartmentFilter}
-                        onChange={(e) => setTaskDepartmentFilter(e.target.value)}
-                        className="bg-transparent outline-none"
-                      >
-                        <option value="all">Tất cả phòng ban</option>
-                        {departments.map((department) => (
-                          <option key={department._id} value={String(department._id)}>
-                            {displayDepartmentName(department.name, locale)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {canCreateWorkspaceTask ? (
-
-                      <button
-                        type="button"
-                        onClickCapture={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          event.nativeEvent?.stopImmediatePropagation?.();
-                          openTaskCreateModal();
-                        }}
-                        onClick={() => openTaskCreateModal()}
-                        className="inline-flex items-center gap-1 rounded-lg bg-[#5865F2] px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        Tạo task mới
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-                {loadingWorkspaceTasks ? (
-                  <div
-                    className={`rounded-xl p-4 text-sm ${isDarkMode ? 'bg-white/5 text-gray-300' : 'bg-white/80 text-slate-600 shadow-sm'}`}
-                  >
-                    Loading tasks...
-                  </div>
-                ) : taskSummary.total === 0 ? (
-                  <div
-                    className={`rounded-xl border border-dashed p-6 text-sm ${isDarkMode ? 'border-white/10 bg-white/[0.03] text-[#9aa0ae]' : 'border-slate-300 bg-slate-50 text-slate-600'}`}
-                  >
-                    Chưa có task nào trong workspace này.
-                  </div>
-                ) : (
-                  <TasksKanbanDnd
-                    columns={taskColumns}
-                    getAssigneeLabel={(task) => taskAssigneeLabel(task)}
-                    onCardClick={() => {}}
-                    onDropOnColumn={(task, _fromCol, toCol) =>
-                      onMoveWorkspaceTask?.(task, mapDropColumnToStatus(toCol))
-                    }
-                    renderCardInner={(task) => (
-                      <div className="space-y-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <div
-                            className={`text-[10px] font-semibold uppercase tracking-wide ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}
-                          >
-                            {String(task?.departmentName || task?.department || 'General')}
-                          </div>
-                          <span
-                            className={`h-2 w-2 rounded-full ${String(task?.status || 'todo') === 'done' ? 'bg-emerald-400' : String(task?.status || 'todo') === 'review' ? 'bg-orange-400' : String(task?.status || 'todo') === 'in_progress' ? 'bg-cyan-400' : 'bg-slate-400'}`}
-                          />
-                        </div>
-                        <div
-                          className={`text-sm font-semibold leading-snug line-clamp-2 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-                        >
-                          {task?.title || 'Untitled task'}
-                        </div>
-                        <div className={`text-xs line-clamp-3 ${isDarkMode ? 'text-[#9aa0ae]' : 'text-slate-600'}`}>
-                          {task?.description || ''}
-                        </div>
-                        <div className="flex items-start justify-between gap-2">
-                          <div className={`space-y-0.5 text-[10px] ${isDarkMode ? 'text-[#9aa0ae]' : 'text-slate-600'}`}>
-                            <div>
-                              <span className={isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}>Giao: </span>
-                              <span className={isDarkMode ? 'text-violet-300' : 'text-violet-700'}>
-                                {taskAssignerLabel(task)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className={isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}>Làm: </span>
-                              <span className={isDarkMode ? 'text-cyan-300' : 'text-cyan-700'}>
-                                {taskAssigneeLabel(task)}
-                              </span>
-                            </div>
-                          </div>
-                          <div className={`text-right text-[10px] ${isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'}`}>
-                            {task?.dueDate
-                              ? new Date(task.dueDate).toLocaleDateString(locale === 'en' ? 'en-US' : 'vi-VN')
-                              : ''}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  />
-                )}
-              </div>
+              <TaskBoardWorkspacePanel
+                isDarkMode={isDarkMode}
+                boards={taskBoards}
+                accessibleBoards={accessibleTaskBoards}
+                selectedBoardId={selectedTaskBoardId}
+                boardDetail={taskBoardDetail}
+                boardBackground={
+                  taskBoardDetail?.board?.background ||
+                  taskBoards.find((b) => String(b._id) === String(selectedTaskBoardId))?.background ||
+                  ''
+                }
+                loadingBoards={loadingTaskBoards}
+                loadingBoardDetail={loadingTaskBoardDetail}
+                onAddList={handleAddBoardList}
+                onAddCard={handleAddBoardCard}
+                onMoveCard={handleMoveBoardCard}
+                onUpdateCard={handleUpdateBoardCard}
+                onReorderList={handleReorderBoardList}
+                onRefresh={refreshTaskBoardView}
+              />
             ) : isVoiceChannel ? (
                 selectedChannelId && (
                   <OrganizationVoiceChannelView
@@ -1824,13 +1987,33 @@ const OrganizationMainPanel = ({
         currentUserId={currentUserId}
         mentions={createTaskMentions}
         channelId={selectedChannelId ? String(selectedChannelId) : null}
+        teamId={selectedTeamId ? String(selectedTeamId) : null}
         messagePreview={
           createTaskSourceMessage ? plainTextForMessage(createTaskSourceMessage).slice(0, 500) : ''
         }
         onConfirmed={() => {
           toast.success(t('orgPanel.taskFromAiOk'));
           onWorkspaceTasksRefresh?.();
+          if (selectedTaskBoardId) loadTaskBoardDetail(selectedTaskBoardId);
         }}
+      />
+
+      <CreateTaskBoardModal
+        isOpen={taskBoardCreateOpen}
+        onClose={() => {
+          if (creatingTaskBoard) return;
+          setTaskBoardCreateOpen(false);
+          setTaskBoardTeam(null);
+          onCreateTaskBoardFromTeamMenu?.(null);
+        }}
+        defaultTeamName={taskBoardTeam?.name || ''}
+        defaultScopeLabel={
+          taskBoardTeam?.scopeType && taskBoardTeam?.name
+            ? `${taskBoardTeam.scopeType}: ${taskBoardTeam.name}`
+            : taskBoardTeam?.name || ''
+        }
+        creating={creatingTaskBoard}
+        onSubmit={handleCreateTaskBoard}
       />
 
       <Modal

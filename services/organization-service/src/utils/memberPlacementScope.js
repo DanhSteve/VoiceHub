@@ -1,4 +1,6 @@
 const axios = require('axios');
+const MULTI_PLACEMENT_READ =
+  String(process.env.RBAC_MULTI_PLACEMENT_READ || 'false').toLowerCase() === 'true';
 
 const ROLE_PERMISSION_BASE = String(
   process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015'
@@ -48,9 +50,9 @@ function extractScopedSuffixes(roleNames) {
   const teamSuffixes = new Set();
   for (const name of roleNames || []) {
     const lower = String(name || '').toLowerCase();
-    const divMatch = lower.match(/div_([a-f0-9]{6})/);
-    const depMatch = lower.match(/dep_([a-f0-9]{6})/);
-    const teamMatch = lower.match(/team_([a-f0-9]{6})/);
+    const divMatch = lower.match(/div_([a-z0-9_-]{6,})/);
+    const depMatch = lower.match(/dep_([a-z0-9_-]{6,})/);
+    const teamMatch = lower.match(/team_([a-z0-9_-]{6,})/);
     if (divMatch) divSuffixes.add(divMatch[1]);
     if (depMatch) depSuffixes.add(depMatch[1]);
     if (teamMatch) teamSuffixes.add(teamMatch[1]);
@@ -154,20 +156,15 @@ function resolvePlacementFromRoleTags(roleNames, divisionBySuffix, departmentByS
 
 function resolveMembershipPlacement(membership, teamById) {
   if (!membership) return { divisionId: null, departmentId: null };
-  const divisionId = membership.division ? String(membership.division) : null;
-  const departmentId = membership.department ? String(membership.department) : null;
-  if (divisionId && departmentId) {
-    return { divisionId, departmentId };
-  }
   const teamId = membership.team ? String(membership.team) : null;
   if (teamId && teamById?.has(teamId)) {
     const team = teamById.get(teamId);
     return {
-      divisionId: team?.division ? String(team.division) : divisionId,
-      departmentId: team?.department ? String(team.department) : departmentId,
+      divisionId: team?.division ? String(team.division) : null,
+      departmentId: team?.department ? String(team.department) : null,
     };
   }
-  return { divisionId, departmentId };
+  return { divisionId: null, departmentId: null };
 }
 
 /**
@@ -195,7 +192,7 @@ function resolveMemberPlacementScope(
 }
 
 function placementsMatch(a, b) {
-  if (!a?.divisionId || !a?.departmentId || !b?.departmentId || !b?.departmentId) return false;
+  if (!a?.divisionId || !a?.departmentId || !b?.divisionId || !b?.departmentId) return false;
   return a.divisionId === b.divisionId && a.departmentId === b.departmentId;
 }
 
@@ -269,9 +266,9 @@ function resolveUserHierarchyScopes(roleNames, { divisions = [], departments = [
 function getRoleHierarchyLevel(roleName) {
   const raw = String(roleName || '').trim();
   const lower = raw.toLowerCase();
-  if (/(?:^|\s)team_[a-f0-9]{6}\b/.test(lower)) return 'team';
-  if (/(?:^|\s)dep_[a-f0-9]{6}\b/.test(lower)) return 'department';
-  if (/(?:^|\s)div_[a-f0-9]{6}\b/.test(lower)) return 'division';
+  if (/(?:^|\s|[•·_-])team_[a-z0-9_-]{6,}\b/.test(lower)) return 'team';
+  if (/(?:^|\s|[•·_-])dep_[a-z0-9_-]{6,}\b/.test(lower)) return 'department';
+  if (/(?:^|\s|[•·_-])div_[a-z0-9_-]{6,}\b/.test(lower)) return 'division';
   if (/^\s*team\s+/i.test(raw)) return 'team';
   if (/^\s*(phòng ban|phong ban|phòng|phong)\s+/i.test(raw)) return 'department';
   if (/^\s*(phòng ban|phong ban|phòng|phong)\s*:/i.test(raw)) return 'department';
@@ -288,9 +285,9 @@ function resolveEntityIdForRoleLevel(roleName, level, divisions, departments, te
   const departmentBySuffix = buildSuffixToIdMap(departments);
   const teamBySuffix = buildSuffixToIdMap(teams);
   const lower = String(roleName || '').toLowerCase();
-  const divTag = lower.match(/(?:^|\s)div_([a-f0-9]{6})\b/);
-  const depTag = lower.match(/(?:^|\s)dep_([a-f0-9]{6})\b/);
-  const teamTag = lower.match(/(?:^|\s)team_([a-f0-9]{6})\b/);
+  const divTag = lower.match(/(?:^|\s|[•·_-])div_([a-z0-9_-]{6,})\b/);
+  const depTag = lower.match(/(?:^|\s|[•·_-])dep_([a-z0-9_-]{6,})\b/);
+  const teamTag = lower.match(/(?:^|\s|[•·_-])team_([a-z0-9_-]{6,})\b/);
 
   if (level === 'division') {
     if (divTag) {
@@ -374,7 +371,9 @@ function resolveStructureVisibilityFromRoles(roleNames, { divisions = [], depart
   }
 
   let mode = 'none';
-  if (levels.has('team')) mode = 'team';
+  if (MULTI_PLACEMENT_READ) {
+    if (levels.size > 0) mode = 'multi';
+  } else if (levels.has('team')) mode = 'team';
   else if (levels.has('department')) mode = 'department';
   else if (levels.has('division')) mode = 'division';
 
@@ -382,7 +381,23 @@ function resolveStructureVisibilityFromRoles(roleNames, { divisions = [], depart
   const outDepartments = new Set();
   const outTeams = new Set();
 
-  if (mode === 'team') {
+  if (mode === 'multi') {
+    for (const divId of divisionIds) outDivisions.add(divId);
+    for (const deptId of departmentIds) {
+      outDepartments.add(deptId);
+      const dept = departments.find((d) => String(d._id) === String(deptId));
+      if (dept?.division) outDivisions.add(String(dept.division));
+      for (const team of teams) {
+        if (String(team.department || '') === String(deptId)) outTeams.add(String(team._id));
+      }
+    }
+    for (const teamId of teamIds) {
+      outTeams.add(teamId);
+      const team = teams.find((t) => String(t._id) === String(teamId));
+      if (team?.department) outDepartments.add(String(team.department));
+      if (team?.division) outDivisions.add(String(team.division));
+    }
+  } else if (mode === 'team') {
     for (const teamId of teamIds) {
       outTeams.add(teamId);
       const team = teams.find((t) => String(t._id) === String(teamId));

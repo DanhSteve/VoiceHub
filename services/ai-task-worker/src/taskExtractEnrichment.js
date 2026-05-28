@@ -66,7 +66,7 @@ function parseMentionLabelsFromText(text, knownLabels = []) {
   return found;
 }
 
-async function fetchAiTaskContext({ organizationId, userIds, mentionLabels, channelId }) {
+async function fetchAiTaskContext({ organizationId, userIds, mentionLabels, channelId, messageText }) {
   if (!GATEWAY_INTERNAL_TOKEN) {
     console.warn('[ai-task-worker] GATEWAY_INTERNAL_TOKEN missing — cannot resolve org member context');
     return null;
@@ -78,6 +78,7 @@ async function fetchAiTaskContext({ organizationId, userIds, mentionLabels, chan
       userIds: userIds || [],
       mentionLabels: mentionLabels || [],
       channelId: channelId || undefined,
+      messageText: String(messageText || ''),
     },
     {
       headers: {

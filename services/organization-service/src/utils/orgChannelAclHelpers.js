@@ -77,6 +77,8 @@ function resolveEffectiveRolePerm(
   channel,
   roleId
 ) {
+  const explicitOnly =
+    String(process.env.RBAC_EXPLICIT_SCOPE_ONLY || 'false').toLowerCase() === 'true';
   const channelKey = String(channel._id);
   const fromChannel = channelRoleMap.get(channelKey)?.get(roleId);
   if (fromChannel && hasAnyRoleChannelPermission(fromChannel)) return fromChannel;
@@ -84,10 +86,12 @@ function resolveEffectiveRolePerm(
   const teamKey = String(channel.team || '');
   const fromTeam = teamKey ? teamRoleMap.get(teamKey)?.get(roleId) : null;
   if (fromTeam && hasAnyRoleChannelPermission(fromTeam)) return fromTeam;
+  if (explicitOnly && teamKey) return null;
 
   const depKey = String(channel.department || '');
   const fromDept = depKey ? departmentRoleMap.get(depKey)?.get(roleId) : null;
   if (fromDept && hasAnyRoleChannelPermission(fromDept)) return fromDept;
+  if (explicitOnly && depKey) return null;
 
   const divKey = String(channel.division || '');
   const fromDiv = divKey ? divisionRoleMap.get(divKey)?.get(roleId) : null;

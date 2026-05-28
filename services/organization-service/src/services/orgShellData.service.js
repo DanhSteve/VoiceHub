@@ -13,10 +13,15 @@ const { syncHierarchyRoles } = require('./hierarchyRoleSync');
 const { fetchUserRolesInOrg } = require('../utils/orgRoles');
 const { toObjectId } = require('../utils/orgAccess');
 const {
-  pickPrimaryPlacement,
   resolveStructureVisibilityFromRoles,
   channelInStructureVisibility,
+  resolveUserHierarchyScopes,
 } = require('../utils/memberPlacementScope');
+const {
+  isMultiPlacementReadEnabled,
+  resolveEffectiveScopesFromAssignments,
+  pickPrimaryScope,
+} = require('./memberScopePolicy.service');
 const {
   buildChannelRoleAclMap,
   buildScopeRoleAclMap,
@@ -129,10 +134,6 @@ async function buildAccessibleChannelData(userId, orgId, access) {
     access.membership ||
     ({
       role: 'member',
-      branch: null,
-      division: null,
-      department: null,
-      team: null,
     });
   const [channels, divisions, departments, teams] = await Promise.all([
     Channel.find({ organization: orgId, isActive: true })
@@ -163,6 +164,10 @@ async function buildAccessibleChannelData(userId, orgId, access) {
   const userRoles = await fetchUserRolesInOrg(userId, orgId);
   const userRoleIds = new Set(userRoles.map((r) => r.id));
   const roleNames = userRoles.map((r) => r.name);
+  const effectiveScopes =
+    isMultiPlacementReadEnabled() && userId
+      ? await resolveEffectiveScopesFromAssignments(orgId, userId)
+      : resolveUserHierarchyScopes(roleNames, { divisions, departments, teams });
   const [channelRoleAclRows, scopeRoleAclRows] = await Promise.all([
     ChannelRoleAccess.find({ organization: orgId }).select('channel roleId permissions').lean(),
     ScopeRoleAccess.find({ organization: orgId }).select('scopeType scopeId roleId permissions').lean(),
@@ -195,7 +200,17 @@ async function buildAccessibleChannelData(userId, orgId, access) {
   };
 
   const structureVisibility = !isStructureAdmin
-    ? resolveStructureVisibilityFromRoles(roleNames, { divisions, departments, teams })
+    ? isMultiPlacementReadEnabled()
+      ? {
+          mode:
+            effectiveScopes.teamIds.size || effectiveScopes.departmentIds.size || effectiveScopes.divisionIds.size
+              ? 'multi'
+              : 'none',
+          divisionIds: new Set(effectiveScopes.divisionIds),
+          departmentIds: new Set(effectiveScopes.departmentIds),
+          teamIds: new Set(effectiveScopes.teamIds),
+        }
+      : resolveStructureVisibilityFromRoles(roleNames, { divisions, departments, teams })
     : { mode: 'all', divisionIds: new Set(), departmentIds: new Set(), teamIds: new Set() };
 
   for (const ch of channels) {
@@ -262,10 +277,13 @@ async function buildAccessibleChannelData(userId, orgId, access) {
       }
     }
 
-    const inStructure =
-      isStructureAdmin || channelInStructureVisibility(ch, structureVisibility);
-    if (inStructure && !isStructureAdmin) {
-      canSee = true;
+    const inStructure = isStructureAdmin || channelInStructureVisibility(ch, structureVisibility);
+    if (!inStructure && !isStructureAdmin) {
+      canSee = false;
+      canRead = false;
+      canWrite = false;
+      canDelete = false;
+      canVoice = false;
     }
 
     const visible = canSee || canRead;
@@ -329,22 +347,15 @@ async function buildAccessibleChannelData(userId, orgId, access) {
       }
     }
 
-    rolePlacement = pickPrimaryPlacement(structureVisibility, {
-      teams,
-      departments,
-      roleNames,
-    });
+    rolePlacement = pickPrimaryScope(structureVisibility);
   } else {
     structureMode = 'all';
   }
 
-  const scopeBranchId =
-    rolePlacement.branchId || (membership.branch ? String(membership.branch) : null);
-  const scopeDivisionId =
-    rolePlacement.divisionId || (membership.division ? String(membership.division) : null);
-  const scopeDepartmentId =
-    rolePlacement.departmentId || (membership.department ? String(membership.department) : null);
-  const scopeTeamId = rolePlacement.teamId || (membership.team ? String(membership.team) : null);
+  const scopeBranchId = rolePlacement.branchId || null;
+  const scopeDivisionId = rolePlacement.divisionId || null;
+  const scopeDepartmentId = rolePlacement.departmentId || null;
+  const scopeTeamId = rolePlacement.teamId || null;
 
   return {
     channelIds,

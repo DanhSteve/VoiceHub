@@ -87,7 +87,7 @@ function resolveTrustedAssigneeId(extraction, bodyAssigneeId) {
 }
 
 router.post('/confirm', async (req, res) => {
-  const { extractionId, assigneeId: bodyAssigneeId } = req.body || {};
+  const { extractionId, assigneeId: bodyAssigneeId, boardId, listId } = req.body || {};
   const userId = req.user?.id || req.headers['x-user-id'];
   const idemKey = String(req.headers['idempotency-key'] || req.body?.idempotencyKey || '').trim();
 
@@ -116,31 +116,64 @@ router.post('/confirm', async (req, res) => {
 
   const taskServiceUrl = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
   const draft = extraction.draft || {};
+  if (!draft.dueDate) {
+    return res.status(422).json({
+      success: false,
+      message: 'Tin nhắn chưa có deadline rõ ngày/giờ nên chưa thể tạo task tự động',
+    });
+  }
   const assigneeId = resolveTrustedAssigneeId(extraction, bodyAssigneeId);
+  const attachments = Array.isArray(draft.attachments) ? draft.attachments : [];
 
-  const createRes = await axios.post(
-    `${taskServiceUrl}/api/tasks`,
-    {
-      title: draft.title || 'Task từ AI',
-      summary: draft.summary || '',
-      description: draft.description || '',
-      organizationId: String(extraction.organizationId),
-      priority: draft.priority || 'medium',
-      dueDate: draft.dueDate || null,
-      tags: Array.isArray(draft.tags) ? draft.tags : [],
-      assigneeId: assigneeId || undefined,
-      departmentId: draft.departmentId || undefined,
-      teamId: draft.teamId || undefined,
-      departmentName: draft.departmentName || undefined,
-      aiGenerated: true,
-      sourceMessageId: extraction.sourceRef?.messageId || undefined,
-    },
-    {
-      headers: buildTrustedGatewayHeaders(userId),
-      timeout: 15000,
-      validateStatus: () => true,
-    }
-  );
+  let createRes;
+  if (boardId && listId) {
+    createRes = await axios.post(
+      `${taskServiceUrl}/api/tasks/boards/${encodeURIComponent(String(boardId))}/cards`,
+      {
+        listId: String(listId),
+        title: draft.title || 'Task từ AI',
+        summary: draft.summary || '',
+        description: draft.description || '',
+        priority: draft.priority || 'medium',
+        dueDate: draft.dueDate || null,
+        tags: Array.isArray(draft.tags) ? draft.tags : [],
+        attachments,
+        assigneeId: assigneeId || undefined,
+        aiGenerated: true,
+        sourceMessageId: extraction.sourceRef?.messageId || undefined,
+      },
+      {
+        headers: buildTrustedGatewayHeaders(userId),
+        timeout: 15000,
+        validateStatus: () => true,
+      }
+    );
+  } else {
+    createRes = await axios.post(
+      `${taskServiceUrl}/api/tasks`,
+      {
+        title: draft.title || 'Task từ AI',
+        summary: draft.summary || '',
+        description: draft.description || '',
+        organizationId: String(extraction.organizationId),
+        priority: draft.priority || 'medium',
+        dueDate: draft.dueDate || null,
+        tags: Array.isArray(draft.tags) ? draft.tags : [],
+        attachments,
+        assigneeId: assigneeId || undefined,
+        departmentId: draft.departmentId || undefined,
+        teamId: draft.teamId || undefined,
+        departmentName: draft.departmentName || undefined,
+        aiGenerated: true,
+        sourceMessageId: extraction.sourceRef?.messageId || undefined,
+      },
+      {
+        headers: buildTrustedGatewayHeaders(userId),
+        timeout: 15000,
+        validateStatus: () => true,
+      }
+    );
+  }
 
   if (createRes.status !== 201 || !createRes.data?.success || !createRes.data?.data?._id) {
     const taskMsg =

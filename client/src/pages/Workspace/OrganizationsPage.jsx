@@ -396,6 +396,22 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     () => teams.find((team) => String(team._id) === String(selectedTeamId)) || null,
     [teams, selectedTeamId]
   );
+
+  useEffect(() => {
+    if (workspaceTabView !== 'tasks' && workspaceTabView !== 'documents') return;
+    if (selectedTeamId) return;
+    const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
+    if (!slug) return;
+    toast.error('Vui lòng chọn team!');
+    navigate(`/w/${encodeURIComponent(slug)}`);
+  }, [
+    workspaceTabView,
+    selectedTeamId,
+    selectedOrganization?.slug,
+    selectedOrganizationId,
+    navigate,
+  ]);
+
   const selectedChannel = useMemo(
     () => channels.find((ch) => String(ch._id) === String(selectedChannelId)) || null,
     [channels, selectedChannelId]
@@ -2985,6 +3001,9 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             onCreateTeam={handleCreateTeam}
             onCreateChannel={handleCreateChannel}
             onOpenChannelSettings={handleOpenChannelSettings}
+            onOpenDivisionSettings={handleOpenDivisionSettings}
+            onOpenDepartmentSettings={handleOpenDepartmentSettings}
+            onOpenTeamSettings={handleOpenTeamSettings}
             onRenameDivision={(division) => openRenameModal('division', division)}
             onRenameDepartment={(department) => openRenameModal('department', department)}
             onRenameTeam={(team) => openRenameModal('team', team)}
@@ -3088,6 +3107,8 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             <OrganizationMemberSidebar
               organizationId={selectedOrganizationId}
               organizationName={selectedOrganization?.name || ''}
+              selectedTeamId={selectedTeamId}
+              teams={teams}
               workspaceSearchOpen={workspaceSearchOpen}
               onWorkspaceSearchOpenChange={setWorkspaceSearchOpen}
               searchChannels={channels.filter((c) => c.type !== 'voice')}

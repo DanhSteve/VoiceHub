@@ -15,6 +15,12 @@ const divisionSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    members: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
     isDefault: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
   },

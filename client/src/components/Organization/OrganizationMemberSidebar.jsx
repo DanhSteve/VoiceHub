@@ -4,6 +4,11 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 import { organizationAPI } from '../../services/api/organizationAPI';
+import {
+  taskAPI,
+  unwrapTaskBoardDetailPayload,
+  unwrapTaskBoardListPayload,
+} from '../../services/api/taskAPI';
 import roleAPI from '../../services/api/roleAPI';
 import userService from '../../services/userService';
 import friendService from '../../services/friendService';
@@ -97,6 +102,9 @@ async function enrichMembersWithProfiles(members, memberFallback) {
         membershipId: String(m._id),
         userId: uid,
         role: String(m.role || 'member').toLowerCase(),
+        divisionId: m?.division ? String(m.division) : '',
+        departmentId: m?.department ? String(m.department) : '',
+        teamId: m?.team ? String(m.team) : '',
         displayName,
         username,
         avatar,
@@ -163,9 +171,26 @@ function normalizeApiList(payload) {
   return [];
 }
 
+function safeArray(input) {
+  return Array.isArray(input) ? input : [];
+}
+
+function formatTaskDueDate(input) {
+  if (!input) return '';
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('vi-VN');
+}
+
+function toLowerStr(input) {
+  return String(input || '').trim().toLowerCase();
+}
+
 function OrganizationMemberSidebar({
   organizationId,
   organizationName = '',
+  selectedTeamId = '',
+  teams = [],
   onlineUsers = [],
   socketConnected = false,
   refreshKey = 0,
@@ -238,6 +263,9 @@ function OrganizationMemberSidebar({
   const [sidebarTab, setSidebarTab] = useState('people');
   const [orgPermissions, setOrgPermissions] = useState([]);
   const [orgPermissionsLoaded, setOrgPermissionsLoaded] = useState(false);
+  const [teamTaskSections, setTeamTaskSections] = useState([]);
+  const [loadingSidebarTasks, setLoadingSidebarTasks] = useState(false);
+  const [sidebarTasksError, setSidebarTasksError] = useState('');
   const memberUserIds = useMemo(
     () => rows.map((m) => String(m.userId || '')).filter(Boolean),
     [rows]
@@ -302,6 +330,115 @@ function OrganizationMemberSidebar({
   }, [orgPermissions, orgPermissionsLoaded, myRole, hasReadableChannel]);
 
   const showSidebarTabs = true;
+  const teamNameById = useMemo(() => {
+    const map = new Map();
+    for (const row of safeArray(teams)) {
+      const id = String(row?._id || '');
+      if (!id) continue;
+      map.set(id, String(row?.name || '').trim() || 'Team');
+    }
+    return map;
+  }, [teams]);
+
+  const currentUserIdStr = String(currentUserId || '').trim();
+
+  useEffect(() => {
+    if (sidebarTab !== 'tasks') return;
+    if (!organizationId || !currentUserIdStr) {
+      setTeamTaskSections([]);
+      setSidebarTasksError('');
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setLoadingSidebarTasks(true);
+      setSidebarTasksError('');
+      try {
+        const boardRes = await taskAPI.getBoards({
+          organizationId: String(organizationId),
+          ...(selectedTeamId ? { teamId: String(selectedTeamId) } : {}),
+        });
+        const boards = unwrapTaskBoardListPayload(boardRes);
+        const detailResults = await Promise.allSettled(
+          boards.map(async (board) => {
+            const detailRes = await taskAPI.getBoardDetail(String(board?._id || ''));
+            return {
+              board,
+              detail: unwrapTaskBoardDetailPayload(detailRes),
+            };
+          })
+        );
+
+        if (cancelled) return;
+
+        const teamBuckets = new Map();
+        for (const result of detailResults) {
+          if (result.status !== 'fulfilled') continue;
+          const board = result.value?.board || {};
+          const detail = result.value?.detail || null;
+          if (!detail?.board?._id) continue;
+
+          const boardData = detail.board || board;
+          const boardVisibility = toLowerStr(boardData.visibility);
+          const isTeamPublicBoard = boardVisibility === 'workspace' || boardVisibility === 'public';
+          const listsMap = new Map(
+            safeArray(detail.lists).map((list) => [String(list?._id || ''), String(list?.title || '')])
+          );
+          const cards = safeArray(detail.cards)
+            .filter((card) => {
+              const assigneeId = String(card?.assigneeId || '');
+              return assigneeId === currentUserIdStr || isTeamPublicBoard;
+            })
+            .map((card) => ({
+              _id: String(card?._id || ''),
+              title: String(card?.title || '').trim() || 'Untitled',
+              status: String(card?.status || 'todo'),
+              dueDate: card?.dueDate || null,
+              listTitle: listsMap.get(String(card?.listId || '')) || '',
+              boardTitle: String(boardData?.title || board?.title || '').trim(),
+              assigneeId: String(card?.assigneeId || ''),
+              createdAt: card?.createdAt || null,
+            }))
+            .filter((card) => Boolean(card._id));
+
+          if (!cards.length) continue;
+          const teamId = String(boardData?.teamId || board?.teamId || '') || 'no-team';
+          const existing = teamBuckets.get(teamId) || [];
+          teamBuckets.set(teamId, existing.concat(cards));
+        }
+
+        const nextSections = [...teamBuckets.entries()]
+          .map(([teamId, tasks]) => {
+            const sorted = [...tasks].sort((a, b) => {
+              const aDue = a.dueDate ? new Date(a.dueDate).getTime() : Number.POSITIVE_INFINITY;
+              const bDue = b.dueDate ? new Date(b.dueDate).getTime() : Number.POSITIVE_INFINITY;
+              if (aDue !== bDue) return aDue - bDue;
+              return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+            });
+            return {
+              teamId,
+              teamName: teamNameById.get(teamId) || 'Team chưa xác định',
+              tasks: sorted,
+            };
+          })
+          .sort((a, b) => a.teamName.localeCompare(b.teamName, 'vi'));
+
+        setTeamTaskSections(nextSections);
+      } catch (err) {
+        if (cancelled) return;
+        setTeamTaskSections([]);
+        setSidebarTasksError(err?.response?.data?.message || 'Không tải được danh sách việc cần làm');
+      } finally {
+        if (!cancelled) setLoadingSidebarTasks(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sidebarTab, organizationId, currentUserIdStr, selectedTeamId, teamNameById]);
+
   const activityFeedItems = useMemo(
     () => [
       { id: 'a1', kind: 'join', label: t('organizations.memberActivityJoined', { name: rows[0]?.displayName || '—' }) },
@@ -758,11 +895,15 @@ function OrganizationMemberSidebar({
       const isSelected = Boolean(rolesSubmenu.selectedRoleIds?.[roleId]);
       setRolesSubmenu((prev) => ({ ...prev, busyRoleId: roleId }));
       try {
+        let roleRes = null;
         if (isSelected) {
-          await roleAPI.removeRoleFromUser(roleId, member.userId, organizationId);
+          roleRes = await roleAPI.removeRoleFromUser(roleId, member.userId, organizationId);
         } else {
-          await roleAPI.assignRoleToUser(roleId, member.userId, organizationId);
+          roleRes = await roleAPI.assignRoleToUser(roleId, member.userId, organizationId);
         }
+        const rolePayload = unwrapBody(roleRes);
+        const roleData = rolePayload?.data ?? rolePayload ?? {};
+        const placementSync = roleData?.placementSync || null;
         setRolesSubmenu((prev) => ({
           ...prev,
           busyRoleId: '',
@@ -780,6 +921,23 @@ function OrganizationMemberSidebar({
           else nameSet.add(displayName);
           return { ...prev, assignedRoleNames: Array.from(nameSet) };
         });
+        if (placementSync?.attempted) {
+          if (placementSync?.success) {
+            toast.success(
+              isSelected
+                ? 'Đã gỡ vai trò và cập nhật danh sách member theo scope'
+                : 'Đã gán vai trò và thêm member vào scope tương ứng'
+            );
+          } else {
+            toast.error(
+              isSelected
+                ? 'Đã gỡ vai trò nhưng chưa đồng bộ member theo scope'
+                : 'Đã gán vai trò nhưng chưa đồng bộ member theo scope'
+            );
+          }
+        } else {
+          toast.success(isSelected ? 'Đã gỡ vai trò thành công' : 'Đã gán vai trò thành công');
+        }
       } catch (err) {
         setRolesSubmenu((prev) => ({ ...prev, busyRoleId: '' }));
         const msg = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Không thể cập nhật vai trò';
@@ -1361,11 +1519,76 @@ function OrganizationMemberSidebar({
           </ul>
         )}
         {sidebarTab === 'tasks' && canShowTasksTab && (
-          <p
-            className={`px-1 py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
-          >
-            {t('organizations.memberSidebarTasksEmpty')}
-          </p>
+          <div className="space-y-3 px-1">
+            {loadingSidebarTasks ? (
+              <div className="space-y-2 pt-1">
+                <div className={`h-8 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                <div className={`h-16 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`} />
+                <div className={`h-16 animate-pulse rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`} />
+              </div>
+            ) : sidebarTasksError ? (
+              <p className="py-2 text-xs text-rose-300">{sidebarTasksError}</p>
+            ) : teamTaskSections.length === 0 ? (
+              <p
+                className={`py-6 text-center text-xs ${isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'}`}
+              >
+                Không có việc cần làm phù hợp. Bạn chỉ thấy task được giao cho bạn hoặc task public của team.
+              </p>
+            ) : (
+              teamTaskSections.map((section) => (
+                <div key={section.teamId}>
+                  <div
+                    className={`mb-1.5 text-[11px] font-bold uppercase tracking-wide ${
+                      isDarkMode ? 'text-[#8e9297]' : 'text-slate-600'
+                    }`}
+                  >
+                    {section.teamName} ({section.tasks.length})
+                  </div>
+                  <ul className="space-y-1.5">
+                    {section.tasks.map((task) => {
+                      const isMine = String(task.assigneeId || '') === currentUserIdStr;
+                      return (
+                        <li
+                          key={task._id}
+                          className={`rounded-lg border px-2 py-2 ${
+                            isDarkMode
+                              ? 'border-white/[0.08] bg-[#171B24]'
+                              : 'border-slate-200 bg-white'
+                          }`}
+                        >
+                          <p
+                            className={`line-clamp-2 text-xs font-semibold ${
+                              isDarkMode ? 'text-white' : 'text-slate-900'
+                            }`}
+                          >
+                            {task.title}
+                          </p>
+                          <div
+                            className={`mt-1 flex items-center justify-between gap-2 text-[10px] ${
+                              isDarkMode ? 'text-[#8e9297]' : 'text-slate-500'
+                            }`}
+                          >
+                            <span className="truncate">{task.boardTitle || 'Task Board'}</span>
+                            <span className={isMine ? 'text-emerald-400' : ''}>
+                              {isMine ? 'Được giao cho bạn' : 'Public team'}
+                            </span>
+                          </div>
+                          <div
+                            className={`mt-0.5 flex items-center justify-between gap-2 text-[10px] ${
+                              isDarkMode ? 'text-[#6d7380]' : 'text-slate-500'
+                            }`}
+                          >
+                            <span className="truncate">{task.listTitle || 'Không có danh sách'}</span>
+                            <span>{formatTaskDueDate(task.dueDate) || 'Không hạn'}</span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))
+            )}
+          </div>
         )}
         {sidebarTab === 'files' && canShowFilesTab && organizationId && (
           <OrgMemberSidebarAttachments

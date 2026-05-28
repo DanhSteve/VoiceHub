@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Building2, ChevronDown, ChevronRight, Lock, Search, Users } from 'lucide-react';
+import { Building2, ChevronDown, ChevronRight, Lock, Search, Settings, Users } from 'lucide-react';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
 import {
   channelUnreadCount,
@@ -55,14 +55,25 @@ export default function OrganizationWorkspaceStructureSidebar({
   onSelectChannel,
   onCreateChannel,
   onOpenChannelSettings,
+  onOpenDivisionSettings,
+  onOpenDepartmentSettings,
+  onOpenTeamSettings,
   canManageWorkspaceStructure = false,
   canManageChannelRoleAccess = false,
   canSeeAllStructure = false,
+  canCreateTaskBoard = false,
+  onCreateTaskBoard,
 }) {
   const [expandedDivisionId, setExpandedDivisionId] = useState(selectedDivisionId || '');
   const [expandedDeptIds, setExpandedDeptIds] = useState(() => new Set());
   const [expandedTeamIds, setExpandedTeamIds] = useState(() => new Set());
   const [structureQuery, setStructureQuery] = useState('');
+  const [teamMenu, setTeamMenu] = useState({
+    open: false,
+    x: 0,
+    y: 0,
+    team: null,
+  });
   const selectedBranch = branches.find((b) => String(b._id) === String(selectedBranchId)) || null;
   const divisionList = Array.isArray(selectedBranch?.divisions) ? selectedBranch.divisions : [];
 
@@ -212,6 +223,17 @@ export default function OrganizationWorkspaceStructureSidebar({
     });
     onSelectTeam?.(teamId);
   };
+
+  useEffect(() => {
+    if (!teamMenu.open) return undefined;
+    const close = () => setTeamMenu((prev) => ({ ...prev, open: false }));
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [teamMenu.open]);
 
   const filteredTree = useMemo(() => {
     return divisionList
@@ -431,14 +453,22 @@ export default function OrganizationWorkspaceStructureSidebar({
                 <span className="min-w-0 flex-1 truncate text-[11px] font-bold uppercase tracking-wide">
                   {division.name}
                 </span>
-                {!isOpen && divisionUnread > 0 ? (
-                  <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${accent.badge}`}>
-                    {divisionUnread > 99 ? '99+' : divisionUnread}
-                  </span>
-                ) : (
-                  <span className={`shrink-0 text-[10px] tabular-nums ${textMuted}`}>{deptRows.length}</span>
-                )}
               </button>
+              {canManageWorkspaceStructure ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenDivisionSettings?.(division);
+                  }}
+                  className={`absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 transition group-hover:opacity-100 ${
+                    isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
+                  }`}
+                  title="Cài đặt quyền khối"
+                >
+                  <Settings className="h-3 w-3" />
+                </button>
+              ) : null}
               </div>
 
               {isOpen ? (
@@ -479,18 +509,25 @@ export default function OrganizationWorkspaceStructureSidebar({
                             <ChevronRight className="h-3 w-3 shrink-0 opacity-60" />
                           )}
                           <span className="min-w-0 flex-1 truncate font-medium">{deptLabel}</span>
-                          {deptUnread > 0 ? (
-                            <span className="shrink-0 rounded-md bg-rose-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white tabular-nums">
-                              {deptUnread > 99 ? '99+' : deptUnread}
-                            </span>
-                          ) : !canAccessDept ? (
+                          {!canAccessDept ? (
                             <Lock className={`h-3 w-3 shrink-0 ${textMuted}`} aria-hidden />
-                          ) : (
-                            <span className={`shrink-0 text-[10px] tabular-nums ${textMuted}`}>
-                              {teamRows.length}
-                            </span>
-                          )}
+                          ) : null}
                         </button>
+                        {canManageWorkspaceStructure ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenDepartmentSettings?.(department);
+                            }}
+                            className={`absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 transition group-hover:opacity-100 ${
+                              isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
+                            }`}
+                            title="Cài đặt quyền phòng ban"
+                          >
+                            <Settings className="h-3 w-3" />
+                          </button>
+                        ) : null}
                         </div>
 
                         {deptOpen ? (
@@ -499,15 +536,26 @@ export default function OrganizationWorkspaceStructureSidebar({
                               const teamActive = String(selectedTeamId) === String(team._id);
 
                               return (
-                                <div key={team._id} className="mt-0.5">
+                                <div key={team._id} className="group relative mt-0.5">
                                   <button
                                     type="button"
                                     disabled={!canReadTeam}
+                                    onContextMenu={(e) => {
+                                      if (!canReadTeam || !canCreateTaskBoard) return;
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      setTeamMenu({
+                                        open: true,
+                                        x: e.clientX,
+                                        y: e.clientY,
+                                        team,
+                                      });
+                                    }}
                                     onClick={() => {
                                       if (!canReadTeam) return;
                                       toggleTeam(team._id);
                                     }}
-                                    className={`flex w-full items-center gap-2 rounded-lg border-l-2 py-1.5 pl-2 pr-2 text-left text-sm transition ${
+                                    className={`flex w-full items-center gap-2 rounded-lg border-l-2 py-1.5 pl-2 pr-8 text-left text-sm transition ${
                                       !canReadTeam
                                         ? isDarkMode
                                           ? 'cursor-not-allowed border-transparent text-[#6B7280]'
@@ -531,6 +579,21 @@ export default function OrganizationWorkspaceStructureSidebar({
                                       <Lock className={`h-3 w-3 shrink-0 ${textMuted}`} aria-hidden />
                                     ) : null}
                                   </button>
+                                  {canManageWorkspaceStructure ? (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onOpenTeamSettings?.(team);
+                                      }}
+                                      className={`absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 transition group-hover:opacity-100 ${
+                                        isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
+                                      }`}
+                                      title="Cài đặt quyền team"
+                                    >
+                                      <Settings className="h-3 w-3" />
+                                    </button>
+                                  ) : null}
                                 </div>
                               );
                             })}
@@ -561,6 +624,28 @@ export default function OrganizationWorkspaceStructureSidebar({
         onOpenChannelSettings={onOpenChannelSettings}
         canManageChannelRoleAccess={canManageChannelRoleAccess}
       />
+      {teamMenu.open && teamMenu.team ? (
+        <div
+          className={`fixed z-[1000] min-w-[180px] rounded-lg border p-1 shadow-xl ${
+            isDarkMode ? 'border-white/10 bg-[#171B24]' : 'border-slate-200 bg-white'
+          }`}
+          style={{ left: teamMenu.x, top: teamMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className={`w-full rounded-md px-3 py-2 text-left text-sm ${
+              isDarkMode ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
+            }`}
+            onClick={() => {
+              onCreateTaskBoard?.(teamMenu.team);
+              setTeamMenu((prev) => ({ ...prev, open: false }));
+            }}
+          >
+            Tạo Task Board
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

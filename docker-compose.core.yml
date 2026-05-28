@@ -24,6 +24,7 @@ services:
       - BFF_SHELL_CACHE_TTL_SEC=${BFF_SHELL_CACHE_TTL_SEC:-60}
       - BFF_DASHBOARD_CACHE_TTL_SEC=${BFF_DASHBOARD_CACHE_TTL_SEC:-45}
       - BFF_DOCUMENTS_OVERVIEW_CACHE_TTL_SEC=${BFF_DOCUMENTS_OVERVIEW_CACHE_TTL_SEC:-45}
+      - BFF_SHELL_TIMEOUT_MS=${BFF_SHELL_TIMEOUT_MS:-20000}
     # GATEWAY_INTERNAL_TOKEN: chỉ từ .env gốc + api-gateway/.env (tránh environment: ghi đè bằng chuỗi rỗng khi biến host trống trên Windows)
     depends_on:
       - redis

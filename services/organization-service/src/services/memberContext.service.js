@@ -3,6 +3,7 @@ const Organization = require('../models/Organization');
 const Department = require('../models/Department');
 const Team = require('../models/Team');
 const Channel = require('../models/Channel');
+const RoleScopeAssignment = require('../models/RoleScopeAssignment');
 const axios = require('axios');
 
 const USER_SERVICE_URL = (process.env.USER_SERVICE_URL || 'http://user-service:3004').replace(/\/$/, '');
@@ -14,6 +15,56 @@ function normalizeLabel(s) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+}
+
+function isLooseLabelMatch(a, b) {
+  const x = normalizeLabel(a);
+  const y = normalizeLabel(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  if (x.length < 3 || y.length < 3) return false;
+  return x.includes(y) || y.includes(x);
+}
+
+function findMentionedUserIdsByText(messageText, profileRows = []) {
+  const text = String(messageText || '');
+  if (!text || !Array.isArray(profileRows) || !profileRows.length) return new Set();
+
+  const labels = [];
+  for (const row of profileRows) {
+    const uid = String(row.userId || '');
+    if (!uid) continue;
+    for (const raw of [row.displayName, row.username]) {
+      const label = String(raw || '').trim();
+      if (!label) continue;
+      labels.push({ uid, label });
+    }
+  }
+
+  labels.sort((a, b) => b.label.length - a.label.length);
+  const matched = new Set();
+
+  let i = 0;
+  while (i < text.length) {
+    const at = text.indexOf('@', i);
+    if (at === -1) break;
+    let hit = false;
+
+    for (const row of labels) {
+      const mention = `@${row.label}`;
+      if (!text.slice(at).startsWith(mention)) continue;
+      const end = at + mention.length;
+      if (end < text.length && !/[\s,.;!?]/.test(text[end])) continue;
+      matched.add(row.uid);
+      i = end;
+      hit = true;
+      break;
+    }
+
+    if (!hit) i = at + 1;
+  }
+
+  return matched;
 }
 
 async function fetchUserProfiles(userIds) {
@@ -44,17 +95,30 @@ async function fetchUserProfiles(userIds) {
   return map;
 }
 
-function membershipPlacementRow(membership, deptById, teamById) {
-  const departmentId = membership.department ? String(membership.department) : null;
-  const teamId = membership.team ? String(membership.team) : null;
+function assignmentPlacementRow(userId, membershipRole, assignmentRows, deptById, teamById) {
+  const rows = Array.isArray(assignmentRows) ? assignmentRows : [];
+  const teamRow = rows.find((r) => String(r.scopeType) === 'team');
+  const departmentRow = rows.find((r) => String(r.scopeType) === 'department');
+  const divisionRow = rows.find((r) => String(r.scopeType) === 'division');
+  const teamId = teamRow?.scopeId ? String(teamRow.scopeId) : null;
+  const departmentId = departmentRow?.scopeId
+    ? String(departmentRow.scopeId)
+    : teamId && teamById.get(teamId)?.department
+      ? String(teamById.get(teamId).department)
+      : null;
+  const divisionId = divisionRow?.scopeId
+    ? String(divisionRow.scopeId)
+    : departmentId && deptById.get(departmentId)?.division
+      ? String(deptById.get(departmentId).division)
+      : null;
   const dept = departmentId ? deptById.get(departmentId) : null;
   const team = teamId ? teamById.get(teamId) : null;
   return {
-    userId: String(membership.user),
-    membershipRole: membership.role || 'member',
+    userId: String(userId),
+    membershipRole: membershipRole || 'member',
     departmentId,
     teamId,
-    divisionId: membership.division ? String(membership.division) : null,
+    divisionId,
     departmentName: dept?.name || '',
     teamName: team?.name || '',
   };
@@ -63,7 +127,13 @@ function membershipPlacementRow(membership, deptById, teamById) {
 /**
  * Ngữ cảnh org + thành viên cho AI task extract (không để LLM đoán user/team/dept).
  */
-async function buildAiTaskExtractContext({ organizationId, userIds = [], mentionLabels = [], channelId = null }) {
+async function buildAiTaskExtractContext({
+  organizationId,
+  userIds = [],
+  mentionLabels = [],
+  channelId = null,
+  messageText = '',
+}) {
   const orgId = String(organizationId || '');
   if (!orgId) return null;
 
@@ -72,20 +142,31 @@ async function buildAiTaskExtractContext({ organizationId, userIds = [], mention
 
   const uidSet = new Set((userIds || []).map((id) => String(id)).filter(Boolean));
 
-  if (Array.isArray(mentionLabels) && mentionLabels.length) {
+  const shouldResolveByLabels = Array.isArray(mentionLabels) && mentionLabels.length > 0;
+  const shouldResolveByText = String(messageText || '').includes('@');
+
+  if (shouldResolveByLabels || shouldResolveByText) {
     const active = await Membership.find({ organization: orgId, status: 'active' }).select('user').lean();
     const allIds = active.map((m) => String(m.user));
     const profiles = await fetchUserProfiles(allIds);
-    for (const label of mentionLabels) {
-      const norm = normalizeLabel(label);
-      if (!norm) continue;
-      for (const [uid, p] of profiles) {
-        const candidates = [p.displayName, p.username].filter(Boolean).map(normalizeLabel);
-        if (candidates.some((c) => c === norm || c.includes(norm) || norm.includes(c))) {
-          uidSet.add(uid);
-          break;
+    const profileRows = [...profiles.values()];
+
+    if (shouldResolveByLabels) {
+      for (const label of mentionLabels) {
+        const norm = normalizeLabel(label);
+        if (!norm) continue;
+        for (const row of profileRows) {
+          if (isLooseLabelMatch(norm, row.displayName) || isLooseLabelMatch(norm, row.username)) {
+            uidSet.add(String(row.userId));
+            break;
+          }
         }
       }
+    }
+
+    if (shouldResolveByText) {
+      const idsByText = findMentionedUserIdsByText(messageText, profileRows);
+      for (const id of idsByText) uidSet.add(id);
     }
   }
 
@@ -96,11 +177,44 @@ async function buildAiTaskExtractContext({ organizationId, userIds = [], mention
       organization: orgId,
       status: 'active',
       user: { $in: ids },
-    }).lean();
+    })
+      .select('user role')
+      .lean();
   }
 
-  const deptIds = [...new Set(memberships.map((m) => m.department).filter(Boolean).map(String))];
-  const teamIds = [...new Set(memberships.map((m) => m.team).filter(Boolean).map(String))];
+  const assignmentRows = ids.length
+    ? await RoleScopeAssignment.find({
+        organization: orgId,
+        user: { $in: ids },
+        active: true,
+      })
+        .select('user scopeType scopeId')
+        .lean()
+    : [];
+  const assignmentsByUser = new Map();
+  for (const row of assignmentRows) {
+    const uid = String(row.user || '');
+    if (!uid) continue;
+    if (!assignmentsByUser.has(uid)) assignmentsByUser.set(uid, []);
+    assignmentsByUser.get(uid).push(row);
+  }
+
+  const deptIds = [
+    ...new Set(
+      assignmentRows
+        .filter((r) => String(r.scopeType) === 'department')
+        .map((r) => String(r.scopeId))
+        .filter(Boolean)
+    ),
+  ];
+  const teamIds = [
+    ...new Set(
+      assignmentRows
+        .filter((r) => String(r.scopeType) === 'team')
+        .map((r) => String(r.scopeId))
+        .filter(Boolean)
+    ),
+  ];
 
   const [departments, teams] = await Promise.all([
     deptIds.length
@@ -121,7 +235,8 @@ async function buildAiTaskExtractContext({ organizationId, userIds = [], mention
 
   const mentionedUsers = [];
   for (const m of memberships) {
-    const placement = membershipPlacementRow(m, deptById, teamById);
+    const uid = String(m.user || '');
+    const placement = assignmentPlacementRow(uid, m.role, assignmentsByUser.get(uid), deptById, teamById);
     const profile = profiles.get(String(m.user)) || {};
     mentionedUsers.push({
       ...placement,

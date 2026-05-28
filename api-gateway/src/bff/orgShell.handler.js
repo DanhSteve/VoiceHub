@@ -7,10 +7,16 @@ const TTL_SEC = Math.min(
   Math.max(20, parseInt(process.env.BFF_SHELL_CACHE_TTL_SEC || '60', 10) || 60)
 );
 
+/** Org shell gom nhiều truy vấn — timeout dài hơn BFF_DOWNSTREAM_TIMEOUT_MS mặc định (7s). */
+const SHELL_TIMEOUT_MS = Math.min(
+  120000,
+  Math.max(15000, parseInt(process.env.BFF_SHELL_TIMEOUT_MS || '20000', 10) || 20000)
+);
+
 async function fetchOrgShell(userId, userEmail, orgId, req) {
   const headers = buildTrustedHeaders(userId, userEmail, req);
   const url = `${services.organization.url}/api/organizations/${encodeURIComponent(orgId)}/shell`;
-  const res = await fetchJson(url, headers, 'org/shell');
+  const res = await fetchJson(url, headers, 'org/shell', SHELL_TIMEOUT_MS);
   if (!res.ok) {
     const err = new Error(
       res.data?.message || res.data?.error || 'Organization shell unavailable'
