@@ -21,6 +21,10 @@ client/.env.local
 services/**/.env
 services/**/.env.local
 
+# Ignore local docs/scripts in this workspace
+docs/
+scripts/
+
 # ========================
 # Build Outputs
 # ========================
