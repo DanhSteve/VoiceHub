@@ -26,10 +26,10 @@ npm install
 
 ### Biến môi trường
 
-Sao chép [`/.env.example`](./.env.example) → `.env`:
+Tạo file `.env` trực tiếp trong thư mục `client/`:
 
 - **`VITE_API_URL`**: mặc định có thể bỏ trống để dùng **`/api`** (Vite proxy → gateway `:3000`).  
-- **Socket**: xem comment trong `.env.example` — `VITE_SOCKET_DIRECT_URL` (vd. `http://127.0.0.1:3017`) khi chạy socket-service ngoài Docker; hoặc `VITE_SOCKET_URL` trỏ gateway.
+- **Socket**: dùng `VITE_SOCKET_DIRECT_URL` (vd. `http://127.0.0.1:3017`) khi chạy socket-service ngoài Docker; hoặc `VITE_SOCKET_URL` trỏ gateway.
 
 ### Scripts
 

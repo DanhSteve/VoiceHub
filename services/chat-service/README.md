@@ -4,13 +4,7 @@ Service quản lý tin nhắn và phòng chat với Socket.IO.
 
 ## Cấu hình môi trường
 
-Tạo file `.env` từ `ENV.example`:
-
-```bash
-cp ENV.example .env
-```
-
-Cập nhật các giá trị trong file `.env`:
+Tạo file `.env` trực tiếp trong thư mục `services/chat-service/` và cập nhật các giá trị:
 
 ```env
 # Server

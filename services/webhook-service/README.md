@@ -22,7 +22,7 @@ webhook-service/
 │       └── notification_client.py  # Client để gọi Notification Service
 ├── requirements.txt
 ├── Dockerfile
-└── ENV.example
+└── .env (tạo cục bộ khi chạy)
 ```
 
 ## Các Webhook Events

@@ -45,13 +45,7 @@ Microservice (Chat, Task, ...)
 
 ## Cấu hình môi trường
 
-Tạo file `.env` từ `ENV.example`:
-
-```bash
-cp ENV.example .env
-```
-
-Cập nhật các giá trị trong file `.env`:
+Tạo file `.env` trực tiếp trong thư mục `api-gateway/` và cập nhật các giá trị:
 
 ```env
 # Server
