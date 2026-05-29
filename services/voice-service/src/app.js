@@ -3,6 +3,8 @@ const { createCorsMiddleware } = require('/shared/middleware/corsPolicy');
 const gatewayUserMiddleware = require('./middlewares/gatewayUser');
 const { mongoose } = require('/shared/config/mongo');
 require('./models/CallSession');
+require('./models/VoiceRoomLobby');
+require('./models/VoiceRoomJoinRequest');
 
 const app = express();
 

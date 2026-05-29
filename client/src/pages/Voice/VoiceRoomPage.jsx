@@ -6,7 +6,6 @@ import toast from 'react-hot-toast';
 import {
   Calendar,
   ChevronUp,
-  Heart,
   LayoutGrid,
   LogIn,
   Maximize2,
@@ -19,7 +18,6 @@ import {
   Plus,
   Search,
   Settings,
-  Share2,
   UserPlus,
   Users,
   Video,
@@ -47,6 +45,7 @@ import {
 import VoiceAudioSettingsPanel from './VoiceAudioSettingsPanel';
 import { buildAudioConstraints, loadVoiceAudioPrefs, saveVoiceAudioPrefs } from './voiceAudioPrefs';
 import { resolveAppOrigin } from '../../utils/browserOrigin';
+import { emitNotificationsRefresh } from '../../services/notificationSync';
 import UserAvatar from '../../components/Shared/UserAvatar';
 import { isAvatarImageUrl } from '../../utils/avatarDisplay';
 
@@ -94,6 +93,15 @@ const getSignalPath = () => import.meta.env.VITE_VOICE_SIGNAL_PATH || '/voice-so
 const RECENT_VOICE_CALLS_KEY = 'vh.voice.recentCalls';
 const RESERVED_MEETING_CODE_KEY = 'vh.voice.reservedMeetingCode';
 const RESERVED_MEETING_TTL_MS = 5 * 60 * 1000;
+const INVITE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+
+function unwrapVoiceApi(res) {
+  const body = res?.data;
+  if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'data')) {
+    return body.data;
+  }
+  return body ?? null;
+}
 
 function getOrCreateReservedMeetingCode(generateFn) {
   try {
@@ -117,6 +125,21 @@ function getOrCreateReservedMeetingCode(generateFn) {
     /* ignore */
   }
   return code;
+}
+
+function isReservedCreatorRoomCode(code) {
+  try {
+    const raw = sessionStorage.getItem(RESERVED_MEETING_CODE_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return (
+      parsed?.code &&
+      String(parsed.code) === String(code || '').trim() &&
+      Number(parsed.expiresAt) > Date.now()
+    );
+  } catch {
+    return false;
+  }
 }
 
 const initialVoiceAudioPrefs = loadVoiceAudioPrefs();
@@ -191,7 +214,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const [hasLocalVideoTrack, setHasLocalVideoTrack] = useState(false);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
   const [remoteSpeakingMap, setRemoteSpeakingMap] = useState({});
-  const [joining, setJoining] = useState(true);
+  const [joining, setJoining] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
   const [viewStage, setViewStage] = useState('home'); // home | prejoin | inRoom
@@ -221,6 +244,11 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const [inviteCandidates, setInviteCandidates] = useState([]);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [selectedInviteIds, setSelectedInviteIds] = useState([]);
+  const [roomHostUserId, setRoomHostUserId] = useState('');
+  const [joinRequestStatus, setJoinRequestStatus] = useState('none');
+  const [pendingJoinRequests, setPendingJoinRequests] = useState([]);
+  const [inviteSending, setInviteSending] = useState(false);
+  const [joinRequestSubmitting, setJoinRequestSubmitting] = useState(false);
   const [voiceFriends, setVoiceFriends] = useState([]);
   const [recentCalls, setRecentCalls] = useState(() => {
     try {
@@ -235,7 +263,6 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const [roomChatInput, setRoomChatInput] = useState('');
   const [roomChatEmojiOpen, setRoomChatEmojiOpen] = useState(false);
   const [allowParticipantChat, setAllowParticipantChat] = useState(true);
-  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
 
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [layoutModalOpen, setLayoutModalOpen] = useState(false);
@@ -287,6 +314,12 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const localAvatar = user?.avatar || null;
   const currentUserId = useMemo(() => String(user?._id || user?.id || user?.userId || ''), [user]);
 
+  const isRoomHost = useMemo(() => {
+    if (!currentUserId) return false;
+    if (roomHostUserId) return String(roomHostUserId) === currentUserId;
+    return prejoinMode === 'create';
+  }, [currentUserId, roomHostUserId, prejoinMode]);
+
   useEffect(() => {
     setDisplayNameInput((prev) => (prev.trim() ? prev : localDisplayName));
   }, [localDisplayName]);
@@ -337,6 +370,65 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
     const did = searchParams.get('deptId');
     if (did) setSelectedDeptId(did);
   }, [searchParams]);
+
+  useEffect(() => {
+    if (viewStage !== 'prejoin' || prejoinMode !== 'join' || roomKind !== 'free') return;
+    const code = String(meetingCode || '').trim();
+    if (!code) return;
+    let cancelled = false;
+    const loadStatus = async () => {
+      try {
+        const res = await api.get(`/voice/rooms/${encodeURIComponent(code)}/join-requests/me`, {
+          skipGlobalErrorHandling: true,
+        });
+        if (cancelled) return;
+        const data = unwrapVoiceApi(res);
+        setJoinRequestStatus(data?.status || 'none');
+        if (data?.status === 'approved') {
+          const lobbyRes = await api.get(`/voice/rooms/${encodeURIComponent(code)}/lobby`, {
+            skipGlobalErrorHandling: true,
+          });
+          const lobby = unwrapVoiceApi(lobbyRes);
+          if (lobby?.hostUserId) setRoomHostUserId(String(lobby.hostUserId));
+        }
+      } catch {
+        if (!cancelled) setJoinRequestStatus('none');
+      }
+    };
+    loadStatus();
+    const timer = setInterval(loadStatus, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [viewStage, prejoinMode, roomKind, meetingCode]);
+
+  useEffect(() => {
+    if (viewStage !== 'inRoom' || rightPanel !== 'people' || roomKind !== 'free' || !isRoomHost) {
+      return undefined;
+    }
+    const room = String(activeRoomId || safeRoomId || meetingCode || '').trim();
+    if (!room) return undefined;
+    let cancelled = false;
+    const loadPending = async () => {
+      try {
+        const res = await api.get(`/voice/rooms/${encodeURIComponent(room)}/join-requests`, {
+          skipGlobalErrorHandling: true,
+        });
+        if (cancelled) return;
+        const rows = unwrapVoiceApi(res);
+        setPendingJoinRequests(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setPendingJoinRequests([]);
+      }
+    };
+    loadPending();
+    const timer = setInterval(loadPending, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [viewStage, rightPanel, roomKind, isRoomHost, activeRoomId, safeRoomId, meetingCode]);
 
   /** Cuộc gọi bạn bè: gọi thoại → tắt video ở prejoin */
   useEffect(() => {
@@ -1259,7 +1351,6 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       setViewStage('home');
       setRightPanel(null);
       setInviteModalOpen(false);
-      setReactionPickerOpen(false);
       setRoomChatEmojiOpen(false);
       setRoomMessages([]);
       setRoomChatInput('');
@@ -1394,15 +1485,30 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
 
   useEffect(() => {
     if (landingDemo) return undefined;
-    if (safeRoomId) {
-      setMeetingCode(safeRoomId);
-      setPrejoinMode('join');
-      setViewStage((prev) => (prev === 'inRoom' ? 'inRoom' : 'prejoin'));
-    } else {
+    if (!safeRoomId) {
       setViewStage('home');
       setPrejoinMode(null);
+      return;
     }
-  }, [safeRoomId]);
+    setMeetingCode(safeRoomId);
+    const invitedJoin = searchParams.get('join') === '1';
+    const creatorRoom = isReservedCreatorRoomCode(safeRoomId);
+    if (invitedJoin) {
+      setPrejoinMode('join');
+      setRoomKind('free');
+      setJoinRequestStatus('none');
+      setViewStage((prev) => (prev === 'inRoom' ? 'inRoom' : 'prejoin'));
+      return;
+    }
+    if (creatorRoom) {
+      setPrejoinMode('create');
+      setRoomKind('free');
+      setViewStage((prev) => (prev === 'inRoom' ? 'inRoom' : 'prejoin'));
+      return;
+    }
+    setPrejoinMode((prev) => (prev === 'create' ? 'create' : 'join'));
+    setViewStage((prev) => (prev === 'inRoom' ? 'inRoom' : 'prejoin'));
+  }, [safeRoomId, searchParams, landingDemo]);
 
   useEffect(() => {
     return () => {
@@ -1483,6 +1589,8 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
     setSelectedOrgId('');
     setSelectedDeptId('');
     setJoinModalOpen(false);
+    setJoining(false);
+    setJoinRequestSubmitting(false);
     setViewStage('prejoin');
   };
 
@@ -1511,7 +1619,56 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
     setViewStage('home');
   };
 
-  const handleJoinMeeting = () => {
+  const handleResolveJoinRequest = async (requestId, action) => {
+    const room = String(activeRoomId || safeRoomId || meetingCode || '').trim();
+    if (!room || !requestId) return;
+    try {
+      await api.post(
+        `/voice/rooms/${encodeURIComponent(room)}/join-requests/${encodeURIComponent(requestId)}/${action}`,
+        {},
+        { skipGlobalErrorHandling: true }
+      );
+      setPendingJoinRequests((prev) => prev.filter((r) => String(r.id) !== String(requestId)));
+      emitNotificationsRefresh();
+      toast.success(action === 'approve' ? t('voiceRoom.approveBtn') : t('voiceRoom.rejectBtn'));
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('common.errorGeneric'));
+    }
+  };
+
+  const handleSendInvites = async () => {
+    const room = String(activeRoomId || safeRoomId || meetingCode || '').trim();
+    if (!room) return;
+    const q = inviteSearch.trim();
+    const emails = INVITE_EMAIL_RE.test(q) ? [q.toLowerCase()] : [];
+    const friendIds = [...selectedInviteIds];
+    if (!friendIds.length && !emails.length) {
+      toast.error(t('voiceRoom.inviteNoMatch'));
+      return;
+    }
+    try {
+      setInviteSending(true);
+      await api.post(
+        `/voice/rooms/${encodeURIComponent(room)}/invites`,
+        {
+          friendIds,
+          emails,
+          hostName: displayNameInput || localDisplayName,
+        },
+        { skipGlobalErrorHandling: true }
+      );
+      toast.success(t('voiceRoom.inviteSentOk'));
+      setInviteModalOpen(false);
+      setInviteSearch('');
+      setSelectedInviteIds([]);
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('voiceRoom.inviteSentFail'));
+    } finally {
+      setInviteSending(false);
+    }
+  };
+
+  const handleJoinMeeting = async () => {
     const code = String(meetingCode || '').trim();
     if (!code) {
       toast.error(t('voiceRoom.meetingIdRequired'));
@@ -1526,7 +1683,83 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
         toast.error(t('voiceRoom.selectDept'));
         return;
       }
+      initVoiceRoom({
+        targetRoomId: code,
+        audioEnabled: prejoinAudioEnabled,
+        videoEnabled: prejoinVideoEnabled,
+        displayName: displayNameInput,
+      });
+      return;
     }
+
+    const isCreatorFlow =
+      roomKind === 'free' &&
+      (prejoinMode === 'create' || isReservedCreatorRoomCode(code) || isRoomHost);
+
+    if (isCreatorFlow) {
+      try {
+        setJoinRequestSubmitting(true);
+        const res = await api.post(
+          `/voice/rooms/${encodeURIComponent(code)}/lobby/host`,
+          {},
+          { skipGlobalErrorHandling: true }
+        );
+        const data = unwrapVoiceApi(res);
+        if (data?.hostUserId) setRoomHostUserId(String(data.hostUserId));
+        else setRoomHostUserId(currentUserId);
+      } catch (err) {
+        const status = err?.response?.status;
+        const msg = err?.response?.data?.message || '';
+        if (status !== 409) {
+          toast.error(msg || t('common.errorGeneric'));
+          setJoinRequestSubmitting(false);
+          return;
+        }
+        setRoomHostUserId(currentUserId);
+      }
+      setJoinRequestSubmitting(false);
+      initVoiceRoom({
+        targetRoomId: code,
+        audioEnabled: prejoinAudioEnabled,
+        videoEnabled: prejoinVideoEnabled,
+        displayName: displayNameInput,
+      });
+      return;
+    }
+
+    if (roomKind === 'free' && prejoinMode === 'join') {
+      if (joinRequestStatus === 'approved') {
+        initVoiceRoom({
+          targetRoomId: code,
+          audioEnabled: prejoinAudioEnabled,
+          videoEnabled: prejoinVideoEnabled,
+          displayName: displayNameInput,
+        });
+        return;
+      }
+      if (joinRequestStatus === 'pending') return;
+      try {
+        setJoinRequestSubmitting(true);
+        await api.post(
+          `/voice/rooms/${encodeURIComponent(code)}/join-requests`,
+          { displayName: displayNameInput || localDisplayName },
+          { skipGlobalErrorHandling: true }
+        );
+        setJoinRequestStatus('pending');
+        toast.success(t('voiceRoom.joinRequestSent'));
+      } catch (err) {
+        const msg = err?.response?.data?.message || '';
+        if (msg.includes('host has not started')) {
+          toast.error(t('voiceRoom.hostNotStarted'));
+        } else {
+          toast.error(msg || t('common.errorGeneric'));
+        }
+      } finally {
+        setJoinRequestSubmitting(false);
+      }
+      return;
+    }
+
     initVoiceRoom({
       targetRoomId: code,
       audioEnabled: prejoinAudioEnabled,
@@ -1534,6 +1767,27 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
       displayName: displayNameInput,
     });
   };
+
+  const isCreatorPrejoin = useMemo(
+    () =>
+      roomKind === 'free' &&
+      (prejoinMode === 'create' || isReservedCreatorRoomCode(meetingCode) || isRoomHost),
+    [roomKind, prejoinMode, meetingCode, isRoomHost]
+  );
+
+  const prejoinPrimaryLabel = useMemo(() => {
+    if (roomKind === 'free' && !isCreatorPrejoin && prejoinMode === 'join') {
+      if (joinRequestStatus === 'approved') return t('voiceRoom.enterRoomBtn');
+      if (joinRequestStatus === 'pending') return t('voiceRoom.waitingApprovalBtn');
+      return t('voiceRoom.requestJoinBtn');
+    }
+    return t('voiceRoom.startBtn');
+  }, [roomKind, isCreatorPrejoin, prejoinMode, joinRequestStatus, t]);
+
+  const prejoinPrimaryDisabled =
+    joinRequestSubmitting ||
+    (viewStage === 'prejoin' && joining) ||
+    (roomKind === 'free' && !isCreatorPrejoin && prejoinMode === 'join' && joinRequestStatus === 'pending');
 
   const clockNow = new Date();
   const dateLine = clockNow
@@ -2095,10 +2349,28 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                     <button
                       type="button"
                       onClick={handleJoinMeeting}
-                      className="mt-8 w-full rounded-xl bg-gradient-to-r from-cyan-600 via-teal-600 to-sky-500 py-3.5 text-center text-base font-semibold text-white shadow-lg transition hover:brightness-110"
+                      disabled={prejoinPrimaryDisabled}
+                      className="mt-8 w-full rounded-xl bg-gradient-to-r from-cyan-600 via-teal-600 to-sky-500 py-3.5 text-center text-base font-semibold text-white shadow-lg transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('voiceRoom.startBtn')}
+                      {joinRequestSubmitting ? t('voiceRoom.connectingRoom') : prejoinPrimaryLabel}
                     </button>
+                    {roomKind === 'free' && !isCreatorPrejoin && prejoinMode === 'join' && joinRequestStatus === 'pending' ? (
+                      <p
+                        className={`mt-3 text-center text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}
+                      >
+                        {t('voiceRoom.joinRequestSent')}
+                      </p>
+                    ) : null}
+                    {roomKind === 'free' && !isCreatorPrejoin && prejoinMode === 'join' && joinRequestStatus === 'approved' ? (
+                      <p
+                        className={`mt-3 text-center text-xs ${isDarkMode ? 'text-emerald-500' : 'text-emerald-600'}`}
+                      >
+                        {t('voiceRoom.joinRequestApproved')}
+                      </p>
+                    ) : null}
+                    {roomKind === 'free' && !isCreatorPrejoin && prejoinMode === 'join' && joinRequestStatus === 'rejected' ? (
+                      <p className="mt-3 text-center text-xs text-red-500">{t('voiceRoom.joinRequestRejected')}</p>
+                    ) : null}
                     <button
                       type="button"
                       onClick={handlePrejoinCancel}
@@ -2275,37 +2547,6 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
               </div>
             )}
 
-            {reactionPickerOpen && (
-              <button
-                type="button"
-                aria-label={t('voiceRoom.closeReactionAria')}
-                className="fixed inset-0 z-[34] cursor-default bg-black/20"
-                onClick={() => setReactionPickerOpen(false)}
-              />
-            )}
-            {reactionPickerOpen && (
-              <div className="fixed bottom-28 left-1/2 z-[36] w-[min(100vw-2rem,22rem)] -translate-x-1/2 rounded-2xl border border-white/15 bg-zinc-900/98 p-3 shadow-2xl backdrop-blur-md md:bottom-32">
-                <p className="mb-2 text-center text-[11px] font-medium uppercase tracking-wide text-white/50">
-                  {t('voiceRoom.reactionsTitle')}
-                </p>
-                <div className="grid max-h-48 grid-cols-8 gap-1 overflow-y-auto pr-1">
-                  {COMPOSER_EMOJI_LIST.map((emoji) => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      className="rounded-lg p-1.5 text-xl transition hover:bg-white/10"
-                      onClick={() => {
-                        toast(t('voiceRoom.reactSent', { emoji }), { icon: emoji });
-                        setReactionPickerOpen(false);
-                      }}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* Thanh điều khiển nổi (hình 3) */}
             <div className="pointer-events-none absolute bottom-4 left-0 right-0 z-30 flex justify-center px-2 md:bottom-8">
               <div className="pointer-events-auto flex max-w-[min(100%,56rem)] flex-wrap items-end justify-between gap-3 rounded-2xl border border-white/10 bg-black/85 px-3 py-3 shadow-2xl backdrop-blur-xl md:gap-6 md:px-6">
@@ -2334,36 +2575,14 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                     icon={Users}
                     badge={totalParticipants}
                     pressed={rightPanel === 'people'}
-                    onClick={() => {
-                      setReactionPickerOpen(false);
-                      setRightPanel((p) => (p === 'people' ? null : 'people'));
-                    }}
-                    chevron
-                  />
-                  <VoiceToolbarControl
-                    label={t('voiceRoom.toolbarReact')}
-                    icon={Heart}
-                    pressed={reactionPickerOpen}
-                    onClick={() => {
-                      setRightPanel(null);
-                      setReactionPickerOpen((v) => !v);
-                    }}
+                    onClick={() => setRightPanel((p) => (p === 'people' ? null : 'people'))}
                     chevron
                   />
                   <VoiceToolbarControl
                     label={t('voiceRoom.toolbarChat')}
                     icon={MessageSquare}
                     pressed={rightPanel === 'chat'}
-                    onClick={() => {
-                      setReactionPickerOpen(false);
-                      setRightPanel((p) => (p === 'chat' ? null : 'chat'));
-                    }}
-                    chevron
-                  />
-                  <VoiceToolbarControl
-                    label={t('voiceRoom.toolbarShare')}
-                    icon={Share2}
-                    onClick={() => setInviteModalOpen(true)}
+                    onClick={() => setRightPanel((p) => (p === 'chat' ? null : 'chat'))}
                     chevron
                   />
                   <div className="relative" ref={moreMenuWrapRef}>
@@ -2371,10 +2590,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                       label={t('voiceRoom.toolbarMore')}
                       icon={MoreHorizontal}
                       pressed={moreMenuOpen}
-                      onClick={() => {
-                        setReactionPickerOpen(false);
-                        setMoreMenuOpen((v) => !v);
-                      }}
+                      onClick={() => setMoreMenuOpen((v) => !v)}
                       chevron={false}
                     />
                     {moreMenuOpen && (
@@ -2642,10 +2858,54 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                             {displayNameInput || localDisplayName}{' '}
                             <span className="text-gray-500">{t('voiceRoom.you')}</span>
                           </div>
-                          <div className="text-xs text-gray-500">{t('voiceRoom.host')}</div>
+                          {isRoomHost ? (
+                            <div className="text-xs text-gray-500">{t('voiceRoom.host')}</div>
+                          ) : null}
                         </div>
                       </div>
                     </div>
+                    {roomKind === 'free' && isRoomHost ? (
+                      <div className="mt-4">
+                        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                          {t('voiceRoom.pendingApprovalTitle')}
+                        </p>
+                        {pendingJoinRequests.length === 0 ? (
+                          <p className="text-xs text-gray-500">{t('voiceRoom.pendingApprovalEmpty')}</p>
+                        ) : (
+                          <ul className="space-y-2">
+                            {pendingJoinRequests.map((req) => (
+                              <li
+                                key={req.id}
+                                className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3"
+                              >
+                                <UserAvatar
+                                  name={req.displayName || req.userId || '?'}
+                                  userId={req.userId}
+                                  size="sm"
+                                />
+                                <div className="min-w-0 flex-1 truncate text-sm text-white">
+                                  {req.displayName || req.userId}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleResolveJoinRequest(req.id, 'approve')}
+                                  className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-500"
+                                >
+                                  {t('voiceRoom.approveBtn')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleResolveJoinRequest(req.id, 'reject')}
+                                  className="rounded-lg border border-white/20 px-2.5 py-1 text-xs text-gray-300 hover:bg-white/10"
+                                >
+                                  {t('voiceRoom.rejectBtn')}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ) : null}
                     {participants.map((p) => (
                       <div
                         key={p.socketId}
@@ -2738,8 +2998,21 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                       </ul>
                     )}
                   </div>
-                  <div className="border-t border-white/10 px-4 py-3 text-center text-xs text-gray-500">
-                    {t('voiceRoom.inviteFooter')}
+                  <div className="border-t border-white/10 px-4 py-3">
+                    <p className="mb-3 text-center text-xs text-gray-500">{t('voiceRoom.inviteFooter')}</p>
+                    {roomKind === 'free' && isRoomHost ? (
+                      <button
+                        type="button"
+                        disabled={
+                          inviteSending ||
+                          (!selectedInviteIds.length && !INVITE_EMAIL_RE.test(inviteSearch.trim()))
+                        }
+                        onClick={handleSendInvites}
+                        className="flex w-full items-center justify-center rounded-xl bg-sky-600 py-2.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {inviteSending ? t('common.loadingEllipsis') : t('voiceRoom.inviteSendBtn')}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               </div>

@@ -9,7 +9,12 @@ import { useTheme } from '../../context/ThemeContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
-import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
+import friendService from '../../services/friendService';
+import {
+  NOTIFICATIONS_REFRESH_EVENT,
+  markFriendNotificationsResolved,
+  markVoiceRoomJoinRequestNotificationsResolved,
+} from '../../services/notificationSync';
 import { useFriendPending, useNotificationsInfinite, useOrganizationsMy } from '../../hooks/queries';
 import { useOrgShell } from '../../hooks/queries/useOrgShell';
 import { queryKeys } from '../../lib/queryKeys';
@@ -37,6 +42,21 @@ function rawNotificationHasOrgScope(item) {
 }
 
 const ORG_NOTIFICATIONS_PATH = '/notifications/organization';
+
+function unwrapApiBody(res) {
+  const body = res?.data;
+  if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'data')) {
+    return body.data;
+  }
+  return body ?? null;
+}
+
+function getNotifActionKind(notif) {
+  if (!notif || notif.read || notif.data?.resolved) return 'none';
+  if (notif.data?.kind === 'voice_room_join_request') return 'voice_join';
+  if (notif.rawType === 'friend_request') return 'friend_request';
+  return 'navigate';
+}
 
 function NotificationsPage() {
   const navigate = useNavigate();
@@ -106,6 +126,7 @@ function NotificationsPage() {
   const [notifSearch, setNotifSearch] = useState('');
   const [notifications, setNotifications] = useState([]);
   const [deleteNotifConfirmId, setDeleteNotifConfirmId] = useState(null);
+  const [actingNotifId, setActingNotifId] = useState('');
   const { on, off } = useSocket();
   const queryClient = useQueryClient();
 
@@ -316,7 +337,11 @@ function NotificationsPage() {
       const ids = new Set((payload?.notificationIds || []).map(String));
       if (ids.size === 0) return;
       setNotifications((prev) =>
-        prev.map((n) => (ids.has(String(n.id)) ? { ...n, read: true } : n))
+        prev.map((n) =>
+          ids.has(String(n.id))
+            ? { ...n, read: true, data: { ...(n.data || {}), resolved: true } }
+            : n
+        )
       );
     };
 
@@ -333,6 +358,7 @@ function NotificationsPage() {
     on('notification:new', handleNotificationNew);
     on('notification:bulk_new', handleNotificationBulk);
     on('notification:read', handleRead);
+    on('notification:read_many', handleReadMany);
     on('notification:read_all', handleReadAll);
     on('notification:deleted', handleDeleted);
     on('notification:deleted_read_all', handleDeletedReadAll);
@@ -347,6 +373,106 @@ function NotificationsPage() {
       off('notification:deleted_read_all', handleDeletedReadAll);
     };
   }, [on, off, notificationScope, organizationIdFilter]);
+
+  const markNotifResolvedLocal = useCallback((notifId, patchData = {}) => {
+    if (!notifId) return;
+    setNotifications((prev) =>
+      prev.map((n) =>
+        String(n.id) === String(notifId)
+          ? {
+              ...n,
+              read: true,
+              data: { ...(n.data || {}), resolved: true, ...patchData },
+            }
+          : n
+      )
+    );
+  }, []);
+
+  const resolveVoiceJoinRequestId = async (notif) => {
+    const roomId = String(notif?.data?.roomId || '').trim();
+    let requestId = String(notif?.data?.requestId || '').trim();
+    if (requestId || !roomId) return { roomId, requestId };
+    const requestUserId = String(notif?.data?.requestUserId || '').trim();
+    try {
+      const res = await api.get(`/voice/rooms/${encodeURIComponent(roomId)}/join-requests`, {
+        skipGlobalErrorHandling: true,
+      });
+      const rows = unwrapApiBody(res);
+      const list = Array.isArray(rows) ? rows : [];
+      const match = requestUserId
+        ? list.find((r) => String(r.userId) === requestUserId)
+        : list[0];
+      requestId = match?.id ? String(match.id) : '';
+    } catch {
+      requestId = '';
+    }
+    return { roomId, requestId };
+  };
+
+  const handleApproveVoiceJoin = async (notif) => {
+    if (!notif?.id || actingNotifId) return;
+    setActingNotifId(notif.id);
+    try {
+      const { roomId, requestId } = await resolveVoiceJoinRequestId(notif);
+      if (!roomId || !requestId) {
+        toast.error(t('notifications.toastVoiceApproveFail'));
+        return;
+      }
+      await api.post(
+        `/voice/rooms/${encodeURIComponent(roomId)}/join-requests/${encodeURIComponent(requestId)}/approve`,
+        {},
+        { skipGlobalErrorHandling: true }
+      );
+      await markVoiceRoomJoinRequestNotificationsResolved({
+        roomId,
+        requestId,
+        requestUserId: notif.data?.requestUserId,
+      });
+      markNotifResolvedLocal(notif.id);
+      toast.success(t('notifications.toastVoiceApproved'));
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('notifications.toastVoiceApproveFail'));
+    } finally {
+      setActingNotifId('');
+    }
+  };
+
+  const handleAcceptFriendRequest = async (notif) => {
+    if (!notif?.id || actingNotifId) return;
+    const counterpartyId = String(notif?.data?.userId || notif?.data?.friendId || '').trim();
+    if (!counterpartyId) return;
+    setActingNotifId(notif.id);
+    try {
+      await friendService.acceptFriend(counterpartyId);
+      await markFriendNotificationsResolved(counterpartyId);
+      markNotifResolvedLocal(notif.id);
+      queryClient.invalidateQueries({ queryKey: queryKeys.friends.all });
+      toast.success(t('notifications.toastFriendAccepted'));
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('notifications.toastFriendActionFail'));
+    } finally {
+      setActingNotifId('');
+    }
+  };
+
+  const handleRejectFriendRequest = async (notif) => {
+    if (!notif?.id || actingNotifId) return;
+    const counterpartyId = String(notif?.data?.userId || notif?.data?.friendId || '').trim();
+    if (!counterpartyId) return;
+    setActingNotifId(notif.id);
+    try {
+      await friendService.rejectFriend(counterpartyId);
+      await markFriendNotificationsResolved(counterpartyId);
+      markNotifResolvedLocal(notif.id);
+      queryClient.invalidateQueries({ queryKey: queryKeys.friends.all });
+      toast.success(t('notifications.toastFriendRejected'));
+    } catch (err) {
+      toast.error(err?.response?.data?.message || t('notifications.toastFriendActionFail'));
+    } finally {
+      setActingNotifId('');
+    }
+  };
 
   const handleMarkAsRead = async (id) => {
     if (!id) return;
@@ -414,8 +540,23 @@ function NotificationsPage() {
         toast(t('notifications.toastOpenFriendReq'), { icon: '👥' });
         break;
       case 'meeting':
-        navigate('/calendar');
-        toast(t('notifications.toastOpenCalendar'), { icon: '📅' });
+        if (
+          notif.data?.kind === 'voice_room_invite' ||
+          notif.data?.kind === 'voice_room_join_request'
+        ) {
+          const voiceUrl = String(notif.actionUrl || '').trim();
+          if (voiceUrl.startsWith('/voice')) {
+            navigate(voiceUrl);
+          } else if (notif.data?.roomId) {
+            navigate(`/voice/${encodeURIComponent(notif.data.roomId)}?join=1`);
+          } else {
+            navigate('/voice');
+          }
+          toast(t('notifications.toastOpenVoiceRoom'), { icon: '🎙️' });
+        } else {
+          navigate('/calendar');
+          toast(t('notifications.toastOpenCalendar'), { icon: '📅' });
+        }
         break;
       case 'system':
         navigate(targetWorkspacePath || '/settings');
@@ -625,22 +766,47 @@ function NotificationsPage() {
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">
-                  {notif.useBellCard && notif.type === 'friend' ? (
+                  {getNotifActionKind(notif) === 'voice_join' ? (
                     <GradientButton
-                      variant="friend"
+                      variant="primary"
                       className="!px-5 !py-2.5 !rounded-xl text-sm font-bold whitespace-nowrap shadow-lg"
-                      onClick={() => handleOpenNotification(notif)}
+                      disabled={Boolean(actingNotifId)}
+                      onClick={() => handleApproveVoiceJoin(notif)}
                     >
-                      {t('notifications.addFriend')}
+                      {actingNotifId === notif.id
+                        ? t('notifications.loading')
+                        : t('notifications.actionApprove')}
                     </GradientButton>
-                  ) : (
-                  <button 
-                    onClick={() => handleOpenNotification(notif)}
-                    className="bg-[#040f2a] border border-slate-800 px-4 py-2 rounded-lg hover:bg-slate-800/70 transition-all text-sm font-semibold whitespace-nowrap"
-                  >
-                    {notif.action}
-                  </button>
-                  )}
+                  ) : getNotifActionKind(notif) === 'friend_request' ? (
+                    <>
+                      <GradientButton
+                        variant="friend"
+                        className="!px-5 !py-2.5 !rounded-xl text-sm font-bold whitespace-nowrap shadow-lg"
+                        disabled={Boolean(actingNotifId)}
+                        onClick={() => handleAcceptFriendRequest(notif)}
+                      >
+                        {actingNotifId === notif.id
+                          ? t('notifications.loading')
+                          : t('notifications.actionAccept')}
+                      </GradientButton>
+                      <button
+                        type="button"
+                        disabled={Boolean(actingNotifId)}
+                        onClick={() => handleRejectFriendRequest(notif)}
+                        className="rounded-lg border border-slate-700 bg-[#040f2a] px-4 py-2 text-sm font-semibold text-gray-300 transition hover:bg-slate-800/70 disabled:opacity-50"
+                      >
+                        {t('notifications.actionReject')}
+                      </button>
+                    </>
+                  ) : getNotifActionKind(notif) === 'navigate' ? (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenNotification(notif)}
+                      className="rounded-lg border border-slate-800 bg-[#040f2a] px-4 py-2 text-sm font-semibold whitespace-nowrap transition hover:bg-slate-800/70"
+                    >
+                      {notif.action}
+                    </button>
+                  ) : null}
                   {!notif.read && (
                     <button 
                       onClick={() => handleMarkAsRead(notif.id)}

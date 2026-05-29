@@ -396,6 +396,48 @@ class MeetingController {
         });
       }
 
+      const voiceRoomLobbyService = require('../services/voiceRoomLobby.service');
+      const voiceRoomJoinRequestService = require('../services/voiceRoomJoinRequest.service');
+      const { isFreePublicLobbyRoom } = require('../utils/voiceRoomKind');
+
+      if (isFreePublicLobbyRoom(roomId)) {
+        const lobby = await voiceRoomLobbyService.getLobby(roomId);
+        const myRequest = await voiceRoomJoinRequestService.getRequestForUser(roomId, userId);
+        const isHost = lobby ? String(lobby.hostUserId) === String(userId) : false;
+
+        if (lobby && lobby.joinPolicy === 'approval' && !isHost) {
+          const approved = myRequest?.status === 'approved';
+          if (approved) {
+            voiceRoomAccess.rememberLobbyBootstrap(roomId, userId);
+          }
+          return res.json({
+            success: true,
+            data: {
+              roomId,
+              role: 'guest',
+              status: approved ? 'active' : 'approval_required',
+              joinPolicy: 'approval',
+              joinRequestStatus: myRequest?.status || 'none',
+              hostUserId: String(lobby.hostUserId),
+            },
+          });
+        }
+
+        if (isHost) {
+          voiceRoomAccess.rememberLobbyBootstrap(roomId, userId);
+          return res.json({
+            success: true,
+            data: {
+              roomId,
+              role: 'host',
+              status: 'active',
+              joinPolicy: lobby?.joinPolicy || 'approval',
+              hostUserId: String(lobby.hostUserId),
+            },
+          });
+        }
+      }
+
       voiceRoomAccess.rememberLobbyBootstrap(roomId, userId);
       res.json({
         success: true,

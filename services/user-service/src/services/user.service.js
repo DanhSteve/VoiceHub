@@ -226,6 +226,7 @@ class UserService {
           { username: searchRegex },
           { displayName: searchRegex },
           { phone: searchRegex },
+          { email: searchRegex },
         ],
         isActive: true,
       };
@@ -233,7 +234,7 @@ class UserService {
       const users = await UserProfile.find(filter)
         .limit(limit * 1)
         .skip((page - 1) * limit)
-        .select('userId username displayName avatar status')
+        .select('userId username displayName avatar status email')
         .sort({ username: 1 });
 
       const total = await UserProfile.countDocuments(filter);

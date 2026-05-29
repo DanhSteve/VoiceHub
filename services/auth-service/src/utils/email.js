@@ -288,6 +288,48 @@ class EmailService {
   }
 
   /**
+   * Gửi email mời vào phòng thoại (public room link).
+   */
+  async sendVoiceRoomInviteEmail(email, { inviteUrl, roomId, hostName }) {
+    try {
+      if (!this.isAvailable()) {
+        console.warn('[EmailService] Voice room invite email skipped: service not configured');
+        return null;
+      }
+      const url = String(inviteUrl || '').trim();
+      if (!url) return null;
+      const hostLabel = String(hostName || 'Một người dùng').trim();
+      const roomLabel = String(roomId || '').trim();
+
+      const mailOptions = {
+        from: `"${process.env.EMAIL_FROM_NAME || 'VoiceHub'}" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: `Lời mời vào phòng thoại${roomLabel ? ` — ${roomLabel}` : ''}`,
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"></head>
+          <body style="font-family:Arial,sans-serif;line-height:1.6;color:#333;">
+            <p>Xin chào,</p>
+            <p><strong>${hostLabel}</strong> mời bạn vào phòng thoại trên VoiceHub.</p>
+            <p>Mã phòng: <strong>${roomLabel || '—'}</strong></p>
+            <p><a href="${url}" style="display:inline-block;padding:12px 24px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px;">Tham gia phòng</a></p>
+            <p>Hoặc mở link: <br/><span style="word-break:break-all;">${url}</span></p>
+            <p style="font-size:12px;color:#666;">Bạn cần đăng nhập (hoặc đăng ký) trước khi xin vào phòng. Chủ phòng sẽ duyệt yêu cầu của bạn.</p>
+          </body>
+          </html>
+        `,
+        text: `${hostLabel} mời bạn vào phòng ${roomLabel}. Mở link: ${url}`,
+      };
+      const info = await this.transporter.sendMail(mailOptions);
+      return info;
+    } catch (error) {
+      console.error('Error sending voice room invite email:', error);
+      return null;
+    }
+  }
+
+  /**
    * Kiểm tra email service có sẵn sàng không
    */
   isAvailable() {

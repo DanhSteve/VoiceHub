@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const { verifyAccessToken } = require('../config/jwt');
+const internalGatewayAuth = require('/shared/middleware/internalGatewayAuth');
 
 // Middleware xác thực
 const authenticate = (req, res, next) => {
@@ -25,6 +26,13 @@ const authenticate = (req, res, next) => {
     });
   }
 };
+
+// Internal — voice-service gửi email mời phòng
+router.post(
+  '/internal/voice-room-invite',
+  internalGatewayAuth,
+  authController.sendVoiceRoomInviteEmail.bind(authController)
+);
 
 // Public routes
 router.post('/register', authController.register.bind(authController));

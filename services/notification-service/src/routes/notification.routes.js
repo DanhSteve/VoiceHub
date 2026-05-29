@@ -29,6 +29,18 @@ router.patch(
   notificationController.markFriendRelatedRead.bind(notificationController)
 );
 
+router.patch(
+  '/read-voice-room-join-request',
+  requireUser,
+  notificationController.markVoiceRoomJoinRequestRead.bind(notificationController)
+);
+
+router.patch(
+  '/internal/read-voice-room-join-request',
+  internalNotificationAuth,
+  notificationController.markVoiceRoomJoinRequestReadInternal.bind(notificationController)
+);
+
 // Đánh dấu notification là đã đọc
 router.patch('/:notificationId/read', requireUser, notificationController.markAsRead.bind(notificationController));
 

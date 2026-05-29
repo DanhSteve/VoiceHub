@@ -1,4 +1,5 @@
 const authService = require('../services/auth.service');
+const emailService = require('../utils/email');
 const { resolveFrontendUrl } = require('/shared');
 const { readEmailFromStored } = require('/shared/utils/emailPii');
 
@@ -383,6 +384,35 @@ class AuthController {
       });
     } catch (error) {
       return sendError(res, error, 500, 'Không tải được thông tin tài khoản', 'AUTH_ME_FAILED');
+    }
+  }
+
+  /** Gọi nội bộ từ voice-service — gửi email mời phòng thoại */
+  async sendVoiceRoomInviteEmail(req, res) {
+    try {
+      const { email, inviteUrl, roomId, hostName } = req.body || {};
+      const normalized = String(email || '').trim().toLowerCase();
+      if (!normalized || !normalized.includes('@')) {
+        return res.status(400).json({ success: false, message: 'email is required' });
+      }
+      const url = String(inviteUrl || '').trim();
+      if (!url) {
+        return res.status(400).json({ success: false, message: 'inviteUrl is required' });
+      }
+      const info = await emailService.sendVoiceRoomInviteEmail(normalized, {
+        inviteUrl: url,
+        roomId: String(roomId || '').trim(),
+        hostName: String(hostName || '').trim(),
+      });
+      if (!info) {
+        return res.status(503).json({
+          success: false,
+          message: 'Email service is not configured',
+        });
+      }
+      return res.json({ success: true, sent: true });
+    } catch (error) {
+      return sendError(res, error, 500, 'Không gửi được email mời', 'AUTH_VOICE_INVITE_EMAIL_FAILED');
     }
   }
 }

@@ -12,8 +12,7 @@ export function emitNotificationsRefresh() {
 }
 
 /**
- * Sau accept/reject kết bạn: server đánh dấu đã đọc thông báo liên quan tới counterpartyId
- * (requester khi bạn là người nhận lời mời).
+ * Sau accept/reject kết bạn: server đánh dấu đã đọc thông báo liên quan tới counterpartyId.
  */
 export async function markFriendNotificationsResolved(counterpartyId) {
   if (!counterpartyId) return { ok: false };
@@ -25,6 +24,29 @@ export async function markFriendNotificationsResolved(counterpartyId) {
     return { ok: true };
   } catch (e) {
     console.warn('[notificationSync] markFriendNotificationsResolved', e?.message || e);
+    return { ok: false };
+  }
+}
+
+/**
+ * Sau duyệt/từ chối yêu cầu vào phòng voice (từ thông báo hoặc tab thành viên).
+ */
+export async function markVoiceRoomJoinRequestNotificationsResolved({
+  roomId,
+  requestId,
+  requestUserId,
+}) {
+  if (!roomId) return { ok: false };
+  try {
+    await api.patch('/notifications/read-voice-room-join-request', {
+      roomId: String(roomId),
+      ...(requestId ? { requestId: String(requestId) } : {}),
+      ...(requestUserId ? { requestUserId: String(requestUserId) } : {}),
+    });
+    emitNotificationsRefresh();
+    return { ok: true };
+  } catch (e) {
+    console.warn('[notificationSync] markVoiceRoomJoinRequestNotificationsResolved', e?.message || e);
     return { ok: false };
   }
 }

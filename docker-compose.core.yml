@@ -582,6 +582,10 @@ services:
 
       USER_SERVICE_INTERNAL_TOKEN: ${USER_SERVICE_INTERNAL_TOKEN}
 
+      NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN}
+
+      GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
+
     depends_on:
 
       - mongodb
@@ -591,6 +595,8 @@ services:
       - socket-service
 
       - chat-service
+
+      - notification-service
 
     networks:
 

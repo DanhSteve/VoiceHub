@@ -6,7 +6,10 @@ import friendService from '../../services/friendService';
 import UserAvatar from '../Shared/UserAvatar';
 import { useAppStrings } from '../../locales/appStrings';
 import { queryKeys } from '../../lib/queryKeys';
-import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
+import {
+  NOTIFICATIONS_REFRESH_EVENT,
+  markFriendNotificationsResolved,
+} from '../../services/notificationSync';
 
 function profileFromRow(row) {
   const candidates = [row?.requester, row?.fromUser, row?.userId];
@@ -72,6 +75,7 @@ export default function FriendPendingRequestsRail({
     setActingKey(item.rowKey);
     try {
       await friendService.acceptFriend(item.id);
+      await markFriendNotificationsResolved(item.id);
       toast.success(t('friendChat.pendingAcceptOk'));
       invalidateAll();
       onAccepted?.(item);
@@ -87,6 +91,7 @@ export default function FriendPendingRequestsRail({
     setActingKey(item.rowKey);
     try {
       await friendService.rejectFriend(item.id);
+      await markFriendNotificationsResolved(item.id);
       toast.success(t('friendChat.pendingRejectOk'));
       invalidateAll();
     } catch (err) {

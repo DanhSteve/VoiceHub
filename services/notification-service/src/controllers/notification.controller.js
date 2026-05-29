@@ -142,7 +142,57 @@ class NotificationController {
     }
   }
 
+  /** Gọi nội bộ từ voice-service sau duyệt/từ chối yêu cầu vào phòng */
+  async markVoiceRoomJoinRequestReadInternal(req, res) {
+    try {
+      const { userId, roomId, requestId, requestUserId } = req.body || {};
+      if (!userId || !roomId) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId and roomId are required',
+        });
+      }
+      const result = await notificationService.markVoiceRoomJoinRequestRead(userId, {
+        roomId,
+        requestId,
+        requestUserId,
+      });
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      logger.error('Mark voice room join request read (internal) error:', error);
+      return res.status(400).json({
+        success: false,
+        message: safeMessage(error, 'Không thể cập nhật thông báo'),
+      });
+    }
+  }
+
   // Đánh dấu đã đọc mọi thông báo kết bạn liên quan tới một user (sau accept/reject)
+  async markVoiceRoomJoinRequestRead(req, res) {
+    try {
+      const userId = req.user?.id || req.userContext?.userId;
+      const { roomId, requestId, requestUserId } = req.body || {};
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      if (!roomId) {
+        return res.status(400).json({ success: false, message: 'roomId is required' });
+      }
+      const result = await notificationService.markVoiceRoomJoinRequestRead(userId, {
+        roomId,
+        requestId,
+        requestUserId,
+      });
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      logger.error('Mark voice room join request read error:', error);
+      return res.status(400).json({
+        success: false,
+        message: safeMessage(error, 'Không thể cập nhật thông báo'),
+      });
+    }
+  }
+
   async markFriendRelatedRead(req, res) {
     try {
       const userId = req.user?.id || req.userContext?.userId;

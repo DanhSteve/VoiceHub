@@ -1,7 +1,10 @@
 const mongoose = require('../db');
 const Meeting = require('../models/Meeting');
 const callSessionService = require('./callSession.service');
+const voiceRoomLobbyService = require('./voiceRoomLobby.service');
+const voiceRoomJoinRequestService = require('./voiceRoomJoinRequest.service');
 const { assertOrgVoiceChannelAccess } = require('../utils/orgVoiceChannelAccess');
+const { isFreePublicLobbyRoom } = require('../utils/voiceRoomKind');
 
 /** userId đã gọi bootstrap cho phòng lobby mã tự do (Zoom-style). */
 const lobbyBootstrapUsers = new Map();
@@ -89,6 +92,25 @@ async function assertVoiceRoomAccess({ roomId, userId, organizationId, authoriza
       throw err;
     }
     return { kind: 'meeting', meetingId: String(meeting._id) };
+  }
+
+  if (isFreePublicLobbyRoom(rid)) {
+    const lobby = await voiceRoomLobbyService.getLobby(rid);
+    if (lobby && lobby.joinPolicy === 'approval') {
+      const isHost = String(lobby.hostUserId) === uid;
+      if (isHost) {
+        rememberLobbyBootstrap(rid, uid);
+        return { kind: 'lobby', role: 'host' };
+      }
+      const approved = await voiceRoomJoinRequestService.isApproved(rid, uid);
+      if (!approved) {
+        const err = new Error('Join request must be approved by the host');
+        err.statusCode = 403;
+        throw err;
+      }
+      rememberLobbyBootstrap(rid, uid);
+      return { kind: 'lobby', role: 'participant' };
+    }
   }
 
   if (!hasLobbyBootstrap(rid, uid)) {
