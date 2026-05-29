@@ -2739,7 +2739,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     if (!joinRoom || !leaveRoom) return undefined;
 
     const roomKey = String(selectedChannelId);
-    joinRoom(roomKey);
+    joinRoom(roomKey, selectedOrganizationId);
 
     const appendVoiceMessage = (msg) => {
       const rid = String(msg?.roomId || msg?.room || '');

@@ -1,7 +1,8 @@
 const axios = require('axios');
 const logger = require('./logger');
 
-const SOCKET_SERVICE_URL = process.env.SOCKET_SERVICE_URL || 'http://socket-service:3017';
+const SOCKET_SERVICE_URL = String(process.env.SOCKET_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!SOCKET_SERVICE_URL) throw new Error('Thiếu biến môi trường: SOCKET_SERVICE_URL');
 const INTERNAL_REALTIME_TOKEN = process.env.REALTIME_INTERNAL_TOKEN || '';
 
 async function emitRealtimeEvent(event = {}, options = {}) {

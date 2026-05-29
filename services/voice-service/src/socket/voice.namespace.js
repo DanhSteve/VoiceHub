@@ -21,6 +21,15 @@ function registerVoiceNamespace(io) {
         const roomId = payload.roomId;
         if (!roomId) throw new Error('roomId is required');
 
+        const voiceRoomAccess = require('../services/voiceRoomAccess.service');
+        const authHeader = socket.handshake?.headers?.authorization;
+        await voiceRoomAccess.assertVoiceRoomAccess({
+          roomId: String(roomId),
+          userId: String(userId),
+          organizationId: payload.organizationId,
+          authorizationHeader: authHeader,
+        });
+
         const joined = await roomManager.joinRoom({
           roomId,
           socketId: socket.id,
@@ -59,7 +68,8 @@ function registerVoiceNamespace(io) {
           displayName,
         });
       } catch (error) {
-        callback(callbackError());
+        const msg = error?.statusCode === 403 ? 'Forbidden' : error?.message;
+        callback({ success: false, error: msg || 'Không thể tham gia phòng thoại' });
       }
     });
 

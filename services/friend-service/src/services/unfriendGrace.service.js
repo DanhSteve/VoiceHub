@@ -3,7 +3,8 @@ const FriendUnfriendGrace = require('../models/FriendUnfriendGrace');
 const { logger, mongo } = require('/shared');
 const { mongoose } = mongo;
 
-const CHAT_SERVICE_URL = process.env.CHAT_SERVICE_URL || 'http://chat-service:3006';
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
 
 const DEFAULT_GRACE_MS = 12 * 60 * 60 * 1000;

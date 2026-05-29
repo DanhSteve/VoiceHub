@@ -1,3 +1,5 @@
+const TASK_SERVICE_URL = String(process.env.TASK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!TASK_SERVICE_URL) throw new Error('Thiếu biến môi trường: TASK_SERVICE_URL');
 const express = require('express');
 const axios = require('axios');
 const { buildTrustedGatewayHeaders } = require('../../../../shared/middleware/gatewayTrust');
@@ -123,7 +125,7 @@ router.post('/confirm', async (req, res) => {
     return res.json({ success: true, data: { taskId: String(extraction.taskId), extractionId: String(extraction._id) } });
   }
 
-  const taskServiceUrl = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
+  const taskServiceUrl = process.env.TASK_SERVICE_URL;
   const draft = extraction.draft || {};
   if (!draft.dueDate) {
     return fail(res, 422, 'Tin nhắn chưa có deadline rõ ngày/giờ nên chưa thể tạo task tự động', 'AI_DUE_DATE_REQUIRED');
@@ -217,7 +219,7 @@ router.post('/:taskId/sync-suggestions/:id/approve', async (req, res) => {
     return res.status(409).json({ success: false, message: `Suggestion already ${suggestion.status}` });
   }
 
-  const taskServiceUrl = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
+  const taskServiceUrl = process.env.TASK_SERVICE_URL;
   const taskRes = await axios.get(`${taskServiceUrl}/api/tasks/${suggestion.taskId}`, {
     headers: buildTrustedGatewayHeaders(userId),
     timeout: 15000,

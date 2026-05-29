@@ -1,51 +1,75 @@
-// Cấu hình các microservices
+const AUTH_SERVICE_URL = String(process.env.AUTH_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!AUTH_SERVICE_URL) throw new Error('Thiếu biến môi trường: AUTH_SERVICE_URL');
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
+const FRIEND_SERVICE_URL = String(process.env.FRIEND_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!FRIEND_SERVICE_URL) throw new Error('Thiếu biến môi trường: FRIEND_SERVICE_URL');
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
+const ROLE_PERMISSION_SERVICE_URL = String(process.env.ROLE_PERMISSION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ROLE_PERMISSION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ROLE_PERMISSION_SERVICE_URL');
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
+const VOICE_SERVICE_URL = String(process.env.VOICE_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!VOICE_SERVICE_URL) throw new Error('Thiếu biến môi trường: VOICE_SERVICE_URL');
+const TASK_SERVICE_URL = String(process.env.TASK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!TASK_SERVICE_URL) throw new Error('Thiếu biến môi trường: TASK_SERVICE_URL');
+const AI_TASK_SERVICE_URL = String(process.env.AI_TASK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!AI_TASK_SERVICE_URL) throw new Error('Thiếu biến môi trường: AI_TASK_SERVICE_URL');
+const DOCUMENT_SERVICE_URL = String(process.env.DOCUMENT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!DOCUMENT_SERVICE_URL) throw new Error('Thiếu biến môi trường: DOCUMENT_SERVICE_URL');
+const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!NOTIFICATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: NOTIFICATION_SERVICE_URL');
+const SOCKET_SERVICE_URL = String(process.env.SOCKET_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!SOCKET_SERVICE_URL) throw new Error('Thiếu biến môi trường: SOCKET_SERVICE_URL');
+// Cấu hình các microservices — URL chỉ từ biến môi trường (không hardcode hostname nội bộ).
 const services = {
   auth: {
-    url: process.env.AUTH_SERVICE_URL || 'http://auth-service:3001',
+    url: AUTH_SERVICE_URL,
     routes: ['/api/auth'],
   },
   user: {
-    url: process.env.USER_SERVICE_URL || 'http://user-service:3004',
+    url: USER_SERVICE_URL,
     routes: ['/api/users'],
   },
   friend: {
-    url: process.env.FRIEND_SERVICE_URL || 'http://friend-service:3014',
+    url: FRIEND_SERVICE_URL,
     routes: ['/api/friends'],
   },
   organization: {
-    url: process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013',
+    url: ORGANIZATION_SERVICE_URL,
     routes: ['/api/organizations', '/api/channels'],
   },
   rolePermission: {
-    url: process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015',
+    url: ROLE_PERMISSION_SERVICE_URL,
     routes: ['/api/roles', '/api/permissions'],
   },
   chat: {
-    url: process.env.CHAT_SERVICE_URL || 'http://chat-service:3006',
+    url: CHAT_SERVICE_URL,
     routes: ['/api/messages', '/api/chat'],
   },
   voice: {
-    url: process.env.VOICE_SERVICE_URL || 'http://voice-service:3005',
+    url: VOICE_SERVICE_URL,
     routes: ['/api/voice', '/api/meetings'],
   },
   task: {
-    url: process.env.TASK_SERVICE_URL || 'http://task-service:3009',
+    url: TASK_SERVICE_URL,
     routes: ['/api/tasks', '/api/work'],
   },
   aiTask: {
-    url: process.env.AI_TASK_SERVICE_URL || 'http://ai-task-service:3020',
+    url: AI_TASK_SERVICE_URL,
     routes: ['/api/ai/tasks'],
   },
   document: {
-    url: process.env.DOCUMENT_SERVICE_URL || 'http://document-service:3010',
+    url: DOCUMENT_SERVICE_URL,
     routes: ['/api/documents'],
   },
   notification: {
-    url: process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3003',
+    url: NOTIFICATION_SERVICE_URL,
     routes: ['/api/notifications'],
   },
   socket: {
-    url: process.env.SOCKET_SERVICE_URL || 'http://socket-service:3017',
+    url: SOCKET_SERVICE_URL,
     routes: [],
   },
 };
@@ -105,9 +129,14 @@ const getServiceByPath = (path) => {
   return null;
 };
 
-// Kiểm tra route có public không
+/** Route public — khớp chính xác hoặc prefix có dấu `/` sau (tránh `/health` khớp `/healthcare`). */
 const isPublicRoute = (path) => {
-  return publicRoutes.some((route) => path.startsWith(route));
+  const normalized = String(path || '').split('?')[0].replace(/\/+/g, '/');
+  return publicRoutes.some((route) => {
+    if (normalized === route) return true;
+    if (route.endsWith('/')) return normalized.startsWith(route);
+    return normalized.startsWith(`${route}/`);
+  });
 };
 
 module.exports = {
@@ -118,7 +147,3 @@ module.exports = {
   resolveReqApiPath,
   isWorkspaceTaskBoardPath,
 };
-
-
-
-

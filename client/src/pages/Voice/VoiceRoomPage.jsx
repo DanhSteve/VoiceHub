@@ -49,7 +49,6 @@ import { buildAudioConstraints, loadVoiceAudioPrefs, saveVoiceAudioPrefs } from 
 import { resolveAppOrigin } from '../../utils/browserOrigin';
 import UserAvatar from '../../components/Shared/UserAvatar';
 import { isAvatarImageUrl } from '../../utils/avatarDisplay';
-import { resolveMediaUrl } from '../../utils/helpers';
 
 /** Nút thanh họp: icon + (badge) + chevron + nhãn — tham chiếu layout Zoom/Teams (hình 1) */
 function VoiceToolbarControl({
@@ -1618,7 +1617,8 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
           ) : (
             <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center gap-4 bg-gradient-to-b from-zinc-900/80 to-black/80 md:min-h-[260px]">
               <UserAvatar
-                avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+                avatar={localAvatar}
+                userId={user?.id || user?._id}
                 name={localDisplayName}
                 size="hero"
                 className="shadow-lg"
@@ -1742,7 +1742,8 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                         }`}
                       >
                         <UserAvatar
-                          avatar={isAvatarImageUrl(friend.avatar) ? resolveMediaUrl(friend.avatar) : null}
+                          avatar={friend.avatar}
+                          userId={friend.id || friend.userId}
                           name={friend.label}
                           size="chip"
                         />
@@ -1867,7 +1868,8 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                       ) : (
                         <div className="flex h-full w-full flex-col items-center justify-center gap-3">
                           <UserAvatar
-                            avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+                            avatar={localAvatar}
+                            userId={user?.id || user?._id}
                             name={displayNameInput || localDisplayName}
                             size="2xl"
                           />
@@ -2630,7 +2632,8 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                     <div className="rounded-xl border border-white/10 bg-black/30 p-3">
                       <div className="flex items-center gap-3">
                         <UserAvatar
-                          avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+                          avatar={localAvatar}
+                          userId={user?.id || user?._id}
                           name={displayNameInput || localDisplayName}
                           size="md"
                         />
@@ -2713,7 +2716,8 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                             }
                           >
                             <UserAvatar
-                              avatar={isAvatarImageUrl(row.avatar) ? resolveMediaUrl(row.avatar) : null}
+                              avatar={row.avatar}
+                              userId={row.id || row.userId}
                               name={row.label}
                               size="md"
                             />

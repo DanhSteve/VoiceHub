@@ -119,6 +119,10 @@ const taskSchema = new mongoose.Schema(
         },
       },
     ],
+    encV: {
+      type: Number,
+      default: 0,
+    },
     isActive: {
       type: Boolean,
       default: true,

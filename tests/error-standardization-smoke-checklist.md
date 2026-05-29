@@ -17,6 +17,15 @@ Dam bao cac luong chinh tra ve thong diep than thien va ma loi on dinh.
 - Toast/banner hien thi qua resolver (`resolveApiErrorMessage`).
 - Khong con callsite dung truc tiep `err.response?.data?.message || err.message` tai cac trang traffic cao.
 
+## Security regression (sau hardening)
+
+- User thuong `POST /api/roles` -> `403`; org admin -> `200`.
+- `POST /api/messages/internal/*` qua gateway (co/khong token) -> `403`/`401`.
+- User A khong doc notification user B qua gateway.
+- Friend call: chi caller/callee join duoc room `friend-1on1-*`.
+- `GET /uploads/*` khong JWT -> `401`; co JWT -> `200`.
+- Socket `room:join` org channel: member hop le -> joined; user ngoai org -> `room:error`.
+
 ## Kiem tra backend
 
 - Response loi co `messageUser` va `errorCode` o domain da migrate.

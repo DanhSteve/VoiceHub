@@ -72,6 +72,9 @@ router.get('/phone/:phone', userController.getUserProfileByPhone.bind(userContro
 // Lấy user profile theo username
 router.get('/username/:username', userController.getUserProfileByUsername.bind(userController));
 
+// Avatar có JWT (img tag dùng ?access_token= qua gateway)
+router.get('/:userId/avatar', userController.getUserAvatar.bind(userController));
+
 // Lấy user profile theo ID
 router.get('/:userId', userController.getUserProfileById.bind(userController));
 

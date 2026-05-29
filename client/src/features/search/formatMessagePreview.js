@@ -1,13 +1,15 @@
 import { guessNameFromUrl } from '../../components/Chat/ChatFileAttachment';
 import { formatBusinessCardLine, getBusinessCardFields } from './businessCardDisplay';
 import { fileDisplayNameFromMessage } from '../../utils/friendChatMedia';
+import { formatCallLogPreview } from '../../utils/friendCallLog';
 
 /**
  * Preview tin nhắn cho search (DM, org chat, dashboard) — không hiển thị JSON thô.
  * @param {object} message
  * @param {(key: string, vars?: object) => string} [t]
+ * @param {{ currentUserId?: string }} [options]
  */
-export function formatMessagePreview(message, t) {
+export function formatMessagePreview(message, t, options = {}) {
   const mt = String(message?.messageType || 'text').toLowerCase();
   const raw = message?.content;
 
@@ -16,6 +18,9 @@ export function formatMessagePreview(message, t) {
   }
 
   if (mt === 'call_log') {
+    if (t && options.currentUserId) {
+      return formatCallLogPreview(raw, t, options.currentUserId);
+    }
     return t ? t('friendChat.callLogPreview') : 'Cuộc gọi';
   }
 

@@ -5,6 +5,11 @@ const {
   decryptFieldSafe,
   phoneBlindIndex,
 } = require('/shared/utils/fieldCrypto');
+const {
+  readEmailFromStored,
+  writeEmailFields,
+  migrateEmailOnDocument,
+} = require('/shared/utils/emailPii');
 const { unwrapPlaintext } = require('/shared/utils/migration');
 
 function readBioPlain(stored) {
@@ -21,10 +26,25 @@ function readBioPlain(stored) {
 /** Plaintext cho API response (GET /users/me). */
 function readPiiFromProfile(plain) {
   return {
+    email: readEmailFromStored(plain.email),
     bio: readBioPlain(plain.bio),
     phone: decryptFieldSafe(plain.phone, ''),
     location: unwrapPlaintext(plain.location) || '',
   };
+}
+
+function writeEmailPatch(email) {
+  return writeEmailFields(email);
+}
+
+async function maybeMigrateProfileEmail(UserProfile, doc) {
+  if (!doc) return null;
+  const { plain, persist } = migrateEmailOnDocument(doc);
+  if (persist && doc._id) {
+    await UserProfile.updateOne({ _id: doc._id }, { $set: persist });
+    Object.assign(doc, persist);
+  }
+  return plain;
 }
 
 /** Chuẩn bị $set khi PATCH profile — mã hóa at-rest khi bật ENCRYPTION_MASTER_KEY. */
@@ -60,4 +80,6 @@ function writePiiPatch(input = {}) {
 module.exports = {
   readPiiFromProfile,
   writePiiPatch,
+  writeEmailPatch,
+  maybeMigrateProfileEmail,
 };

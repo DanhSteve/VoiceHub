@@ -1,6 +1,9 @@
+const path = require('path');
+const fs = require('fs');
 const userService = require('../services/user.service');
 const { logger, getRedisClient } = require('/shared');
 const { readPiiFromProfile } = require('../utils/profilePii');
+const { uploadsDir } = require('../config/uploadsPath');
 
 /** Định danh người gọi (chỉ từ userContext sau khi header gateway đã được tin cậy). */
 function actorUserId(req) {
@@ -407,6 +410,30 @@ class UserController {
         success: false,
         message: error.message,
       });
+    }
+  }
+
+  async getUserAvatar(req, res) {
+    try {
+      const requesterId = actorUserId(req);
+      if (!requesterId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      const { userId } = req.params;
+      const profile = await userService.getUserProfileById(userId);
+      if (!profile?.avatar) {
+        return res.status(404).json({ success: false, message: 'Avatar not found' });
+      }
+      const rel = String(profile.avatar).replace(/^\/uploads\//, '').replace(/^uploads\//, '');
+      const safeName = path.basename(rel);
+      const filePath = path.join(uploadsDir, safeName);
+      if (!filePath.startsWith(uploadsDir) || !fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, message: 'Avatar file not found' });
+      }
+      return res.sendFile(filePath);
+    } catch (error) {
+      logger.error('Get user avatar error:', error);
+      return sendError(res, error, 404, 'Không thể tải ảnh đại diện', 'USER_AVATAR_GET_FAILED');
     }
   }
 

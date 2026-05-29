@@ -3,6 +3,7 @@ const taskService = require('../services/task.service');
 const Task = require('../models/Task');
 const mongoose = require('../db');
 const { logger } = require('/shared');
+const { isEncryptionEnabled } = require('/shared/utils/fieldCrypto');
 const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
 const { publishTaskFromFileJob } = require('../messaging/taskFromFilePublisher');
 const {
@@ -13,12 +14,11 @@ const {
   userCanAccessTask,
 } = require('../services/taskWorkspaceScope');
 
-const CHAT_SERVICE_URL = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
-const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-  /\/$/,
-  ''
-);
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 
 function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
   const status = Number(err?.statusCode) || fallbackStatus;
@@ -270,18 +270,24 @@ class TaskController {
 
       const searchQ = first(q.q);
       if (searchQ != null && String(searchQ).trim() !== '') {
-        const esc = String(searchQ)
-          .trim()
-          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const textSearch = {
-          $or: [
-            { title: { $regex: esc, $options: 'i' } },
-            { description: { $regex: esc, $options: 'i' } },
-          ],
-        };
-        const existing = { ...filter };
-        Object.keys(filter).forEach((k) => delete filter[k]);
-        filter.$and = [existing, textSearch];
+        if (isEncryptionEnabled()) {
+          logger.warn(
+            '[TaskController] Bỏ qua tìm kiếm text (q) — title/description đã mã hóa at-rest'
+          );
+        } else {
+          const esc = String(searchQ)
+            .trim()
+            .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const textSearch = {
+            $or: [
+              { title: { $regex: esc, $options: 'i' } },
+              { description: { $regex: esc, $options: 'i' } },
+            ],
+          };
+          const existing = { ...filter };
+          Object.keys(filter).forEach((k) => delete filter[k]);
+          filter.$and = [existing, textSearch];
+        }
       }
 
       let sort = { createdAt: -1 };

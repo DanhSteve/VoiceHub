@@ -338,6 +338,65 @@ class MeetingController {
         });
       }
 
+      const voiceRoomAccess = require('../services/voiceRoomAccess.service');
+      const authHeader = req.headers.authorization;
+
+      if (String(roomId).startsWith('friend-1on1-')) {
+        const friendCall = await voiceRoomAccess.assertVoiceRoomAccess({
+          roomId,
+          userId,
+          authorizationHeader: authHeader,
+        });
+        return res.json({
+          success: true,
+          data: {
+            roomId,
+            role: 'participant',
+            status: friendCall.status === 'accepted' ? 'active' : friendCall.status,
+            callId: String(friendCall._id),
+          },
+        });
+      }
+
+      const orgId =
+        req.query?.organizationId ||
+        req.body?.organizationId ||
+        req.headers['x-organization-id'];
+      if (orgId) {
+        await voiceRoomAccess.assertVoiceRoomAccess({
+          roomId,
+          userId,
+          organizationId: orgId,
+          authorizationHeader: authHeader,
+        });
+        voiceRoomAccess.rememberLobbyBootstrap(roomId, userId);
+        return res.json({
+          success: true,
+          data: { roomId, role: 'participant', status: 'active', organizationId: String(orgId) },
+        });
+      }
+
+      const meetingService = require('../services/meeting.service');
+      const found = await voiceRoomAccess.findMeetingForRoom(roomId);
+      if (found) {
+        const mid = String(found._id);
+        const isHost = String(found.hostId) === String(userId);
+        if (!voiceRoomAccess.userInMeeting(found, userId)) {
+          await meetingService.addParticipant(mid, userId);
+        }
+        voiceRoomAccess.rememberLobbyBootstrap(roomId, userId);
+        return res.json({
+          success: true,
+          data: {
+            roomId,
+            meetingId: mid,
+            role: isHost ? 'host' : 'participant',
+            status: found.status || 'active',
+          },
+        });
+      }
+
+      voiceRoomAccess.rememberLobbyBootstrap(roomId, userId);
       res.json({
         success: true,
         data: {

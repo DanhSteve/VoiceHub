@@ -1,5 +1,6 @@
 const authService = require('../services/auth.service');
 const { resolveFrontendUrl } = require('/shared');
+const { readEmailFromStored } = require('/shared/utils/emailPii');
 
 function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
   const status = Number(err?.statusCode) || fallbackStatus;
@@ -87,7 +88,7 @@ class AuthController {
       }
 
       const responseData = {
-        email: result.userAuth.email,
+        email: readEmailFromStored(result.userAuth?.email),
         message: 'Registration successful. Please check your email to verify your account.',
       };
 

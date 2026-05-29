@@ -67,8 +67,13 @@ class OrganizationService {
         }
       }
 
-      const organization = await Organization.findById(organizationId)
-        .populate('ownerId', 'username displayName avatar');
+      const organization = await Organization.findById(organizationId).lean();
+      if (organization?.ownerId) {
+        const ownerProfile = await fetchUserProfileByIdInternal(String(organization.ownerId));
+        if (ownerProfile) {
+          organization.ownerId = ownerProfile;
+        }
+      }
 
       // Cache organization
       if (redis && organization) {

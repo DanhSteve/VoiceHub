@@ -4,9 +4,10 @@ const { publishFriendDm } = require('../messaging/rabbitPublisher');
 const redisPresence = require('../presence/redisPresence');
 const redisFriendChatFocus = require('../presence/redisFriendChatFocus');
 
-// URL nội bộ tới chat-service trong docker-compose
-const CHAT_SERVICE_URL = process.env.CHAT_SERVICE_URL || 'http://chat-service:3006';
-const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3004';
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
 
 function getPresenceInternalToken() {
   return String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
@@ -15,6 +16,23 @@ function getPresenceInternalToken() {
 const onlineUserSockets = new Map();
 const pendingOfflineTimers = new Map();
 const OFFLINE_GRACE_MS = Math.max(0, Number(process.env.PRESENCE_OFFLINE_GRACE_MS || 12000));
+
+const FRIEND_SEND_WINDOW_MS = Math.max(1000, Number(process.env.FRIEND_SEND_RATE_WINDOW_MS || 10000));
+const FRIEND_SEND_MAX = Math.max(1, Number(process.env.FRIEND_SEND_RATE_MAX || 30));
+const friendSendBuckets = new Map();
+
+function isFriendSendRateLimited(userKey) {
+  const key = String(userKey || '').trim();
+  if (!key) return true;
+  const now = Date.now();
+  let bucket = friendSendBuckets.get(key);
+  if (!bucket || now - bucket.start >= FRIEND_SEND_WINDOW_MS) {
+    bucket = { start: now, count: 0 };
+  }
+  bucket.count += 1;
+  friendSendBuckets.set(key, bucket);
+  return bucket.count > FRIEND_SEND_MAX;
+}
 
 function cancelPendingOffline(userKey) {
   const t = pendingOfflineTimers.get(userKey);
@@ -127,6 +145,15 @@ module.exports = function registerChatNamespace(io) {
     // ====== FRIEND DM: gửi tin nhắn ======
     socket.on('friend:send', async ({ receiverId, content, messageType = 'text', replyToMessageId }) => {
       try {
+        if (!userId) {
+          return socket.emit('error', { message: 'Unauthorized' });
+        }
+        if (isFriendSendRateLimited(userId)) {
+          return socket.emit('friend:send_failed', {
+            message: 'Gửi tin quá nhanh, vui lòng thử lại sau',
+            code: 'RATE_LIMITED',
+          });
+        }
         if (!receiverId || !content) {
           return socket.emit('error', { message: 'receiverId and content are required' });
         }
@@ -206,8 +233,25 @@ module.exports = function registerChatNamespace(io) {
       }
     });
 
-    socket.on('room:join', ({ roomId }) => {
+    socket.on('room:join', async ({ roomId, organizationId } = {}) => {
       if (!roomId) return;
+      const orgId = String(organizationId || '').trim();
+      if (!orgId) {
+        socket.emit('room:error', { roomId, message: 'organizationId is required' });
+        return;
+      }
+      const { assertOrgChannelSocketAccess } = require('../utils/orgRoomAccess');
+      const authHeader = socket.handshake?.headers?.authorization;
+      const access = await assertOrgChannelSocketAccess({
+        userId: String(userId),
+        organizationId: orgId,
+        channelId: String(roomId),
+        authorizationHeader: authHeader,
+      });
+      if (!access.allowed) {
+        socket.emit('room:error', { roomId, message: 'Forbidden' });
+        return;
+      }
       socket.join(roomId);
       socket.emit('room:joined', { roomId });
     });
@@ -218,8 +262,25 @@ module.exports = function registerChatNamespace(io) {
       socket.emit('room:left', { roomId });
     });
 
-    socket.on('room:send', ({ roomId, event = 'room:new_message', payload = {} }) => {
+    socket.on('room:send', async ({ roomId, organizationId, event = 'room:new_message', payload = {} } = {}) => {
       if (!roomId) return;
+      const orgId = String(organizationId || '').trim();
+      if (!orgId) {
+        socket.emit('room:error', { roomId, message: 'organizationId is required' });
+        return;
+      }
+      const { assertOrgChannelSocketAccess } = require('../utils/orgRoomAccess');
+      const authHeader = socket.handshake?.headers?.authorization;
+      const access = await assertOrgChannelSocketAccess({
+        userId: String(userId),
+        organizationId: orgId,
+        channelId: String(roomId),
+        authorizationHeader: authHeader,
+      });
+      if (!access.allowed) {
+        socket.emit('room:error', { roomId, message: 'Forbidden' });
+        return;
+      }
       emitToRoom(roomId, event, {
         ...payload,
         senderId: userId || null,

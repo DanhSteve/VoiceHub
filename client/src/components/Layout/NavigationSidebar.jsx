@@ -41,6 +41,7 @@ import {
     navSidebarRail,
     navTimeText,
     shellNavRailBackdrop,
+    shellNavRailMenuBackdropZ,
     shellNavRailZ,
     profileDropdownBody,
     profileDropdownCard,
@@ -93,6 +94,13 @@ const ORG_NAV_DEF = [
 const canUseHoverExpand = () =>
   typeof window !== 'undefined' &&
   window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+/** Giữ chỗ cột nav trong flex layout; rail tương tác render qua portal fixed. */
+const RAIL_LAYOUT_SPACER_CLASS = 'w-14 shrink-0 sm:w-16 md:w-[68px]';
+
+function navRailBackdropClassName(extra = '') {
+  return `${shellNavRailBackdrop} ${shellNavRailMenuBackdropZ}${extra ? ` ${extra}` : ''}`;
+}
 
 const NavigationSidebar = ({ landingDemo = false } = {}) => {
   const [time, setTime] = useState(new Date());
@@ -233,15 +241,29 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     }
   }, [location.pathname, landingDemo, refreshOrganizations]);
 
-  /** Tránh overlay z-[998] kẹt sau điều hướng — chặn click toàn màn hình trên client. */
+  /** Tránh overlay menu backdrop kẹt sau điều hướng — chặn click/hover toàn màn hình. */
   useEffect(() => {
     setProfileOpen(false);
     setCreateOrgMenuOpen(false);
     setJoinByLinkOpen(false);
+    setLogoutConfirmOpen(false);
     setSidebarExpanded(!canUseHoverExpand());
     setTooltip((p) => (p.show ? { ...p, show: false } : p));
     workspaceUrlSyncRef.current = '';
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key !== 'Escape') return;
+      setProfileOpen(false);
+      setCreateOrgMenuOpen(false);
+      setJoinByLinkOpen(false);
+      setLogoutConfirmOpen(false);
+      setTooltip((p) => (p.show ? { ...p, show: false } : p));
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const orgIdFromUrl = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -573,11 +595,10 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     ? 'Tạo tổ chức'
     : createOrgShortLabelRaw;
 
-  return (
-    <>
+  const railNode = (
       <div
         ref={railMeasureRef}
-        className={`relative ${shellNavRailZ} isolate flex h-screen shrink-0 flex-col border-r transition-[width] duration-300 ease-out ${borderR} w-14 overflow-visible pointer-events-auto touch-manipulation sm:w-16 md:w-[68px]`}
+        className={`fixed inset-y-0 left-0 ${shellNavRailZ} isolate flex h-screen shrink-0 flex-col border-r transition-[width] duration-300 ease-out ${borderR} w-14 overflow-visible pointer-events-auto touch-manipulation sm:w-16 md:w-[68px]`}
         onMouseEnter={() => {
           if (canUseHoverExpand()) setSidebarExpanded(true);
         }}
@@ -734,6 +755,12 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
           </div>
         </div>
       </div>
+  );
+
+  return (
+    <>
+      <div className={`${RAIL_LAYOUT_SPACER_CLASS} h-screen shrink-0 pointer-events-none`} aria-hidden />
+      {typeof document !== 'undefined' ? createPortal(railNode, document.body) : railNode}
 
       <ProfileModal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} />
       {tooltipPortal}
@@ -741,12 +768,12 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
         createPortal(
           <>
             <div
-              className={`${shellNavRailBackdrop} z-[998]`}
+              className={navRailBackdropClassName()}
               onClick={() => setCreateOrgMenuOpen(false)}
               aria-hidden
             />
             <div
-              className={`fixed left-20 top-1/2 z-[999] w-[280px] -translate-y-1/2 rounded-2xl border p-4 shadow-xl ${
+              className={`fixed left-20 top-1/2 z-[1190] w-[280px] -translate-y-1/2 rounded-2xl border p-4 shadow-xl ${
                 isDarkMode
                   ? 'border-white/10 bg-[#111622] text-slate-100'
                   : 'border-slate-200 bg-white text-slate-900'
@@ -785,12 +812,12 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
         createPortal(
           <>
             <div
-              className={`${shellNavRailBackdrop} z-[998]`}
+              className={navRailBackdropClassName()}
               onClick={() => setJoinByLinkOpen(false)}
               aria-hidden
             />
             <div
-              className={`fixed left-1/2 top-1/2 z-[999] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-4 shadow-xl ${
+              className={`fixed left-1/2 top-1/2 z-[1190] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-4 shadow-xl ${
                 isDarkMode
                   ? 'border-white/10 bg-[#111622] text-slate-100'
                   : 'border-slate-200 bg-white text-slate-900'
@@ -841,12 +868,12 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
         createPortal(
           <>
             <div
-              className={`${shellNavRailBackdrop} z-[998]`}
+              className={navRailBackdropClassName()}
               onClick={() => setProfileOpen(false)}
               aria-hidden
             />
             <div
-              className={`fixed bottom-6 left-20 z-[999] w-[320px] animate-slideUp overflow-hidden rounded-2xl ${profileDropdownCard(isDarkMode)}`}
+              className={`fixed bottom-6 left-20 z-[1190] w-[320px] animate-slideUp overflow-hidden rounded-2xl ${profileDropdownCard(isDarkMode)}`}
             >
               <div className={`relative px-4 pb-4 pt-6 ${profileDropdownHeader()}`}>
                 <div className="flex items-center gap-3">

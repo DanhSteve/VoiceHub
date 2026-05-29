@@ -1,3 +1,5 @@
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 const axios = require('axios');
 const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
 const UserOrgChannelAccess = require('../models/UserOrgChannelAccess');
@@ -97,10 +99,7 @@ async function upsertLocal(orgId, userId, payload) {
 }
 
 async function fetchFromOrganizationService(orgId, req) {
-  const base = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-    /\/$/,
-    ''
-  );
+  const base = process.env.ORGANIZATION_SERVICE_URL;
   const url = `${base}/api/organizations/${orgId}/accessible-channel-ids`;
   const { data } = await axios.get(url, {
     headers: headersForOrganizationForward(req),

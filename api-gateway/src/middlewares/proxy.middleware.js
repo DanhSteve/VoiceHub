@@ -163,7 +163,9 @@ const proxyMiddleware = (req, res, next) => {
   console.log(`[API-Gateway] ✅ ========== PROXY REQUEST STARTED ==========`);
   console.log(`[API-Gateway] Proxying ${req.method} ${req.path} to ${fullTargetUrl}`);
   
-  // Forward user info trong header (nếu có) + bằng chứng gateway cho microservice
+  delete req.headers['x-organization-id'];
+  delete req.headers['x-server-id'];
+
   const gatewayToken = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
   if (gatewayToken) {
     req.headers['x-gateway-internal-token'] = gatewayToken;

@@ -1,97 +1,182 @@
 # Hạ tầng: MongoDB + Redis + volumes + network dùng chung
+
 # Thường không cần chạy riêng — đã gộp trong `docker-compose.yml` (include).
-# Chạy riêng: docker compose -f docker-compose.infra.yml up -d
+
+# Credential / key: file `.env` ở root — không hardcode trong compose.
+
+
 
 services:
+
   mongodb:
+
     image: mongo:7
+
     container_name: enterprise-mongodb
+
     ports:
+
       - "27017:27017"
+
     volumes:
+
       - mongodb_data:/data/db
+
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password
+
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+
     networks:
+
       - enterprise-network
+
+
 
   redis:
+
     image: redis:7-alpine
+
     container_name: enterprise-redis
+
     ports:
+
       - "6379:6379"
+
     volumes:
+
       - redis_data:/data
+
     networks:
+
       - enterprise-network
 
-  # Message broker: DM friend async (socket-service → chat-service)
+
+
   meilisearch:
+
     image: getmeili/meilisearch:v1.12
+
     container_name: enterprise-meilisearch
+
     ports:
+
       - "7700:7700"
+
     environment:
-      MEILI_ENV: ${MEILI_ENV:-development}
-      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-voicehub-meili-dev-change-me}
+
+      MEILI_ENV: ${MEILI_ENV}
+
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+
       MEILI_NO_ANALYTICS: "true"
+
     volumes:
+
       - meilisearch_data:/meili_data
+
     networks:
+
       - enterprise-network
+
+
 
   rabbitmq:
+
     image: rabbitmq:3-management-alpine
+
     container_name: enterprise-rabbitmq
+
     hostname: rabbitmq
+
     ports:
+
       - "5672:5672"
+
       - "15672:15672"
+
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-voicehub}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-voicehub-dev-change-me}
+
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+
     volumes:
+
       - rabbitmq_data:/var/lib/rabbitmq
+
     healthcheck:
-      # ping có thể pass trước khi cổng AMQP 5672 sẵn sàng — dùng check_port_connectivity
+
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+
       interval: 10s
+
       timeout: 10s
+
       retries: 12
+
       start_period: 40s
+
     networks:
+
       - enterprise-network
 
-  # LLM runtime (self-host) — phục vụ ai-task-worker
-  # Sau khi container chạy: docker exec enterprise-ollama ollama pull qwen2.5:3b-instruct
-  # (hoặc model khác và đặt OLLAMA_MODEL trong services/ai-task-worker/.env cho khớp)
+
+
   ollama:
+
     image: ollama/ollama:latest
+
     container_name: enterprise-ollama
+
     ports:
+
       - "11434:11434"
+
     volumes:
+
       - ollama_data:/root/.ollama
+
     networks:
+
       - enterprise-network
 
-  # OCR runtime (Phase 4) — REST API OCR
+
+
   paddleocr-service:
+
     image: blazordevlab/paddleocrapi:latest
+
     container_name: enterprise-paddleocr-service
+
     ports:
+
       - "8000:8000"
+
     networks:
+
       - enterprise-network
+
+
 
 volumes:
+
   mongodb_data:
+
   redis_data:
+
   rabbitmq_data:
+
   meilisearch_data:
+
   ollama_data:
 
+
+
 networks:
+
   enterprise-network:
+
     driver: bridge
+

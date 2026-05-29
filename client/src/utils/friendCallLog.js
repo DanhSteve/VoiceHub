@@ -44,6 +44,35 @@ export function formatFriendCallDuration(totalSec, t) {
  * @param {string} currentUserId
  * @param {{ callerId: string, calleeId: string }} log
  */
+/**
+ * Nhãn preview cho dashboard/search (không hiển thị JSON).
+ * @param {string|object} raw
+ * @param {(key: string, vars?: object) => string} t
+ * @param {string} [currentUserId]
+ */
+export function formatCallLogPreview(raw, t, currentUserId) {
+  const log = parseFriendCallLog(raw);
+  if (!log || !t) return t ? t('friendChat.callLogPreview') : 'Cuộc gọi';
+
+  const me = String(currentUserId || '').trim();
+  const isOutgoing = me && me === String(log.callerId);
+  const media = log.media === 'audio' ? 'audio' : 'video';
+  const titleKey =
+    media === 'video'
+      ? isOutgoing
+        ? 'friendChat.callLogOutgoingVideo'
+        : 'friendChat.callLogIncomingVideo'
+      : isOutgoing
+        ? 'friendChat.callLogOutgoingAudio'
+        : 'friendChat.callLogIncomingAudio';
+
+  const title = t(titleKey);
+  if (log.durationSec > 0) {
+    return `${title} · ${formatFriendCallDuration(log.durationSec, t)}`;
+  }
+  return title;
+}
+
 export function peerIdForCallLogCallback(currentUserId, log) {
   const me = String(currentUserId || '').trim();
   if (!me || !log) return '';

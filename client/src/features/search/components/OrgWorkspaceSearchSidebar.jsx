@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAppStrings } from '../../../locales/appStrings';
+import UserAvatar from '../../../components/Shared/UserAvatar';
 import { useDebouncedValue } from '../useDebouncedValue';
 import { PREFIX_TO_KEY, pushSearchHistory, serializeQueryState } from '../searchTypes';
 import { fetchOrgMessageSearch, formatOrgMessageSearchError } from '../orgChatSearchConfig';
@@ -373,17 +374,11 @@ export default function OrgWorkspaceSearchSidebar({
                           'from',
                           String(row.userId),
                           row.displayName,
-                          row.avatar && String(row.avatar).startsWith('http') ? row.avatar : null
+                          row.avatar || null
                         )
                       }
                     >
-                      <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-white/10 text-lg">
-                        {row.avatar && String(row.avatar).startsWith('http') ? (
-                          <img src={row.avatar} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          '👤'
-                        )}
-                      </span>
+                      <UserAvatar avatar={row.avatar} userId={row.userId} name={row.displayName} size="sm" />
                       <span>
                         <span className={`block font-medium ${titleCls}`}>{row.displayName}</span>
                         <span className={`text-xs ${muted}`}>{row.username || ''}</span>

@@ -1,10 +1,8 @@
 const axios = require('axios');
 const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
 
-const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-  /\/$/,
-  ''
-);
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 
 /** Cache slug → organizationId theo request (không share giữa request). */
 const slugCache = new WeakMap();

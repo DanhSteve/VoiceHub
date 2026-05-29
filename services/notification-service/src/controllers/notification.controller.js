@@ -99,7 +99,15 @@ class NotificationController {
   // Lấy notifications của user
   async getUserNotifications(req, res) {
     try {
-      const userId = req.user?.id || req.userContext?.userId || req.params.userId;
+      const authenticatedUserId = req.user?.id || req.userContext?.userId;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      const paramUserId = req.params.userId ? String(req.params.userId).trim() : null;
+      if (paramUserId && paramUserId !== String(authenticatedUserId)) {
+        return res.status(403).json({ success: false, message: 'Forbidden' });
+      }
+      const userId = authenticatedUserId;
       const { isRead, type, page, limit, organizationId, scope, before, fields } =
         req.query;
 

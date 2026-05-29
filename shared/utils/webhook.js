@@ -1,7 +1,8 @@
 const axios = require('axios');
 const logger = require('./logger');
 
-const WEBHOOK_SERVICE_URL = process.env.WEBHOOK_SERVICE_URL || 'http://webhook-service:3016';
+const WEBHOOK_SERVICE_URL = String(process.env.WEBHOOK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!WEBHOOK_SERVICE_URL) throw new Error('Thiếu biến môi trường: WEBHOOK_SERVICE_URL');
 const WEBHOOK_SECRET = String(process.env.WEBHOOK_SECRET || '').trim();
 let hasWarnedMissingSecret = false;
 

@@ -2,6 +2,7 @@ const amqp = require('amqplib');
 const axios = require('axios');
 const Task = require('../models/Task');
 const taskService = require('../services/task.service');
+const { writeTaskPayload } = require('../utils/taskPii');
 const { firebaseStorage, emitRealtimeEvent, logger } = require('/shared');
 
 const QUEUE = process.env.RABBITMQ_TASK_FROM_FILE_QUEUE || 'voicehub.task.from_file';
@@ -14,7 +15,8 @@ const MAX_TRANSIENT_RETRIES = Math.max(
 
 let workerHandle = null;
 
-const CHAT_SERVICE_URL = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
 
 async function promoteChatMessage(messageId, taskId) {
@@ -70,9 +72,9 @@ async function processJob(payload) {
     const { url } = await firebaseStorage.getSignedReadUrl(destPath);
 
     await Task.findByIdAndUpdate(task._id, {
-      $set: {
+      $set: writeTaskPayload({
         attachments: [{ name: originalName || safeName, url }],
-      },
+      }),
     });
 
     await promoteChatMessage(messageId, task._id);

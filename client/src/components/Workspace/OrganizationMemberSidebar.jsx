@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { shellNavRailBackdrop, shellNavRailMenuBackdropZ } from '../../theme/shellTheme';
 import toast from 'react-hot-toast';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import roleAPI from '../../services/api/roleAPI';
@@ -111,6 +112,7 @@ function OrganizationMemberSidebar({
   const { t } = useAppStrings();
   const { isDarkMode } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [rows, setRows] = useState([]);
@@ -221,6 +223,10 @@ function OrganizationMemberSidebar({
   const closeMenu = useCallback(() => {
     setMenu((prev) => ({ ...prev, open: false, member: null, menuMaxHeight: undefined }));
   }, []);
+
+  useEffect(() => {
+    closeMenu();
+  }, [location.pathname, location.search, closeMenu]);
 
   const prevMenuOpenRef = useRef(false);
 
@@ -333,7 +339,7 @@ function OrganizationMemberSidebar({
     createPortal(
       <>
         <div
-          className="fixed inset-0 z-[9997]"
+          className={`${shellNavRailBackdrop} ${shellNavRailMenuBackdropZ}`}
           aria-hidden
           onClick={closeMenu}
           onContextMenu={(e) => {

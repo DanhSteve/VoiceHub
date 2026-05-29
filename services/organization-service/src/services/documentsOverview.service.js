@@ -8,12 +8,10 @@ const {
   buildOrganizationStructureData,
 } = require('./orgShellData.service');
 
-const CHAT_SERVICE_URL = String(
-  process.env.CHAT_SERVICE_URL || 'http://chat-service:3006'
-).replace(/\/$/, '');
-const DOCUMENT_SERVICE_URL = String(
-  process.env.DOCUMENT_SERVICE_URL || 'http://document-service:3010'
-).replace(/\/$/, '');
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
+const DOCUMENT_SERVICE_URL = String(process.env.DOCUMENT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!DOCUMENT_SERVICE_URL) throw new Error('Thiếu biến môi trường: DOCUMENT_SERVICE_URL');
 
 const MAX_ATTACHMENT_PAGES = Math.min(
   12,

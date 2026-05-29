@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification-service:3003")
+NOTIFICATION_SERVICE_URL = os.environ["NOTIFICATION_SERVICE_URL"].strip().rstrip("/")
 NOTIFICATION_INTERNAL_TOKEN = (
     os.getenv("NOTIFICATION_INTERNAL_TOKEN") or os.getenv("GATEWAY_INTERNAL_TOKEN") or ""
 ).strip()

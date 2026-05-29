@@ -41,6 +41,19 @@ const routeActionMap = {
   'GET /api/meetings': 'voice:read',
   'POST /api/meetings': 'voice:write',
 
+  // Role & Permission Service
+  'GET /api/roles/server/:serverId': 'role:read',
+  'GET /api/roles/:roleId': 'role:read',
+  'GET /api/roles/user/:userId/server/:serverId': 'role:read',
+  'POST /api/roles': 'role:write',
+  'POST /api/roles/assign': 'role:write',
+  'POST /api/roles/remove': 'role:write',
+  'PATCH /api/roles/:roleId': 'role:write',
+  'PUT /api/roles/:roleId': 'role:write',
+  'DELETE /api/roles/:roleId': 'role:write',
+  'GET /api/permissions/user/:userId/server/:serverId': 'role:read',
+  'GET /api/permissions/user/:userId/server/:serverId/role': 'role:read',
+
   // Organization Service
   'GET /api/organizations': 'organization:read',
   'POST /api/organizations': 'organization:write',
@@ -164,8 +177,7 @@ const getAction = (method, path) => {
     }
   }
 
-  // Default action nếu không match
-  return `${method.toLowerCase()}:default`;
+  return null;
 };
 
 /**
@@ -196,8 +208,6 @@ const extractServerId = (req) => {
     req.body?.serverId ||
     req.body?.organizationId ||
     (isOrganizationRoute ? req.body?.orgId : null) ||
-    req.headers['x-server-id'] ||
-    req.headers['x-organization-id'] ||
     null
   );
 };

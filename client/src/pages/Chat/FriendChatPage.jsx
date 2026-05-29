@@ -2417,7 +2417,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
                       type="button"
                       aria-label={t('friendChat.closeEmoji')}
                       onClick={() => setShowEmojiPicker(false)}
-                      className="fixed inset-0 z-40 cursor-default bg-black/30"
+                      className="fixed top-0 right-0 bottom-0 left-[var(--vh-nav-rail-width,3.5rem)] z-40 cursor-default bg-black/30"
                     />
                     <div className={emojiModalPanel}>
                       <div

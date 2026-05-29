@@ -16,8 +16,6 @@ import {
 } from 'lucide-react';
 import { useAppStrings } from '../../../locales/appStrings';
 import UserAvatar from '../../../components/Shared/UserAvatar';
-import { AVATAR_RADIUS_CLASS } from '../../../utils/avatarDisplay';
-import { resolveMediaUrl } from '../../../utils/helpers';
 import { useDebouncedValue } from '../useDebouncedValue';
 import {
   clearSearchHistory,
@@ -226,8 +224,8 @@ export default function OrgWorkspaceSearch({
                 isDarkMode ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-800'
               }`}
             >
-              {tok.key === 'from' && tok.avatar && (
-                <img src={resolveMediaUrl(tok.avatar)} alt="" className={`h-4 w-4 object-cover ${AVATAR_RADIUS_CLASS}`} />
+              {tok.key === 'from' && (
+                <UserAvatar avatar={tok.avatar} userId={tok.value} name={tok.label} size="xs" />
               )}
               <span className="truncate">
                 {tok.key === 'from' && 'từ'}
@@ -428,11 +426,11 @@ export default function OrgWorkspaceSearch({
                             'from',
                             String(row.userId),
                             row.displayName,
-                            row.avatar && String(row.avatar).startsWith('http') ? row.avatar : null
+                            row.avatar || null
                           )
                         }
                       >
-                        <UserAvatar avatar={row.avatar} name={row.displayName} size="chip" />
+                        <UserAvatar avatar={row.avatar} userId={row.userId} name={row.displayName} size="chip" />
                         <span>
                           <span className={`block font-medium ${titleCls}`}>{row.displayName}</span>
                           <span className={`text-xs ${muted}`}>{row.username || ''}</span>

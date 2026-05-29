@@ -359,16 +359,6 @@ function NotificationsPage() {
     }
   };
 
-  const handleMarkAllAsRead = async () => {
-    try {
-      await api.patch('/notifications/read-all');
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-      toast.success(t('notifications.markAllRead'));
-    } catch (error) {
-      toast.error(error?.response?.data?.message || t('notifications.markAllErr'));
-    }
-  };
-
   const confirmDeleteNotification = async () => {
     const id = deleteNotifConfirmId;
     if (!id) return;
@@ -497,45 +487,12 @@ function NotificationsPage() {
 
   const shell = `${appShellBg(isDarkMode)} ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`;
   const gc = isDarkMode ? 'border border-slate-800 bg-slate-900/60' : 'border border-slate-200 bg-white shadow-sm';
-  const btnGhost = isDarkMode
-    ? 'border border-slate-800 bg-[#040f2a] font-semibold text-sm hover:bg-slate-800/70'
-    : 'border border-slate-200 bg-white font-semibold text-sm text-slate-800 hover:bg-slate-50';
 
   return (
     <>
       <ThreeFrameLayout
         center={
           <div className={`p-5 lg:p-6 min-h-full ${shell}`}>
-        {/* Header */}
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <h1 className={`mb-1 text-3xl font-extrabold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-              {isOrgNotificationsPage
-                ? t('notifications.titleOrganization')
-                : t('notifications.title')}
-            </h1>
-            <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
-              {isOrgNotificationsPage
-                ? t('notifications.scopeOrganizationHint')
-                : t('notifications.scopePersonalHint')}
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-wrap gap-3">
-            <button 
-              onClick={() => navigate('/settings?tab=notifications')}
-              className={`rounded-xl px-4 py-2 transition-all ${btnGhost}`}
-            >
-              {t('notifications.btnNotifSettings')}
-            </button>
-            <button 
-              onClick={handleMarkAllAsRead}
-              className={`rounded-xl px-4 py-2 transition-all ${btnGhost}`}
-            >
-              {t('notifications.btnMarkAll')}
-            </button>
-          </div>
-        </div>
-
         <PageSearchToolbar
           className="-mx-5 mb-6 lg:-mx-6"
           value={notifSearch}

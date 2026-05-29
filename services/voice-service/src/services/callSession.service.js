@@ -1,3 +1,5 @@
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
 const axios = require('axios');
 const mongoose = require('../db');
 const CallSession = require('../models/CallSession');
@@ -5,8 +7,10 @@ const { applyCallAction } = require('../call/callFsm');
 const { emitRealtimeEvent } = require('/shared/utils/realtime');
 const { logger } = require('/shared');
 
-const FRIEND_SERVICE_URL = process.env.FRIEND_SERVICE_URL || 'http://friend-service:3014';
-const USER_SERVICE_URL = (process.env.USER_SERVICE_URL || 'http://user-service:3004').replace(/\/+$/, '');
+const FRIEND_SERVICE_URL = String(process.env.FRIEND_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!FRIEND_SERVICE_URL) throw new Error('Thiếu biến môi trường: FRIEND_SERVICE_URL');
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
 const USER_SERVICE_INTERNAL_TOKEN = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
 const CHAT_INTERNAL_TOKEN = String(process.env.CHAT_INTERNAL_TOKEN || '').trim();
 
@@ -15,18 +19,19 @@ function resolveChatServiceBaseUrl() {
   const direct = String(process.env.CHAT_SERVICE_DIRECT_URL || '').trim();
   if (direct) return direct.replace(/\/+$/, '');
 
-  const configured = String(process.env.CHAT_SERVICE_URL || '').trim();
-  if (configured) {
-    const base = configured.replace(/\/+$/, '');
-    if (
-      !/:3000$/.test(base) &&
-      !base.includes('api-gateway') &&
-      !base.includes('voicehub.local')
-    ) {
-      return base;
-    }
+  const base = CHAT_SERVICE_URL;
+  if (
+    /:3000$/.test(base) ||
+    base.includes('api-gateway') ||
+    base.includes('voicehub.local')
+  ) {
+    const err = new Error(
+      'CHAT_SERVICE_URL phải trỏ trực tiếp chat-service (S2S). Dùng CHAT_SERVICE_DIRECT_URL nếu cần override.'
+    );
+    err.code = 'INVALID_CHAT_SERVICE_URL';
+    throw err;
   }
-  return 'http://chat-service:3006';
+  return base;
 }
 
 const CHAT_SERVICE_BASE_URL = resolveChatServiceBaseUrl();
@@ -93,11 +98,8 @@ async function publishCallLogMessage(session) {
     media: session.media || 'video',
     durationSec,
   };
-  const candidates = [
-    CHAT_SERVICE_BASE_URL,
-    'http://chat-service:3006',
-    String(process.env.CHAT_SERVICE_URL || '').replace(/\/+$/, ''),
-  ].filter(Boolean);
+  const directChat = String(process.env.CHAT_SERVICE_DIRECT_URL || '').trim().replace(/\/+$/, '');
+  const candidates = [CHAT_SERVICE_BASE_URL, directChat].filter(Boolean);
   const bases = [...new Set(candidates)];
 
   for (const base of bases) {
@@ -374,6 +376,44 @@ function startRingSweepInterval() {
   }, ms);
 }
 
+const FRIEND_ROOM_PREFIX = 'friend-1on1-';
+
+async function assertFriendCallRoomAccess(roomId, userId) {
+  const rid = String(roomId || '').trim();
+  if (!rid.startsWith(FRIEND_ROOM_PREFIX)) {
+    return null;
+  }
+  const callId = rid.slice(FRIEND_ROOM_PREFIX.length);
+  if (!mongoose.Types.ObjectId.isValid(callId)) {
+    const e = new Error('Invalid friend call room');
+    e.statusCode = 403;
+    throw e;
+  }
+  const doc = await CallSession.findById(callId).lean();
+  if (!doc) {
+    const e = new Error('Call session not found');
+    e.statusCode = 404;
+    throw e;
+  }
+  const uid = String(userId || '').trim();
+  if (uid !== String(doc.callerId) && uid !== String(doc.calleeId)) {
+    const e = new Error('Forbidden');
+    e.statusCode = 403;
+    throw e;
+  }
+  if (!['accepted', 'ringing'].includes(String(doc.status || ''))) {
+    const e = new Error('Call not active');
+    e.statusCode = 403;
+    throw e;
+  }
+  if (doc.roomId && String(doc.roomId) !== rid) {
+    const e = new Error('Room mismatch');
+    e.statusCode = 403;
+    throw e;
+  }
+  return doc;
+}
+
 module.exports = {
   initiate,
   accept,
@@ -381,6 +421,7 @@ module.exports = {
   cancel,
   end,
   getByIdForUser,
+  assertFriendCallRoomAccess,
   sweepExpiredRinging,
   startRingSweepInterval,
   basePayload,

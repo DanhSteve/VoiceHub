@@ -105,6 +105,20 @@ function senderAvatarUrl(message, isMine, currentUser) {
   return null;
 }
 
+function senderUserId(message, isMine, currentUser) {
+  if (isMine) {
+    const id = currentUser?.id || currentUser?._id || currentUser?.userId;
+    return id != null ? String(id) : null;
+  }
+  const u = message?.senderId;
+  if (u && typeof u === 'object') {
+    const id = u._id || u.id || u.userId;
+    return id != null ? String(id) : null;
+  }
+  if (u != null && u !== '') return String(u);
+  return null;
+}
+
 function userInitialsFromProfile(user) {
   const name =
     user?.displayName || user?.fullName || user?.username || user?.email?.split?.('@')?.[0] || '';
@@ -1590,18 +1604,15 @@ const OrganizationMainPanel = ({
                           </div>
                         )}
                         <div className="flex w-full items-start justify-start gap-3">
-                        <div
-                          className="mt-0.5 flex h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-bold text-white shadow-inner"
+                        <UserAvatar
+                          avatar={avatarUrl}
+                          userId={senderUserId(message, isMine, currentUser)}
+                          name={displayName}
+                          size="md"
+                          className="mt-0.5"
                           title={displayName}
-                        >
-                          {avatarUrl && String(avatarUrl).startsWith('http') ? (
-                            <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="flex h-full w-full items-center justify-center">
-                              {avatarInitials}
-                            </span>
-                          )}
-                        </div>
+                          ringClassName="shadow-inner"
+                        />
                         <div className="min-w-0 max-w-[min(100%,42rem)] flex-1">
                           <div
                             className="mb-1 flex flex-wrap items-center gap-2 justify-start"

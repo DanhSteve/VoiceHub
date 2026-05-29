@@ -1,7 +1,8 @@
 const Meeting = require('../models/Meeting');
 const { getRedisClient, logger, fetchUserProfileByIdInternal } = require('/shared');
 const axios = require('axios');
-const ORGANIZATION_SERVICE_URL = process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013';
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 
 class MeetingService {
   // Tạo meeting mới
@@ -169,10 +170,17 @@ class MeetingService {
   // Lấy meeting theo ID
   async getMeetingById(meetingId) {
     try {
-      const meeting = await Meeting.findById(meetingId)
-        .populate('hostId', 'username displayName avatar')
-        .populate('participants.userId', 'username displayName avatar');
-
+      const meeting = await Meeting.findById(meetingId).lean();
+      if (!meeting) return null;
+      const hostProfile = await fetchUserProfileByIdInternal(String(meeting.hostId));
+      if (hostProfile) meeting.hostId = hostProfile;
+      if (Array.isArray(meeting.participants)) {
+        for (const p of meeting.participants) {
+          if (!p?.userId) continue;
+          const prof = await fetchUserProfileByIdInternal(String(p.userId));
+          if (prof) p.userId = prof;
+        }
+      }
       return meeting;
     } catch (error) {
       logger.error('Error getting meeting:', error);
@@ -181,7 +189,7 @@ class MeetingService {
   }
 
   async bootstrapMeetingRoom(meetingId, userId) {
-    const meeting = await Meeting.findById(meetingId).populate('hostId', 'username displayName avatar');
+    const meeting = await Meeting.findById(meetingId);
     if (!meeting) {
       throw new Error('Meeting not found');
     }

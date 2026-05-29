@@ -1,3 +1,5 @@
+const ROLE_PERMISSION_SERVICE_URL = String(process.env.ROLE_PERMISSION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ROLE_PERMISSION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ROLE_PERMISSION_SERVICE_URL');
 const Membership = require('../models/Membership');
 const Organization = require('../models/Organization');
 const JoinApplication = require('../models/JoinApplication');
@@ -17,8 +19,8 @@ const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
 const ALLOWED_ROLES = ['owner', 'admin', 'hr', 'member'];
 const INVITE_LINK_SECRET = String(process.env.INVITE_LINK_SECRET || process.env.JWT_SECRET || '').trim();
 const INVITE_LINK_EXPIRES_IN = process.env.INVITE_LINK_EXPIRES_IN || '7d';
-const NOTIFICATION_SERVICE_URL =
-  process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3003';
+const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!NOTIFICATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: NOTIFICATION_SERVICE_URL');
 const NOTIFICATION_INTERNAL_TOKEN = String(process.env.NOTIFICATION_INTERNAL_TOKEN || '').trim();
 
 function notificationServiceAxiosOpts() {
@@ -157,7 +159,7 @@ async function createPendingJoinApplication({
 const MEMBER_LIST_FULL_ACCESS_ROLES = ['owner', 'admin', 'hr'];
 
 const ROLE_PERMISSION_BASE = String(
-  process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015'
+  process.env.ROLE_PERMISSION_SERVICE_URL
 ).replace(/\/$/, '');
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 

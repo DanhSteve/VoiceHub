@@ -15,12 +15,11 @@ import friendService from '../../services/friendService';
 import { ConfirmDialog } from '../Shared';
 import { useAppStrings } from '../../locales/appStrings';
 import { useTheme } from '../../context/ThemeContext';
-import { shellNavRailBackdrop } from '../../theme/shellTheme';
+import { shellNavRailBackdrop, shellNavRailMenuBackdropZ } from '../../theme/shellTheme';
 import OrgWorkspaceSearchSidebar from '../../features/search/components/OrgWorkspaceSearchSidebar';
 import OrgMemberSidebarAttachments from '../../features/orgAttachments/OrgMemberSidebarAttachments';
 import UserAvatar from '../Shared/UserAvatar';
 import { isAvatarImageUrl } from '../../utils/avatarDisplay';
-import { resolveMediaUrl } from '../../utils/helpers';
 import { usePresenceSubscribe } from '../../hooks/usePresenceSubscribe';
 
 const unwrapBody = (payload) => payload?.data ?? payload;
@@ -577,7 +576,7 @@ function OrganizationMemberSidebar({
   useEffect(() => {
     closeMenu();
     setSelectedJoinApplication(null);
-  }, [location.pathname, closeMenu]);
+  }, [location.pathname, location.search, closeMenu]);
 
   const prevMenuOpenRef = useRef(false);
 
@@ -972,7 +971,7 @@ function OrganizationMemberSidebar({
     createPortal(
       <>
         <div
-          className={`${shellNavRailBackdrop} z-[9997]`}
+          className={`${shellNavRailBackdrop} ${shellNavRailMenuBackdropZ}`}
           aria-hidden
           onClick={closeMenu}
           onContextMenu={(e) => {
@@ -1216,7 +1215,7 @@ function OrganizationMemberSidebar({
     createPortal(
       <>
         <div
-          className={`${shellNavRailBackdrop} z-[9997] bg-black/40`}
+          className={`${shellNavRailBackdrop} ${shellNavRailMenuBackdropZ} bg-black/40`}
           onClick={() => setSelectedJoinApplication(null)}
           aria-hidden
         />
@@ -1333,11 +1332,8 @@ function OrganizationMemberSidebar({
         <div className="px-3 pb-3">
           <div className="-mt-8 flex items-end justify-between">
             <UserAvatar
-              avatar={
-                isAvatarImageUrl(memberCard.member.avatar)
-                  ? resolveMediaUrl(memberCard.member.avatar)
-                  : null
-              }
+              avatar={memberCard.member.avatar}
+              userId={memberCard.member.userId || memberCard.member.id}
               name={memberCard.member.displayName}
               size="profile"
               ringClassName={`border-4 ${isDarkMode ? 'border-[#1d1f28]' : 'border-white'}`}
@@ -1665,7 +1661,8 @@ function OrganizationMemberSidebar({
                       onClick={(e) => openMemberCard(m, e.currentTarget.getBoundingClientRect())}
                     >
                       <UserAvatar
-                        avatar={isAvatarImageUrl(m.avatar) ? resolveMediaUrl(m.avatar) : null}
+                        avatar={m.avatar}
+                        userId={m.userId}
                         name={m.displayName}
                         size="sm"
                         showOnline

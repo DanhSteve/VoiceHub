@@ -4,10 +4,8 @@ const UserRole = require('../models/UserRole');
 const { getRedisClient, roleWebhook, logger } = require('/shared');
 const axios = require('axios');
 
-const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-  /\/$/,
-  ''
-);
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 
 function roleServiceError(message, statusCode = 400, errorCode = 'ROLE_OPERATION_FAILED') {
@@ -409,6 +407,69 @@ class RoleService {
       logger.error('Error purgeByServerContext:', error);
       throw error;
     }
+  }
+
+  hasRoleReadPermission(permissions) {
+    return (permissions || []).some(
+      (perm) =>
+        perm?.resource === 'role' &&
+        Array.isArray(perm.actions) &&
+        (perm.actions.includes('read') || perm.actions.includes('*') || perm.actions.includes('admin'))
+    );
+  }
+
+  withRoleReadPermission(permissions) {
+    const perms = Array.isArray(permissions)
+      ? permissions.map((perm) => ({
+          resource: perm.resource,
+          actions: Array.isArray(perm.actions) ? [...perm.actions] : [],
+        }))
+      : [];
+    const rolePerm = perms.find((perm) => perm.resource === 'role');
+    if (rolePerm) {
+      if (!rolePerm.actions.includes('read')) {
+        rolePerm.actions.push('read');
+      }
+      return perms;
+    }
+    perms.push({ resource: 'role', actions: ['read'] });
+    return perms;
+  }
+
+  /**
+   * Bổ sung role:read cho role org cũ (member/admin/HR) để GET /api/roles/* không 403.
+   */
+  async backfillRoleReadPermission(serverId = null) {
+    const filter = {};
+    if (serverId) {
+      const sid = new mongoose.Types.ObjectId(String(serverId));
+      filter.$or = [{ serverId: sid }, { organizationId: sid }];
+    }
+    const roles = await Role.find(filter).select('permissions serverId').lean();
+    let updated = 0;
+    const redis = getRedisClient();
+    const touchedServers = new Set();
+
+    for (const role of roles) {
+      if (this.hasRoleReadPermission(role.permissions)) continue;
+      const nextPermissions = this.withRoleReadPermission(role.permissions);
+      await Role.updateOne({ _id: role._id }, { $set: { permissions: nextPermissions } });
+      updated += 1;
+      if (role.serverId) touchedServers.add(String(role.serverId));
+    }
+
+    if (redis && touchedServers.size > 0) {
+      for (const sid of touchedServers) {
+        try {
+          const keys = await redis.keys(`permissions:*:${sid}`);
+          if (keys?.length) await redis.del(...keys);
+        } catch (cacheErr) {
+          logger.warn('[role.service] backfillRoleReadPermission cache purge', cacheErr.message);
+        }
+      }
+    }
+
+    return { scanned: roles.length, updated, serverId: serverId ? String(serverId) : null };
   }
 }
 

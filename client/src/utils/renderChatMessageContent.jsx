@@ -4,6 +4,16 @@ const CODE_CLASS =
   'rounded bg-black/20 px-1 py-0.5 font-mono text-[0.92em] dark:bg-white/10';
 const LINK_CLASS = 'text-cyan-300 underline underline-offset-2 hover:text-cyan-200';
 
+function sanitizeHref(href) {
+  const h = String(href || '').trim();
+  if (!h) return null;
+  const lower = h.toLowerCase();
+  if (lower.startsWith('javascript:') || lower.startsWith('data:') || lower.startsWith('vbscript:')) {
+    return null;
+  }
+  return h;
+}
+
 function pushText(nodes, text, keyBase) {
   if (!text) return;
   nodes.push(<Fragment key={`${keyBase}-t`}>{text}</Fragment>);
@@ -34,31 +44,43 @@ function renderInline(str, keyBase = 'i') {
       },
       {
         re: /^\[([^\]]+)\]\(([^)\s]+)\)/,
-        fn: (m) => (
-          <a
-            key={`${keyBase}-${idx++}`}
-            href={m[2]}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={LINK_CLASS}
-          >
-            {m[1]}
-          </a>
-        ),
+        fn: (m) => {
+          const href = sanitizeHref(m[2]);
+          if (!href) {
+            return (
+              <Fragment key={`${keyBase}-${idx++}`}>{`[${m[1]}](${m[2]})`}</Fragment>
+            );
+          }
+          return (
+            <a
+              key={`${keyBase}-${idx++}`}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={LINK_CLASS}
+            >
+              {m[1]}
+            </a>
+          );
+        },
       },
       {
         re: /^(https?:\/\/[^\s<]+[^\s<.,;:!?)])/i,
-        fn: (m) => (
-          <a
-            key={`${keyBase}-${idx++}`}
-            href={m[1]}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={LINK_CLASS}
-          >
-            {m[1]}
-          </a>
-        ),
+        fn: (m) => {
+          const href = sanitizeHref(m[1]);
+          if (!href) return null;
+          return (
+            <a
+              key={`${keyBase}-${idx++}`}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={LINK_CLASS}
+            >
+              {m[1]}
+            </a>
+          );
+        },
       },
       {
         re: /^@([^\s@]+)/,

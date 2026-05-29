@@ -51,7 +51,14 @@ const Sidebar = ({ onClose }) => {
           onClick={() => setOpenProfile((prev) => !prev)}
           className="flex items-center gap-3 px-2 py-1 rounded-xl hover:bg-dark-700 transition-colors w-full text-left"
         >
-          <UserAvatar avatar={user?.avatar} name={displayName} size="md" showOnline status="online" />
+          <UserAvatar
+            avatar={user?.avatar}
+            userId={user?.id || user?._id}
+            name={displayName}
+            size="md"
+            showOnline
+            status="online"
+          />
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm truncate">{displayName}</p>
             <p className="text-xs text-gray-400 truncate">
@@ -76,7 +83,14 @@ const Sidebar = ({ onClose }) => {
         <div className="absolute top-20 left-3 right-3 z-20 animate-slideUp">
           <div className="glass-strong rounded-2xl p-4 shadow-xl border border-white/5 bg-gradient-to-b from-dark-700/95 to-dark-800/95">
             <div className="flex items-center gap-3 mb-4">
-              <UserAvatar avatar={user?.avatar} name={displayName} size="lg" showOnline status="online" />
+              <UserAvatar
+                avatar={user?.avatar}
+                userId={user?.id || user?._id}
+                name={displayName}
+                size="lg"
+                showOnline
+                status="online"
+              />
               <div className="flex-1 min-w-0">
                 <p className="font-bold text-sm truncate">{displayName}</p>
                 <p className="text-xs text-gray-400 truncate">{user?.email}</p>

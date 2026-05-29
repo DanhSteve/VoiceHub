@@ -10,7 +10,6 @@ const ALLOWED_EXTENSIONS = new Set([
   '.gif',
   '.webp',
   '.bmp',
-  '.svg',
   '.ico',
   '.avif',
   '.jfif',
@@ -26,7 +25,6 @@ const MIME_TO_EXT = {
   'image/gif': '.gif',
   'image/webp': '.webp',
   'image/bmp': '.bmp',
-  'image/svg+xml': '.svg',
   'image/x-icon': '.ico',
   'image/avif': '.avif',
   'image/heic': '.heic',
@@ -65,7 +63,7 @@ const fileFilter = (_req, file, cb) => {
   }
   cb(
     new Error(
-      'Chỉ chấp nhận ảnh: jpg, jpeg, png, gif, webp, bmp, svg, ico, avif, heic'
+      'Chỉ chấp nhận ảnh: jpg, jpeg, png, gif, webp, bmp, ico, avif, heic (không hỗ trợ SVG)'
     )
   );
 };

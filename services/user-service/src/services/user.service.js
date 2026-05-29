@@ -1,7 +1,12 @@
 const UserProfile = require('../models/UserProfile');
 const { getRedisClient, logger } = require('/shared');
 const { phoneBlindIndex } = require('/shared/utils/fieldCrypto');
-const { writePiiPatch } = require('../utils/profilePii');
+const {
+  writePiiPatch,
+  writeEmailPatch,
+  maybeMigrateProfileEmail,
+  readPiiFromProfile,
+} = require('../utils/profilePii');
 
 function serviceError(message, statusCode = 400, errorCode = 'USER_VALIDATION') {
   const err = new Error(message);
@@ -56,18 +61,21 @@ class UserService {
       const userProfile = new UserProfile({
         userId,
         username: finalUsername,
-        email: normalizedEmail,
+        ...writeEmailPatch(normalizedEmail),
         displayName: displayName || finalUsername,
         dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
       });
 
       await userProfile.save();
 
-      // Cache user profile trong Redis
+      // Cache user profile trong Redis (plaintext cho API)
       const redis = getRedisClient();
       if (redis) {
         const cacheKey = `user:${userId}`;
-        await redis.setex(cacheKey, 3600, JSON.stringify(userProfile));
+        const plain =
+          typeof userProfile.toObject === 'function' ? userProfile.toObject() : { ...userProfile };
+        const forCache = { ...plain, ...readPiiFromProfile(plain) };
+        await redis.setex(cacheKey, 3600, JSON.stringify(forCache));
       }
 
       logger.info(`User profile created: ${userId}`);
@@ -91,12 +99,18 @@ class UserService {
         }
       }
 
-      const userProfile = await UserProfile.findOne({ userId });
+      let userProfile = await UserProfile.findOne({ userId });
+      if (userProfile) {
+        await maybeMigrateProfileEmail(UserProfile, userProfile);
+      }
 
-      // Cache user profile
+      // Cache user profile (plaintext PII cho API)
       if (redis && userProfile) {
         const cacheKey = `user:${userId}`;
-        await redis.setex(cacheKey, 3600, JSON.stringify(userProfile));
+        const plain =
+          typeof userProfile.toObject === 'function' ? userProfile.toObject() : { ...userProfile };
+        const forCache = { ...plain, ...readPiiFromProfile(plain) };
+        await redis.setex(cacheKey, 3600, JSON.stringify(forCache));
       }
 
       return userProfile;

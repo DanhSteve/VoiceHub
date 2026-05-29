@@ -1,3 +1,5 @@
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
 const axios = require('axios');
 
 /**
@@ -5,7 +7,7 @@ const axios = require('axios');
  * Cần USER_SERVICE_INTERNAL_TOKEN trùng với user-service.
  */
 async function fetchUserProfileByIdInternal(userId) {
-  const base = String(process.env.USER_SERVICE_URL || 'http://user-service:3004').replace(/\/$/, '');
+  const base = process.env.USER_SERVICE_URL;
   const token = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
   if (!token) {
     const err = new Error('USER_SERVICE_INTERNAL_TOKEN is not set');

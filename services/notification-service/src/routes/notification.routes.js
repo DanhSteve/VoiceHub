@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const notificationController = require('../controllers/notification.controller');
 const internalNotificationAuth = require('../middlewares/internalNotificationAuth');
+const requireUser = require('../middlewares/requireUser');
 
 // Tạo notification mới (chỉ service nội bộ / webhook)
 router.post(
@@ -17,27 +18,28 @@ router.post(
   notificationController.createBulkNotifications.bind(notificationController)
 );
 
-// Lấy notifications của user
-router.get('/', notificationController.getUserNotifications.bind(notificationController));
-router.get('/user/:userId', notificationController.getUserNotifications.bind(notificationController));
+// Lấy notifications của user (bắt buộc JWT qua gateway)
+router.get('/', requireUser, notificationController.getUserNotifications.bind(notificationController));
+router.get('/user/:userId', requireUser, notificationController.getUserNotifications.bind(notificationController));
 
 // Đánh dấu đã đọc thông báo kết bạn theo counterparty (đặt trước /:notificationId/read)
 router.patch(
   '/read-friend-related',
+  requireUser,
   notificationController.markFriendRelatedRead.bind(notificationController)
 );
 
 // Đánh dấu notification là đã đọc
-router.patch('/:notificationId/read', notificationController.markAsRead.bind(notificationController));
+router.patch('/:notificationId/read', requireUser, notificationController.markAsRead.bind(notificationController));
 
 // Đánh dấu tất cả notifications là đã đọc
-router.patch('/read-all', notificationController.markAllAsRead.bind(notificationController));
+router.patch('/read-all', requireUser, notificationController.markAllAsRead.bind(notificationController));
 
 // Xóa notification
-router.delete('/:notificationId', notificationController.deleteNotification.bind(notificationController));
+router.delete('/:notificationId', requireUser, notificationController.deleteNotification.bind(notificationController));
 
 // Xóa tất cả notifications đã đọc
-router.delete('/read/all', notificationController.deleteAllRead.bind(notificationController));
+router.delete('/read/all', requireUser, notificationController.deleteAllRead.bind(notificationController));
 
 module.exports = router;
 

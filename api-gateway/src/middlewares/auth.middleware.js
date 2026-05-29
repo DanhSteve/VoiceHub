@@ -3,21 +3,6 @@ const { isPublicRoute } = require('../config/services');
 
 const getJwtSecret = () => String(process.env.JWT_SECRET || '').trim();
 
-const CHAT_INTERNAL_TOKEN = String(process.env.CHAT_INTERNAL_TOKEN || '').trim();
-
-function isChatInternalServicePath(path) {
-  const p = String(path || '').replace(/\/+/g, '/');
-  return p.includes('/api/messages/internal/') || p.includes('/api/chat/messages/internal/');
-}
-
-function hasValidChatInternalToken(req) {
-  if (!CHAT_INTERNAL_TOKEN) return false;
-  const got = String(
-    req.headers['x-internal-token'] || req.headers['x-chat-internal-token'] || ''
-  ).trim();
-  return got.length > 0 && got === CHAT_INTERNAL_TOKEN;
-}
-
 /**
  * Middleware xác thực JWT
  * Verify JWT token và gắn req.user
@@ -29,19 +14,6 @@ const authMiddleware = (req, res, next) => {
     .split('?')[0]
     .replace(/\/+/g, '/');
 
-  if (
-    isChatInternalServicePath(pathWithoutQuery) ||
-    isChatInternalServicePath(fromOriginal)
-  ) {
-    if (hasValidChatInternalToken(req)) {
-      return next();
-    }
-    return res.status(403).json({
-      success: false,
-      message: 'Forbidden',
-    });
-  }
-
   // Bỏ qua các route public
   if (
     isPublicRoute(pathWithoutQuery) ||
@@ -49,11 +21,11 @@ const authMiddleware = (req, res, next) => {
     pathWithoutQuery === '/api/health/gateway-trust' ||
     fromOriginal.endsWith('/api/health/gateway-trust')
   ) {
-    console.log(`[API-Gateway] Public route detected: ${pathWithoutQuery}, skipping authentication`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[API-Gateway] Public route: ${pathWithoutQuery}`);
+    }
     return next();
   }
-  
-  console.log(`[API-Gateway] Protected route: ${req.path}, checking authentication...`);
 
   try {
     const jwtSecret = getJwtSecret();
@@ -65,7 +37,13 @@ const authMiddleware = (req, res, next) => {
     }
 
     // Lấy token từ header
-    const authHeader = req.headers.authorization;
+    let authHeader = req.headers.authorization;
+    if ((!authHeader || !authHeader.startsWith('Bearer ')) && req.method === 'GET') {
+      const queryToken = String(req.query?.access_token || '').trim();
+      if (queryToken) {
+        authHeader = `Bearer ${queryToken}`;
+      }
+    }
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
@@ -74,7 +52,6 @@ const authMiddleware = (req, res, next) => {
       });
     }
 
-    // Extract token
     const token = authHeader.split(' ')[1];
 
     if (!token) {

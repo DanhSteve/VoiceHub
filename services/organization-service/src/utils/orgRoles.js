@@ -1,7 +1,9 @@
+const ROLE_PERMISSION_SERVICE_URL = String(process.env.ROLE_PERMISSION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ROLE_PERMISSION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ROLE_PERMISSION_SERVICE_URL');
 const axios = require('axios');
 
 const ROLE_PERMISSION_BASE = String(
-  process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015'
+  process.env.ROLE_PERMISSION_SERVICE_URL
 ).replace(/\/$/, '');
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 

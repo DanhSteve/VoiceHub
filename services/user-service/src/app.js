@@ -13,7 +13,8 @@ if (!fs.existsSync(uploadsDir)) {
 app.use(createCorsMiddleware());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(uploadsDir));
+const { protect } = require('./middleware/auth');
+app.use('/uploads', protect, express.static(uploadsDir));
 
 // Routes
 app.get('/health', (req, res) => {

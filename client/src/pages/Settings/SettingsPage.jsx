@@ -1002,6 +1002,7 @@ function SettingsPage() {
               <div className="flex items-center gap-6 mb-6">
                 <UserAvatar
                   avatar={avatarUrl || null}
+                  userId={user?.id || user?._id}
                   name={userProfileForm.fullName || user?.displayName || user?.name}
                   size="2xl"
                 />

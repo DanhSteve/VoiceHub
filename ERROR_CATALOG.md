@@ -38,6 +38,14 @@ Tai lieu nay quy dinh ma loi va thong diep hien thi toi nguoi dung theo domain.
 - `NOTIFICATION_INTERNAL_ERROR`: He thong thong bao dang ban.
 - `SOCKET_PRESENCE_SUBSCRIBE_FAILED`: Khong the theo doi trang thai hien dien luc nay.
 
+## Security hardening (gateway / services)
+
+- `ROUTE_NOT_PERMITTED`: Route chua duoc cap quyen tai gateway.
+- `ROLE_FORBIDDEN`: Khong du quyen quan ly vai tro trong to chuc.
+- `CALL_ROOM_FORBIDDEN`: Khong phai thanh vien cuoc goi 1-1 hoac phong chua active.
+- `MESSAGE_FORBIDDEN`: Khong du quyen doc/sua tin nhan.
+- `NOTIFICATION_FORBIDDEN`: Khong du quyen doc thong bao cua user khac.
+
 ## Checklist review endpoint moi
 
 - Co `errorCode` cho moi nhanh loi quan trong (401/403/404/409/5xx).

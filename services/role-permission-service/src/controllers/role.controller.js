@@ -193,6 +193,17 @@ class RoleController {
       return sendError(res, error, 400, 'Không thể dọn dữ liệu vai trò', 'ROLE_PURGE_FAILED');
     }
   }
+
+  async backfillRoleRead(req, res) {
+    try {
+      const serverId = req.params?.serverId || req.body?.serverId || req.body?.organizationId || null;
+      const data = await roleService.backfillRoleReadPermission(serverId);
+      res.json({ success: true, data });
+    } catch (error) {
+      logger.error('backfillRoleRead error:', error);
+      return sendError(res, error, 500, 'Không thể backfill quyền role:read', 'ROLE_BACKFILL_FAILED');
+    }
+  }
 }
 
 module.exports = new RoleController();

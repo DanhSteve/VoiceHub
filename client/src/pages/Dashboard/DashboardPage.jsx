@@ -29,6 +29,7 @@ import UserAvatar from '../../components/Shared/UserAvatar';
 import { getUserDisplayName } from '../../utils/helpers';
 import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
 import { LOCAL_CUSTOM_KEY } from '../../utils/dmCalendarReminders';
+import { formatMessagePreview } from '../../features/search/formatMessagePreview';
 
 /** Mini sparkline — thanh nhỏ cho thẻ metric */
 function MiniSparkline({ up = true, className = '' }) {
@@ -273,7 +274,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   const [activityDailyMap, setActivityDailyMap] = useState({});
   const [activityYear, setActivityYear] = useState(() => new Date().getFullYear());
   const [weeklyActivityDays, setWeeklyActivityDays] = useState([]);
-  const [weeklyActivityNotes, setWeeklyActivityNotes] = useState([]);
+  const [weeklyDayModal, setWeeklyDayModal] = useState(null);
   const [recentDmContacts, setRecentDmContacts] = useState([]);
   const [recentNotifications, setRecentNotifications] = useState([]);
   const { user } = useAuth();
@@ -620,7 +621,6 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         const daily = {};
         const taskRows = await fetchTasksForDashboardPaged({ maxPages: 25, limit: 100 }).catch(() => []);
         const weeklyDayMap = new Map();
-        const weeklyNotes = [];
         const weekStart = new Date();
         weekStart.setHours(0, 0, 0, 0);
         weekStart.setDate(weekStart.getDate() - 6);
@@ -637,8 +637,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             tasks: 0,
             messages: 0,
             total: 0,
-            note: '',
-            noteTs: 0,
+            items: [],
           };
           weeklyDayMap.set(key, entry);
           return entry;
@@ -652,14 +651,15 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           if (kind === 'task') day.tasks += 1;
           else day.messages += 1;
           day.total += 1;
-          if (ts >= day.noteTs) {
-            day.noteTs = ts;
-            day.note = detail;
-            day.icon = icon;
-            day.path = path;
-            day.title = title;
-          }
-          weeklyNotes.push({ key: `${kind}:${ts}:${title}`, ts, icon, title, detail, path, dayKey: key });
+          day.items.push({
+            key: `${kind}:${ts}:${title}`,
+            ts,
+            icon,
+            title,
+            detail,
+            path,
+            kind,
+          });
         };
         taskRows.forEach((task) => {
           const taskMatchesUser =
@@ -695,14 +695,10 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           const key = dayKey(msg.createdAt);
           if (key) daily[key] = { tasks: daily[key]?.tasks || 0, messages: (daily[key]?.messages || 0) + 1 };
           const messageType = String(msg.messageType || 'text');
-          const previewText =
-            messageType === 'file'
-              ? truncateText(msg.fileMeta?.originalName || msg.content || 'Tệp đính kèm', 40)
-              : messageType === 'image'
-                ? 'Hình ảnh'
-                : messageType === 'business_card'
-                  ? 'Danh thiếp'
-                  : truncateText(msg.content || 'Tin nhắn', 48);
+          const previewText = truncateText(
+            formatMessagePreview(msg, t, { currentUserId: currentUserKey }) || 'Tin nhắn',
+            48
+          );
           const detail =
             messageType === 'file'
               ? `Đã gửi file: ${previewText}`
@@ -710,13 +706,22 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                 ? `Đã gửi ảnh: ${previewText}`
                 : messageType === 'business_card'
                   ? `Đã chia sẻ danh thiếp: ${previewText}`
-                  : `Đã nhắn: ${previewText}`;
+                  : messageType === 'call_log'
+                    ? previewText
+                    : `Đã nhắn: ${previewText}`;
           if (msg.createdAt) {
             const msgOrgId = getRowId(msg.organizationId);
             registerWeekItem({
               when: msg.createdAt,
               kind: 'message',
-              icon: messageType === 'file' ? '📎' : messageType === 'image' ? '🖼️' : '💬',
+              icon:
+                messageType === 'file'
+                  ? '📎'
+                  : messageType === 'image'
+                    ? '🖼️'
+                    : messageType === 'call_log'
+                      ? '📞'
+                      : '💬',
               title: previewText,
               detail,
               path: resolveWeeklyPath({ kind: 'message', organizationId: msgOrgId }),
@@ -739,14 +744,8 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
         });
 
         const dmLatestByPeer = new Map();
-        const makePreview = (msg) => {
-          const type = String(msg?.messageType || 'text');
-          if (type === 'file') return msg?.fileMeta?.originalName || msg?.content || 'Đã gửi tệp đính kèm';
-          if (type === 'image') return 'Đã gửi hình ảnh';
-          if (type === 'business_card') return 'Đã chia sẻ danh thiếp';
-          const text = String(msg?.content || '').trim();
-          return text || 'Tin nhắn mới';
-        };
+        const makePreview = (msg) =>
+          formatMessagePreview(msg, t, { currentUserId: currentUserKey }) || 'Tin nhắn mới';
         msgRows.forEach((msg) => {
           if (msg?.roomId) return;
           const senderId = getRowId(msg?.senderId);
@@ -793,9 +792,8 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
 
         const weekActivityGrid = Array.from(weeklyDayMap.values()).map((day) => ({
           ...day,
-          note: day.note || 'Chưa có hoạt động',
+          items: [...(day.items || [])].sort((a, b) => b.ts - a.ts),
         }));
-        const weekActivityNotes = weeklyNotes.sort((a, b) => b.ts - a.ts).slice(0, 3);
 
         if (!cancelled) {
           setMetrics({
@@ -810,7 +808,6 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           setRecentDmContacts(dashboardRecentDms);
           setRecentNotifications(dashboardRecentNotifications);
           setWeeklyActivityDays(weekActivityGrid);
-          setWeeklyActivityNotes(weekActivityNotes);
         }
       } catch {
         if (!cancelled) {
@@ -941,22 +938,19 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     ? 'rounded-lg border border-slate-800 bg-[#040f2a] px-3 py-2 text-sm text-white transition-all hover:bg-slate-800/70'
     : 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-all hover:bg-slate-50';
 
-  const activityCellClass = (value) => {
-    const total = Number(value) || 0;
-    if (total <= 0) {
-      return isDarkMode ? 'bg-white/[0.03]' : 'bg-slate-100';
-    }
-    if (total === 1) {
-      return isDarkMode ? 'bg-cyan-500/[0.12]' : 'bg-cyan-100';
-    }
-    if (total === 2) {
-      return isDarkMode ? 'bg-cyan-400/[0.22]' : 'bg-cyan-200';
-    }
-    if (total === 3) {
-      return isDarkMode ? 'bg-cyan-400/[0.34]' : 'bg-cyan-300';
-    }
-    return isDarkMode ? 'bg-cyan-300/[0.46]' : 'bg-cyan-400';
-  };
+  const formatWeeklyDayTitle = useCallback(
+    (day) => {
+      if (!day?.date) return day?.dayLabel || '';
+      const dateLocale = locale === 'en' ? 'en-US' : 'vi-VN';
+      const long = day.date.toLocaleDateString(dateLocale, {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+      });
+      return `${day.dayLabel} · ${long}`;
+    },
+    [locale]
+  );
 
   const stats = useMemo(() => {
     const fmt = (n) => {
@@ -1211,7 +1205,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
     <>
     <div className={`relative flex ${shellH} overflow-hidden ${shellBg}`}>
       <ShellWaveBackdrop />
-      <div className="relative z-[2] h-full shrink-0">
+      <div className="h-full shrink-0">
         <NavigationSidebar landingDemo={landingDemo} />
       </div>
 
@@ -1257,13 +1251,6 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
 
         <div className="flex min-h-0 flex-1">
           <main className={`min-h-0 flex-1 overflow-y-auto overflow-x-visible px-4 py-5 scrollbar-overlay md:px-6 lg:px-8 ${dashMain}`}>
-            <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className={`mb-1 text-[11px] font-bold uppercase tracking-[0.18em] ${isDarkMode ? 'text-cyan-400' : 'text-cyan-600'}`}>{t('dashboard.kicker')}</p>
-                <h1 className={`text-3xl font-bold tracking-tight md:text-4xl ${textHeading}`}>{t('dashboard.heading')}</h1>
-                <p className={`mt-1 text-base leading-relaxed ${textMuted}`}>{t('dashboard.sub')}</p>
-              </div>
-            </div>
           <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {stats.map((stat, idx) => (
               <GlassCard
@@ -1310,8 +1297,6 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <h2 className={`text-base font-bold ${textHeading}`}>{t('dashboard.personalActivityTitle')}</h2>
-                <p className={`mt-1 text-xs ${textMuted}`}>{t('dashboard.personalActivitySub')}</p>
-                <p className={`mt-1 text-[11px] ${textSub}`}>{t('dashboard.personalActivityHint')}</p>
               </div>
               <div className={`text-right text-xs tabular-nums ${textSub}`}>
                 <span className={`font-semibold ${accentText}`}>{activityYear}</span>
@@ -1393,8 +1378,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   ))}
                 </nav>
               </div>
-              <div className={`flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] ${textMuted}`}>
-                <span>{t('dashboard.personalActivityDataNote')}</span>
+              <div className={`flex flex-wrap items-center justify-end gap-2 pt-1 text-[11px] ${textMuted}`}>
                 <div className="flex items-center gap-1">
                   <span>{t('dashboard.personalActivityLegendLess')}</span>
                   <div className="flex gap-1">
@@ -1650,7 +1634,6 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className={`text-xs font-bold uppercase tracking-wider ${textSub}`}>{t('dashboard.weekActivity')}</h3>
-                <p className={`mt-1 text-[11px] ${textSub}`}>Lưới 7 ngày từ task và tin nhắn của tôi.</p>
               </div>
               <div className={`text-right text-[11px] ${textSub}`}>
                 <div className={`text-sm font-bold ${accentText}`}>
@@ -1665,51 +1648,47 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                 <button
                   key={day.key}
                   type="button"
-                  onClick={() => day.path && navigate(day.path)}
-                  title={`${day.dayLabel} · ${day.total} hoạt động · ${day.note || 'Chưa có hoạt động'}`}
-                  className={`group flex min-h-[92px] flex-col rounded-xl border p-1.5 text-left transition ${
-                    isDarkMode ? 'border-white/[0.06] bg-[#141416] hover:bg-white/[0.04]' : 'border-slate-200 bg-white hover:bg-slate-50'
+                  onClick={() => setWeeklyDayModal(day)}
+                  title={`${day.dayLabel} · ${day.total} hoạt động`}
+                  className={`group flex min-h-[72px] flex-col rounded-xl border p-1.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 ${
+                    isDarkMode
+                      ? 'border-white/[0.06] bg-[#141416] hover:border-emerald-500/30 hover:bg-white/[0.04]'
+                      : 'border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-1 text-[10px] font-semibold">
                     <span className={textSub}>{day.dayLabel}</span>
-                    <span className={day.total > 0 ? accentText : textSub}>{day.total}</span>
+                    <span
+                      className={
+                        day.total > 0
+                          ? isDarkMode
+                            ? 'text-emerald-400'
+                            : 'text-emerald-700'
+                          : textSub
+                      }
+                    >
+                      {day.total}
+                    </span>
                   </div>
                   <div
-                    className={`mt-1 flex-1 rounded-lg border ${
-                      isDarkMode ? 'border-white/[0.05]' : 'border-white'
-                    } ${activityCellClass(day.total, isDarkMode)}`}
+                    className={`mt-1.5 min-h-[44px] flex-1 rounded-md ${githubContributionCellClass(day.total, isDarkMode)}`}
+                    aria-hidden
                   />
-                  <div className={`mt-1 line-clamp-2 text-[10px] leading-snug ${textSub}`}>
-                    {truncateText(day.note || 'Chưa có hoạt động', 34)}
-                  </div>
                 </button>
               ))}
             </div>
 
-            <div className="mt-3 space-y-1.5">
-              {weeklyActivityNotes.length === 0 ? (
-                <p className={`rounded-xl border border-dashed px-3 py-2 text-[11px] ${isDarkMode ? 'border-white/[0.08] text-[#6b7280]' : 'border-slate-200 text-slate-500'}`}>
-                  Chưa có note hoạt động trong tuần này.
-                </p>
-              ) : (
-                weeklyActivityNotes.map((note) => (
-                  <button
-                    key={note.key}
-                    type="button"
-                    onClick={() => note.path && navigate(note.path)}
-                    className={`flex w-full items-start gap-2 rounded-xl border px-2.5 py-2 text-left transition ${
-                      isDarkMode ? 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06]' : 'border-slate-200 bg-white hover:bg-slate-50'
-                    }`}
-                  >
-                    <span className="mt-0.5 text-sm">{note.icon}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className={`truncate text-xs font-semibold ${textHeading}`}>{note.title}</div>
-                      <div className={`mt-0.5 line-clamp-2 text-[11px] leading-snug ${textSub}`}>{note.detail}</div>
-                    </div>
-                  </button>
-                ))
-              )}
+            <div className={`mt-2 flex flex-wrap items-center justify-end gap-2 text-[11px] ${textMuted}`}>
+              <span>{t('dashboard.personalActivityLegendLess')}</span>
+              <div className="flex gap-1">
+                {[0, 1, 4, 8, 12].map((fakeTotal, i) => (
+                  <div
+                    key={`week-lg-${i}`}
+                    className={`h-[10px] w-[11px] rounded-[2px] ${githubContributionCellClass(fakeTotal, isDarkMode)}`}
+                  />
+                ))}
+              </div>
+              <span>{t('dashboard.personalActivityLegendMore')}</span>
             </div>
           </div>
 
@@ -1794,6 +1773,51 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           </GradientButton>
         </div>
       </div>
+    </Modal>
+
+    <Modal
+      isOpen={weeklyDayModal !== null}
+      onClose={() => setWeeklyDayModal(null)}
+      title={weeklyDayModal ? formatWeeklyDayTitle(weeklyDayModal) : ''}
+      size="md"
+    >
+      {weeklyDayModal && (
+        <div className="space-y-3">
+          <p className={`text-sm ${textMuted}`}>
+            {weeklyDayModal.total > 0
+              ? `${weeklyDayModal.total} hoạt động · ${weeklyDayModal.tasks} task · ${weeklyDayModal.messages} tin nhắn`
+              : 'Chưa có hoạt động trong ngày này.'}
+          </p>
+          {weeklyDayModal.items?.length > 0 ? (
+            <ul className="max-h-[min(360px,55vh)] space-y-2 overflow-y-auto scrollbar-overlay pr-1">
+              {weeklyDayModal.items.map((item) => (
+                <li key={item.key}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.path) {
+                        navigate(item.path);
+                        setWeeklyDayModal(null);
+                      }
+                    }}
+                    className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition ${
+                      isDarkMode
+                        ? 'border-emerald-500/20 bg-emerald-500/[0.06] hover:border-emerald-500/35 hover:bg-emerald-500/10'
+                        : 'border-emerald-200 bg-emerald-50/80 hover:border-emerald-300 hover:bg-emerald-50'
+                    }`}
+                  >
+                    <span className="mt-0.5 text-base">{item.icon}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className={`text-sm font-semibold ${textHeading}`}>{item.title}</div>
+                      <div className={`mt-0.5 text-xs leading-snug ${textMuted}`}>{item.detail}</div>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      )}
     </Modal>
 
     {/* Stat Detail Modal */}

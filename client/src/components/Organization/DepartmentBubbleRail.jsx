@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
+import { shellNavRailBackdrop, shellNavRailMenuBackdropZ } from '../../theme/shellTheme';
 
 /** Badge đỏ góc trên phải (kiểu thông báo), số trắng trong vòng tròn. */
 function CornerBadge({ count, isDarkMode }) {
@@ -188,8 +189,9 @@ const DepartmentBubbleRail = ({
     createPortal(
       <>
         <div
-          className="fixed inset-0 z-[9997]"
+          className={`${shellNavRailBackdrop} ${shellNavRailMenuBackdropZ}`}
           onClick={() => setDropdown((prev) => ({ ...prev, show: false }))}
+          aria-hidden
         />
         <div
           className={
