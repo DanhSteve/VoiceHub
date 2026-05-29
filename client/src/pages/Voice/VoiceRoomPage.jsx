@@ -1931,17 +1931,20 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   };
 
   return (
-    <div className={`min-h-screen flex ${isDarkMode ? 'bg-[#050810]' : appShellBg(false)}`}>
+    <div
+      className={`flex h-screen max-h-[100dvh] overflow-hidden ${isDarkMode ? 'bg-[#050810]' : appShellBg(false)}`}
+    >
       <NavigationSidebar landingDemo={landingDemo} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {viewStage !== 'inRoom' ? (
           <div className={voiceLobby}>
             {/* Cột trái: menu (hình 1) */}
             <aside
-              className={`flex w-52 shrink-0 flex-col gap-1 border-r px-3 py-6 md:w-56 ${
+              className={`flex h-full min-h-0 w-52 shrink-0 flex-col overflow-hidden border-r py-4 md:w-56 ${
                 isDarkMode ? 'border-white/10' : 'border-slate-200 bg-white/50'
               }`}
             >
+              <div className="shrink-0 space-y-1 px-3">
               {voiceNav.map((item) => {
                 const active =
                   (item.id === 'new' &&
@@ -1972,7 +1975,9 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                   </button>
                 );
               })}
-              <div className={`mt-6 border-t pt-4 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+              </div>
+              <div className="scrollbar-voice-sidebar min-h-0 flex-1 overflow-y-auto overscroll-contain py-1 pl-3 pr-1.5">
+              <div className={`mt-4 border-t pt-4 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
                 <div className={`mb-2 px-2 text-[11px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
                   Ban be
                 </div>
@@ -2046,9 +2051,10 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                   )}
                 </div>
               </div>
+              </div>
             </aside>
 
-            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-6 md:px-8">
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-6 md:px-8">
               {/* Đồng hồ + ngày */}
               <div className="mb-8 text-center">
                 <div
