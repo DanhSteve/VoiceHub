@@ -55,9 +55,6 @@ const FriendChatPage = lazy(() => import('./pages/Chat/FriendChatPage'));
 // Kết nối với WebRTC để gọi voice, sử dụng simple-peer
 const VoiceRoomPage = lazy(() => import('./pages/Voice/VoiceRoomPage'));
 
-// Lazy load trang profile cá nhân - hiển thị thông tin user
-const ProfilePage = lazy(() => import('./pages/Profile/ProfilePage'));
-
 // Lazy load trang tổ chức - quản lý organizations
 // Kết nối với organization-service
 const OrganizationsPage = lazy(() => import('./pages/Workspace/OrganizationsPage'));
@@ -70,9 +67,6 @@ const JoinApplicationPage = lazy(() => import('./pages/Workspace/JoinApplication
 
 // Lazy load trang thông báo - hiển thị notifications realtime
 const NotificationsPage = lazy(() => import('./pages/Notifications/NotificationsPage'));
-
-// Lazy load trang analytics - thống kê và biểu đồ
-const AnalyticsPage = lazy(() => import('./pages/Analytics/AnalyticsPage'));
 
 // Trang tài liệu (UI demo + tương tác cục bộ)
 const DocumentsPage = lazy(() => import('./pages/Documents/DocumentsPage'));
@@ -173,13 +167,7 @@ function App() {
         
         <Route path="/tasks" element={<Navigate to="/workspaces" replace />} />
         
-        {/* Profile - thông tin cá nhân */}
-        {/* Hiển thị avatar, name, email từ AuthContext */}
-        <Route path="/profile" element={
-          <ProtectedRoute>
-            <ProfilePage />
-          </ProtectedRoute>
-        } />
+        <Route path="/profile" element={<Navigate to="/dashboard" replace />} />
         
         {/* Đơn gia nhập — đặt trước /organizations/:orgId/settings */}
         <Route
@@ -267,13 +255,6 @@ function App() {
         <Route path="/calendar" element={
           <ProtectedRoute>
             <CalendarPage />
-          </ProtectedRoute>
-        } />
-        
-        {/* Analytics - thống kê & báo cáo (minh họa + liên kết tới module khác) */}
-        <Route path="/analytics" element={
-          <ProtectedRoute>
-            <AnalyticsPage />
           </ProtectedRoute>
         } />
         

@@ -40,7 +40,7 @@ const userAuthSchema = new mongoose.Schema(
       trim: true,
     },
     dateOfBirth: {
-      type: Date,
+      type: mongoose.Schema.Types.Mixed,
       required: false,
     },
     refreshToken: {

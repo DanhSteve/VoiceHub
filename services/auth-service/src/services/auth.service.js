@@ -5,6 +5,7 @@ const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = requir
 const { getRedisClient } = require('/shared');
 const emailService = require('../utils/email');
 const { bootstrapUserProfile } = require('../utils/bootstrapUserProfile');
+const { writeDateOfBirthFields } = require('/shared/utils/dateOfBirthPii');
 const crypto = require('crypto');
 const { mongoose } = require('/shared/config/mongo');
 const {
@@ -101,10 +102,10 @@ class AuthService {
       // userId sẽ được tạo sau khi verify email thành công
       const userAuth = new UserAuth({
         ...writeEmailFields(normalizedEmail),
+        ...writeDateOfBirthFields(dobCheck.date),
         password: hashedPassword,
         firstName,
         lastName,
-        dateOfBirth: dobCheck.date,
         emailVerificationToken,
         emailVerificationExpiresAt,
         isEmailVerified: false,

@@ -60,8 +60,9 @@ const userProfileSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /** Date (legacy plaintext) hoặc ciphertext string khi bật mã hóa */
     dateOfBirth: {
-      type: Date,
+      type: mongoose.Schema.Types.Mixed,
       default: null,
     },
     location: {
@@ -100,6 +101,11 @@ const userProfileSchema = new mongoose.Schema(
         type: Boolean,
         default: true,
       },
+    },
+    /** Biệt danh hiển thị theo tổ chức — key: organizationId */
+    orgNicknames: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
     },
   },
   {

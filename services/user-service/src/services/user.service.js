@@ -4,7 +4,8 @@ const { phoneBlindIndex } = require('/shared/utils/fieldCrypto');
 const {
   writePiiPatch,
   writeEmailPatch,
-  maybeMigrateProfileEmail,
+  writeDateOfBirthFields,
+  maybeMigrateProfilePii,
   readPiiFromProfile,
 } = require('../utils/profilePii');
 
@@ -63,7 +64,7 @@ class UserService {
         username: finalUsername,
         ...writeEmailPatch(normalizedEmail),
         displayName: displayName || finalUsername,
-        dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+        ...writeDateOfBirthFields(dateOfBirth || null),
       });
 
       await userProfile.save();
@@ -101,7 +102,7 @@ class UserService {
 
       let userProfile = await UserProfile.findOne({ userId });
       if (userProfile) {
-        await maybeMigrateProfileEmail(UserProfile, userProfile);
+        await maybeMigrateProfilePii(UserProfile, userProfile);
       }
 
       // Cache user profile (plaintext PII cho API)
@@ -135,14 +136,9 @@ class UserService {
   // Cập nhật user profile
   async updateUserProfile(userId, updateData) {
     try {
-      const allowedFields = [
-        'displayName',
-        'avatar',
-        'dateOfBirth',
-        'preferences',
-        'isInvisible',
-        'status',
-      ];
+      const allowedFields = ['displayName', 'avatar', 'preferences', 'isInvisible', 'status'];
+
+      const existingProfile = await UserProfile.findOne({ userId }).lean();
 
       const updateFields = {};
       for (const field of allowedFields) {
@@ -150,12 +146,23 @@ class UserService {
           updateFields[field] = updateData[field];
         }
       }
+
+      if (updateData.orgNicknames !== undefined && updateData.orgNicknames !== null) {
+        const prev =
+          existingProfile?.orgNicknames && typeof existingProfile.orgNicknames === 'object'
+            ? existingProfile.orgNicknames
+            : {};
+        const patch =
+          typeof updateData.orgNicknames === 'object' ? updateData.orgNicknames : {};
+        updateFields.orgNicknames = { ...prev, ...patch };
+      }
       Object.assign(
         updateFields,
         writePiiPatch({
           bio: updateData.bio,
           phone: updateData.phone,
           location: updateData.location,
+          dateOfBirth: updateData.dateOfBirth,
         })
       );
 
