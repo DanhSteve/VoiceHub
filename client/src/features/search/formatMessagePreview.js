@@ -15,6 +15,10 @@ export function formatMessagePreview(message, t) {
     return formatBusinessCardLine(t, getBusinessCardFields(message));
   }
 
+  if (mt === 'call_log') {
+    return t ? t('friendChat.callLogPreview') : 'Cuộc gọi';
+  }
+
   if (mt === 'image') {
     const name = message?.fileMeta?.originalName;
     if (t) {

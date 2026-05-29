@@ -188,6 +188,7 @@ function toLowerStr(input) {
 
 function OrganizationMemberSidebar({
   organizationId,
+  workspaceSlug = '',
   organizationName = '',
   selectedTeamId = '',
   teams = [],
@@ -358,11 +359,16 @@ function OrganizationMemberSidebar({
         const boardRes = await taskAPI.getBoards({
           organizationId: String(organizationId),
           ...(selectedTeamId ? { teamId: String(selectedTeamId) } : {}),
+          ...(workspaceSlug ? { workspaceSlug } : {}),
         });
         const boards = unwrapTaskBoardListPayload(boardRes);
+        const boardDetailOpts = workspaceSlug ? { workspaceSlug } : {};
         const detailResults = await Promise.allSettled(
           boards.map(async (board) => {
-            const detailRes = await taskAPI.getBoardDetail(String(board?._id || ''));
+            const detailRes = await taskAPI.getBoardDetail(
+              String(board?._id || ''),
+              boardDetailOpts
+            );
             return {
               board,
               detail: unwrapTaskBoardDetailPayload(detailRes),

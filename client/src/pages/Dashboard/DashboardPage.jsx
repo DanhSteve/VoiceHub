@@ -23,9 +23,12 @@ import { appShellBg } from '../../theme/shellTheme';
 import { useLandingSafeNavigate } from '../../hooks/useLandingSafeNavigate';
 import { useAppStrings } from '../../locales/appStrings';
 import { useLocale } from '../../context/LocaleContext';
+import { buildWorkspacePath } from '../../utils/workspaceTabUtils';
 import DashboardGlobalSearchModal from '../../components/Dashboard/DashboardGlobalSearchModal';
 import UserAvatar from '../../components/Shared/UserAvatar';
 import { getUserDisplayName } from '../../utils/helpers';
+import { NOTIFICATIONS_REFRESH_EVENT } from '../../services/notificationSync';
+import { LOCAL_CUSTOM_KEY } from '../../utils/dmCalendarReminders';
 
 /** Mini sparkline — thanh nhỏ cho thẻ metric */
 function MiniSparkline({ up = true, className = '' }) {
@@ -52,6 +55,40 @@ function truncateText(value, maxLength = 56) {
 
 function isValidObjectId(value) {
   return /^[a-f\d]{24}$/i.test(String(value || '').trim());
+}
+
+function loadLocalCalendarEventsForRange({ start, end }) {
+  try {
+    const raw = localStorage.getItem(LOCAL_CUSTOM_KEY) || localStorage.getItem('calendar:events');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const startTs = start.getTime();
+    const endTs = end.getTime();
+    return parsed
+      .map((item) => {
+        const dateKey = String(item?.date || '').trim();
+        const title = String(item?.title || '').trim();
+        if (!dateKey || !title) return null;
+        const d = new Date(`${dateKey}T12:00:00`);
+        if (Number.isNaN(d.getTime())) return null;
+        const ts = d.getTime();
+        if (ts < startTs || ts > endTs) return null;
+        return {
+          id: item?.id || `local-${dateKey}-${title}`,
+          title,
+          time: String(item?.time || '').trim() || '—',
+          attendees: Number(item?.attendees) || 1,
+          startTime: item?.startAt || `${dateKey}T09:00:00`,
+          source: 'local',
+          type: item?.type || 'reminder',
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  } catch {
+    return [];
+  }
 }
 
 /** Chuẩn hóa yyyy-mm-dd theo giờ local */
@@ -240,7 +277,7 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   const [recentDmContacts, setRecentDmContacts] = useState([]);
   const [recentNotifications, setRecentNotifications] = useState([]);
   const { user } = useAuth();
-  const { onlineUsers, connected: socketConnected } = useSocket();
+  const { onlineUsers, connected: socketConnected, on, off } = useSocket();
   const navigate = useLandingSafeNavigate(landingDemo);
   const { t } = useAppStrings();
   const { locale } = useLocale();
@@ -251,6 +288,69 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
   const friendsQuery = useFriendsList({ enabled: !landingDemo });
   const pendingQuery = useFriendPending({ enabled: !landingDemo });
   const notificationsQuery = useNotificationsPreview({ limit: 8, enabled: !landingDemo });
+  const refetchSummary = summaryQuery.refetch;
+  const refetchFriends = friendsQuery.refetch;
+  const refetchPending = pendingQuery.refetch;
+  const refetchNotifications = notificationsQuery.refetch;
+
+  useEffect(() => {
+    if (landingDemo) return undefined;
+
+    const hardRefreshMetrics = () => {
+      refetchSummary?.();
+      refetchFriends?.();
+      refetchPending?.();
+      refetchNotifications?.();
+      setMetricsTick((v) => v + 1);
+    };
+
+    const handleUnreadUpdated = (payload = {}) => {
+      const scope = String(payload.scope || 'personal').toLowerCase();
+      const next = Number(payload.count);
+      if (scope === 'personal' && Number.isFinite(next)) {
+        setMetrics((prev) => ({ ...prev, unread: Math.max(0, next) }));
+      }
+      hardRefreshMetrics();
+    };
+
+    const notificationEvents = [
+      'notification:new',
+      'notification:bulk_new',
+      'notification:read',
+      'notification:read_many',
+      'notification:read_all',
+      'notification:deleted',
+      'notification:deleted_read_all',
+    ];
+    const friendEvents = [
+      'friend:request_received',
+      'friend:request_sent',
+      'friend:request_accepted',
+      'friend:request_rejected',
+      'friend:blocked',
+      'friend:unblocked',
+    ];
+
+    notificationEvents.forEach((ev) => on(ev, hardRefreshMetrics));
+    friendEvents.forEach((ev) => on(ev, hardRefreshMetrics));
+    on('notification:unread_updated', handleUnreadUpdated);
+    window.addEventListener(NOTIFICATIONS_REFRESH_EVENT, hardRefreshMetrics);
+
+    return () => {
+      notificationEvents.forEach((ev) => off(ev, hardRefreshMetrics));
+      friendEvents.forEach((ev) => off(ev, hardRefreshMetrics));
+      off('notification:unread_updated', handleUnreadUpdated);
+      window.removeEventListener(NOTIFICATIONS_REFRESH_EVENT, hardRefreshMetrics);
+    };
+  }, [
+    landingDemo,
+    on,
+    off,
+    refetchSummary,
+    refetchFriends,
+    refetchPending,
+    refetchNotifications,
+  ]);
 
   const displayName =
     user?.fullName ||
@@ -468,7 +568,14 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
             }
           }
         }
-        setUpcomingMeetings(meetingsUi);
+        const startFrom = new Date();
+        startFrom.setHours(0, 0, 0, 0);
+        const startTo = new Date(startFrom.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const localUpcoming = loadLocalCalendarEventsForRange({ start: startFrom, end: startTo });
+        const mergedUpcoming = [...meetingsUi, ...localUpcoming]
+          .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+          .slice(0, 8);
+        setUpcomingMeetings(mergedUpcoming);
 
         const pendingCount = summary?.pendingCount ?? pendingQuery.pendingCount ?? 0;
         const unread =
@@ -501,8 +608,8 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
           const orgSlug = orgId ? orgSlugById.get(orgId) : '';
           if (orgSlug) {
             return kind === 'task'
-              ? `/w/${encodeURIComponent(orgSlug)}?tab=tasks`
-              : `/w/${encodeURIComponent(orgSlug)}`;
+              ? buildWorkspacePath(orgSlug, 'tasks')
+              : buildWorkspacePath(orgSlug, 'chat');
           }
           return kind === 'task' ? '/tasks' : '/chat/friends';
         };
@@ -1390,7 +1497,9 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => navigate(`/w/${encodeURIComponent(item.workspaceSlug)}`)}
+                    onClick={() =>
+                      navigate(buildWorkspacePath(String(item.workspaceSlug || ''), 'chat'))
+                    }
                     className={`w-full rounded-xl border px-4 py-3 text-left transition ${
                       isDarkMode ? 'border-white/[0.08] bg-[#141416] hover:bg-white/[0.05]' : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
@@ -1464,7 +1573,14 @@ function DashboardPage({ landingDemo = false, demoVariant = 'default' } = {}) {
                       onClick={() => navigate('/calendar')}
                       className={`w-full rounded-xl border-l-4 px-3 py-2 text-left transition ${bc} ${isDarkMode ? 'bg-[#161b25] hover:bg-white/[0.04]' : 'bg-white hover:bg-slate-50'}`}
                     >
-                      <div className={`truncate text-sm font-semibold ${textHeading}`}>{event.title}</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className={`truncate text-sm font-semibold ${textHeading}`}>{event.title}</div>
+                        {event.source === 'local' ? (
+                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${isDarkMode ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                            Local
+                          </span>
+                        ) : null}
+                      </div>
                       <div className={`mt-0.5 text-xs ${textMuted}`}>
                         {event.time} · {t('dashboard.peopleUnit', { n: event.attendees })}
                       </div>

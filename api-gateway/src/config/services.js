@@ -77,9 +77,21 @@ const resolveReqApiPath = (req) => {
   return normalizePath(String(req.path || '').split('?')[0]);
 };
 
+/** Task boards theo workspace slug — proxy task-service, không organization-service. */
+const isWorkspaceTaskBoardPath = (path) => {
+  const normalized = normalizePath(path);
+  return /^\/api\/workspaces\/[^/]+\/task-boards(\/|$)/i.test(normalized);
+};
+
 // Tìm service theo path
 const getServiceByPath = (path) => {
   const normalized = normalizePath(path);
+  if (isWorkspaceTaskBoardPath(normalized)) {
+    return {
+      name: 'task',
+      url: services.task.url,
+    };
+  }
   for (const [serviceName, config] of Object.entries(services)) {
     for (const route of config.routes) {
       if (normalized.startsWith(route)) {
@@ -104,6 +116,7 @@ module.exports = {
   isPublicRoute,
   normalizePath,
   resolveReqApiPath,
+  isWorkspaceTaskBoardPath,
 };
 
 

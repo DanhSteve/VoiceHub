@@ -5,6 +5,12 @@ function userIdFromReq(req) {
   return req.user?.id || req.user?.userId || req.user?._id;
 }
 
+function safeMessage(error, fallback = 'Không thể xử lý cuộc gọi') {
+  const status = Number(error?.statusCode || error?.status || 500);
+  if (status >= 500) return 'Dịch vụ cuộc gọi đang bận. Vui lòng thử lại sau.';
+  return String(error?.message || fallback);
+}
+
 class CallController {
   async initiate(req, res) {
     try {
@@ -34,7 +40,7 @@ class CallController {
       const code = error.statusCode || 400;
       if (code >= 500) logger.error('call initiate error:', error);
       else logger.warn('call initiate:', error.message);
-      const body = { success: false, message: error.message || 'Lỗi khởi tạo cuộc gọi' };
+      const body = { success: false, message: safeMessage(error, 'Lỗi khởi tạo cuộc gọi') };
       if (error.existingCallId) body.existingCallId = error.existingCallId;
       return res.status(code).json(body);
     }
@@ -63,7 +69,7 @@ class CallController {
       });
     } catch (error) {
       const code = error.statusCode || 400;
-      return res.status(code).json({ success: false, message: error.message || 'Error' });
+      return res.status(code).json({ success: false, message: safeMessage(error) });
     }
   }
 
@@ -82,7 +88,7 @@ class CallController {
       });
     } catch (error) {
       const code = error.statusCode || 400;
-      return res.status(code).json({ success: false, message: error.message || 'Error' });
+      return res.status(code).json({ success: false, message: safeMessage(error) });
     }
   }
 
@@ -97,7 +103,7 @@ class CallController {
       });
     } catch (error) {
       const code = error.statusCode || 400;
-      return res.status(code).json({ success: false, message: error.message || 'Error' });
+      return res.status(code).json({ success: false, message: safeMessage(error) });
     }
   }
 
@@ -112,7 +118,7 @@ class CallController {
       });
     } catch (error) {
       const code = error.statusCode || 400;
-      return res.status(code).json({ success: false, message: error.message || 'Error' });
+      return res.status(code).json({ success: false, message: safeMessage(error) });
     }
   }
 
@@ -127,7 +133,7 @@ class CallController {
       });
     } catch (error) {
       const code = error.statusCode || 400;
-      return res.status(code).json({ success: false, message: error.message || 'Error' });
+      return res.status(code).json({ success: false, message: safeMessage(error) });
     }
   }
 }

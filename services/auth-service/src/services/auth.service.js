@@ -7,6 +7,13 @@ const emailService = require('../utils/email');
 const { bootstrapUserProfile } = require('../utils/bootstrapUserProfile');
 const crypto = require('crypto');
 const { mongoose } = require('/shared/config/mongo');
+
+function createServiceError(message, statusCode = 400, errorCode = 'AUTH_VALIDATION') {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.errorCode = errorCode;
+  return err;
+}
 async function ensureMongoReady(scope = 'AUTH') {
   const readyState = mongoose.connection.readyState;
   console.log(
@@ -16,7 +23,7 @@ async function ensureMongoReady(scope = 'AUTH') {
   );
   if (readyState === 1) return;
   // Không reconnect trong request để tránh reset connection pool cạnh tranh với background reconnect.
-  throw new Error('Database temporarily unavailable. Please retry.');
+  throw createServiceError('Hệ thống đang bận. Vui lòng thử lại sau.', 503, 'AUTH_DB_UNAVAILABLE');
 }
 
 class AuthService {
@@ -51,11 +58,11 @@ class AuthService {
         
         if (existingUser) {
           console.log('[AuthService] Email already exists');
-          throw new Error('Email already exists');
+          throw createServiceError('Email đã được sử dụng', 400, 'AUTH_EMAIL_EXISTS');
         }
         console.log('[AuthService] ✅ Email is available');
       } catch (error) {
-        if (error.message === 'Email already exists') {
+        if (error.errorCode === 'AUTH_EMAIL_EXISTS') {
           throw error;
         }
         console.error('[AuthService] ❌ Error checking email:', error.message);
@@ -64,9 +71,9 @@ class AuthService {
         
         // Nếu là connection error, throw với message rõ ràng hơn
         if (error.name === 'MongoServerError' || error.message.includes('buffering') || error.message.includes('timeout')) {
-          throw new Error(`Database connection error: ${error.message}. Please try again.`);
+          throw createServiceError('Hệ thống đang bận. Vui lòng thử lại sau.', 503, 'AUTH_DB_UNAVAILABLE');
         }
-        throw new Error(`Database query failed: ${error.message}`);
+        throw createServiceError('Không thể xử lý đăng ký lúc này. Vui lòng thử lại.', 500, 'AUTH_INTERNAL_ERROR');
       }
 
       // Validate password strength
@@ -165,7 +172,7 @@ class AuthService {
         emailScheduled: emailService.isAvailable(), // Email đã được lên lịch gửi (không chờ kết quả)
       };
     } catch (error) {
-      throw new Error(`Error registering user: ${error.message}`);
+      throw error;
     }
   }
 
@@ -180,29 +187,29 @@ class AuthService {
         .lean(false);
 
       if (!userAuth) {
-        throw new Error('Invalid email or password');
+        throw createServiceError('Email hoặc mật khẩu không đúng', 401, 'AUTH_INVALID_CREDENTIALS');
       }
 
       // Kiểm tra email đã được verify chưa
       if (!userAuth.isEmailVerified) {
-        throw new Error('Please verify your email before logging in');
+        throw createServiceError('Vui lòng xác thực email trước khi đăng nhập', 401, 'AUTH_EMAIL_NOT_VERIFIED');
       }
 
       // Kiểm tra account có active không
       if (!userAuth.isActive) {
-        throw new Error('Account is not active. Please verify your email first.');
+        throw createServiceError('Tài khoản chưa kích hoạt.', 401, 'AUTH_ACCOUNT_INACTIVE');
       }
 
       // Kiểm tra account có bị lock không
       if (userAuth.isLocked) {
-        throw new Error('Account is temporarily locked due to too many failed login attempts');
+        throw createServiceError('Tài khoản tạm khóa do đăng nhập sai nhiều lần', 401, 'AUTH_ACCOUNT_LOCKED');
       }
 
       // Kiểm tra password
       const isPasswordValid = await comparePassword(password, userAuth.password);
       if (!isPasswordValid) {
         await userAuth.incLoginAttempts();
-        throw new Error('Invalid email or password');
+        throw createServiceError('Email hoặc mật khẩu không đúng', 401, 'AUTH_INVALID_CREDENTIALS');
       }
 
       // Reset login attempts
@@ -245,7 +252,7 @@ class AuthService {
         },
       };
     } catch (error) {
-      throw new Error(`Error logging in: ${error.message}`);
+      throw error;
     }
   }
 
@@ -262,7 +269,7 @@ class AuthService {
       });
 
       if (!userAuth || userAuth.refreshTokenExpiresAt < new Date()) {
-        throw new Error('Invalid or expired refresh token');
+        throw createServiceError('Phiên đăng nhập không hợp lệ hoặc đã hết hạn', 401, 'AUTH_REFRESH_INVALID');
       }
 
       // Tạo access token mới
@@ -277,7 +284,7 @@ class AuthService {
         accessToken,
       };
     } catch (error) {
-      throw new Error(`Error refreshing token: ${error.message}`);
+      throw error;
     }
   }
 
@@ -303,7 +310,7 @@ class AuthService {
 
       return true;
     } catch (error) {
-      throw new Error(`Error logging out: ${error.message}`);
+      throw error;
     }
   }
 
@@ -336,7 +343,7 @@ class AuthService {
 
       return true;
     } catch (error) {
-      throw new Error(`Error changing password: ${error.message}`);
+      throw error;
     }
   }
 
@@ -384,7 +391,7 @@ class AuthService {
 
       return response;
     } catch (error) {
-      throw new Error(`Error processing forgot password: ${error.message}`);
+      throw error;
     }
   }
 
@@ -449,7 +456,7 @@ class AuthService {
 
       return response;
     } catch (error) {
-      throw new Error(`Error resending verification email: ${error.message}`);
+      throw error;
     }
   }
 
@@ -482,7 +489,7 @@ class AuthService {
 
       return true;
     } catch (error) {
-      throw new Error(`Error resetting password: ${error.message}`);
+      throw error;
     }
   }
 
@@ -528,7 +535,7 @@ class AuthService {
         email: userAuth.email,
       };
     } catch (error) {
-      throw new Error(`Error verifying email: ${error.message}`);
+      throw error;
     }
   }
 }

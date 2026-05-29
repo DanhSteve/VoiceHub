@@ -832,7 +832,11 @@ function OrganizationSettingsPanel({
                   Home) để xem và duyệt thống nhất từ mọi tổ chức bạn quản trị.
                 </p>
                 <Link
-                  to={organization?.slug ? `/w/${encodeURIComponent(organization.slug)}` : '/dashboard'}
+                  to={
+                    organization?.slug
+                      ? `/w/${encodeURIComponent(organization.slug)}/chat`
+                      : '/dashboard'
+                  }
                   className="mt-3 inline-block text-sm font-medium text-cyan-400 hover:text-cyan-300 hover:underline"
                 >
                   Mở Trang chủ tổ chức →

@@ -17,6 +17,7 @@
 import axios from 'axios';
 import { applyAuthHeader, removeToken } from '../utils/tokenStorage';
 import { mapAuthSessionMessageForLogout } from '../utils/authErrorMessages';
+import { extractApiErrorMeta, resolveApiErrorMessage } from '../utils/resolveApiErrorMessage';
 import { isAutoLogoutDisabled } from '../utils/devAuth';
 import {
   isLandingEmbedActive,
@@ -27,6 +28,19 @@ import { getBrowserFrontendOrigin, resolveApiBaseUrl } from '../utils/browserOri
 
 // Import toast để show error notifications
 import toast from 'react-hot-toast';
+
+function buildRejectedError(errorLike, fallback = 'Đã xảy ra lỗi') {
+  const userMessage = resolveApiErrorMessage(errorLike, fallback);
+  const meta = extractApiErrorMeta(errorLike);
+  return {
+    message: userMessage,
+    userMessage,
+    status: meta.status,
+    data: meta.data,
+    code: meta.code,
+    errorCode: meta.errorCode,
+  };
+}
 
 /* ========================================
    API BASE URL
@@ -224,7 +238,7 @@ api.interceptors.response.use(
     // Xử lý ERR_EMPTY_RESPONSE - server không trả về response
     // Thường xảy ra khi: backend crash, không chạy, hoặc connection bị đứt
     if (error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('EMPTY_RESPONSE')) {
-      const message = 'Server không phản hồi. Vui lòng kiểm tra:\n- Backend service có đang chạy không\n- API Gateway có hoạt động không\n- Kết nối mạng có ổn định không';
+      const message = 'Máy chủ không phản hồi. Vui lòng thử lại sau.';
       console.error('[API] ❌ Empty response error - server may be down or crashed');
       console.error('[API] Request details:', {
         url: error.config?.url,
@@ -233,12 +247,7 @@ api.interceptors.response.use(
         timeout: error.config?.timeout,
       });
       toast.error(message, { duration: 5000 });
-      return Promise.reject({
-        message,
-        status: null,
-        code: 'ERR_EMPTY_RESPONSE',
-        data: null,
-      });
+      return Promise.reject(buildRejectedError({ message, code: 'ERR_EMPTY_RESPONSE' }, message));
     }
 
     // Xử lý network errors
@@ -246,17 +255,13 @@ api.interceptors.response.use(
       const message = 'Lỗi kết nối mạng. Vui lòng kiểm tra kết nối và thử lại.';
       console.error('[API] ❌ Network error');
       toast.error(message);
-      return Promise.reject({
-        message,
-        status: null,
-        code: 'ERR_NETWORK',
-        data: null,
-      });
+      return Promise.reject(buildRejectedError({ message, code: 'ERR_NETWORK' }, message));
     }
 
     // Lấy error message từ response hoặc dùng default
     // Priority: server message > axios message > default
-    const message = error.response?.data?.message || error.message || 'Đã xảy ra lỗi';
+    const message = resolveApiErrorMessage(error, 'Đã xảy ra lỗi');
+    const errorCode = error.response?.data?.errorCode || error.response?.data?.code || '';
 
     // Thông tin URL request để phân biệt auth routes
     const requestUrl = error.config?.url || '';
@@ -277,37 +282,22 @@ api.interceptors.response.use(
       // Nếu là các auth public route (login/register/forgot/reset/verify)
       // → KHÔNG auto redirect, để component tự xử lý (hiển thị lỗi đăng nhập, đăng ký, ...)
       if (isAuthPublicRoute) {
-        return Promise.reject({
-          message,
-          status: error.response?.status,
-          data: error.response?.data,
-          code: error.code,
-        });
+        return Promise.reject(buildRejectedError(error, 'Đã xảy ra lỗi'));
       }
 
       // Request tùy chọn (vd: enrich profile sau khi đã xác thực bằng /auth/me) — không xóa token / redirect
       if (error.config?.skipGlobalAuthFailure) {
-        return Promise.reject({
-          message,
-          status: error.response?.status,
-          data: error.response?.data,
-          code: error.code,
-        });
+        return Promise.reject(buildRejectedError(error, 'Đã xảy ra lỗi'));
       }
 
       // Hiển thị lỗi chi tiết từ server để debug (trước khi redirect)
       console.error('[API] 401 Unauthorized:', { message, url: error.config?.url, data: error.response?.data });
-      const userFacing401 = mapAuthSessionMessageForLogout(message);
+      const userFacing401 = mapAuthSessionMessageForLogout(errorCode || message);
       toast.error(userFacing401, { duration: 4000 });
 
       if (isAutoLogoutDisabled()) {
         console.warn('[API] VITE_DISABLE_AUTO_LOGOUT: bỏ qua xóa token và redirect /login (chỉ debug).');
-        return Promise.reject({
-          message,
-          status: error.response?.status,
-          data: error.response?.data,
-          code: error.code,
-        });
+        return Promise.reject(buildRejectedError(error, 'Vui lòng đăng nhập lại.'));
       }
 
       // Trì hoãn redirect 2s để user đọc được toast và có thể mở console xem chi tiết
@@ -316,12 +306,7 @@ api.interceptors.response.use(
         window.location.href = '/login';
       }, 2000);
 
-      return Promise.reject({
-        message,
-        status: error.response?.status,
-        data: error.response?.data,
-        code: error.code,
-      });
+      return Promise.reject(buildRejectedError(error, 'Vui lòng đăng nhập lại.'));
     }
     // 403 Forbidden: Không có quyền (caller có thể skip toast qua skipPermissionDeniedToast)
     else if (error.response?.status === 403) {
@@ -379,12 +364,7 @@ api.interceptors.response.use(
     // Component tự handle (validation errors, etc.)
 
     // Reject với error object có cấu trúc nhất quán
-    return Promise.reject({
-      message,                        // Error message
-      status: error.response?.status, // HTTP status code
-      data: error.response?.data,     // Full error data từ server
-      code: error.code,              // Error code (ERR_NETWORK, etc.)
-    });
+    return Promise.reject(buildRejectedError(error, 'Đã xảy ra lỗi'));
   }
 );
 

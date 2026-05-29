@@ -45,6 +45,13 @@ function toClientMessage(doc, opts = {}) {
     isDeleted: o.isDeleted,
     isRecalled: o.isRecalled,
     editedAt: o.editedAt,
+    reactions: Array.isArray(o.reactions)
+      ? o.reactions.map((r) => ({
+          emoji: r.emoji,
+          userId: String(r.userId?._id || r.userId || ''),
+          createdAt: r.createdAt,
+        }))
+      : [],
   };
   const fm = slimFileMeta(o.fileMeta);
   if (fm) summary.fileMeta = fm;

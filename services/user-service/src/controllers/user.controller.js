@@ -17,6 +17,18 @@ function safeProfilePayload(profile) {
   };
 }
 
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const message = String(err?.message || fallbackMessage);
+  const errorCode = String(err?.errorCode || fallbackCode || '').trim();
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(errorCode ? { errorCode } : {}),
+    messageUser: message,
+  });
+}
+
 class UserController {
   // Tạo user profile mới
   async createUserProfile(req, res) {
@@ -65,10 +77,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Create user profile error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể tạo hồ sơ người dùng', 'USER_CREATE_FAILED');
     }
   }
 
@@ -97,10 +106,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Get user profile error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải hồ sơ người dùng', 'USER_GET_FAILED');
     }
   }
 
@@ -129,10 +135,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Get user profile by username error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải hồ sơ người dùng', 'USER_GET_FAILED');
     }
   }
 
@@ -163,10 +166,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Get user profile by phone error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải hồ sơ người dùng', 'USER_GET_FAILED');
     }
   }
 
@@ -225,10 +225,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Get current user error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải thông tin người dùng', 'USER_CURRENT_FAILED');
     }
   }
 
@@ -259,10 +256,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Update user profile error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể cập nhật hồ sơ', 'USER_UPDATE_FAILED');
     }
   }
 
@@ -294,10 +288,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Update status error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể cập nhật trạng thái', 'USER_STATUS_FAILED');
     }
   }
 
@@ -352,10 +343,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('internalPresenceBatch error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tìm kiếm người dùng', 'USER_SEARCH_FAILED');
     }
   }
 
@@ -447,10 +435,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Upload avatar error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message || 'Upload failed',
-      });
+      return sendError(res, error, 400, 'Không thể tải ảnh đại diện lên', 'USER_AVATAR_UPLOAD_FAILED');
     }
   }
 
@@ -485,10 +470,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Delete user profile error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể xóa hồ sơ người dùng', 'USER_DELETE_FAILED');
     }
   }
 }

@@ -154,6 +154,24 @@ function validateDraft(draft) {
   return { ok: true };
 }
 
+function sanitizeWorkerErrorMessage(err) {
+  const msg = String(err?.message || '').toLowerCase();
+  if (!msg) return 'Không thể xử lý yêu cầu AI lúc này';
+  if (msg.includes('chat_internal_token') || msg.includes('gateway_internal_token')) {
+    return 'Không thể kết nối dịch vụ nội bộ';
+  }
+  if (msg.includes('timeout') || msg.includes('econn') || msg.includes('enotfound')) {
+    return 'Kết nối dịch vụ đang gián đoạn, vui lòng thử lại';
+  }
+  if (msg.includes('invalid draft')) {
+    return 'Nội dung chưa đủ điều kiện để tạo task tự động';
+  }
+  if (msg.includes('ollama')) {
+    return 'Dịch vụ AI đang bận, vui lòng thử lại sau';
+  }
+  return 'Không thể xử lý yêu cầu AI lúc này';
+}
+
 async function resolveAssigneeId(assigneeName) {
   const q = String(assigneeName || '').trim();
   if (!q) return { assigneeId: null, note: '' };
@@ -359,7 +377,7 @@ async function processExtractJob(payload) {
     await extraction.save();
   } catch (err) {
     extraction.status = 'failed';
-    extraction.error = err.message || String(err);
+    extraction.error = sanitizeWorkerErrorMessage(err);
     await extraction.save();
     throw err;
   }

@@ -2,6 +2,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { applyAuthHeader, removeToken } from '../../utils/tokenStorage';
 import { mapAuthSessionMessageForLogout } from '../../utils/authErrorMessages';
+import { extractApiErrorMeta, resolveApiErrorMessage } from '../../utils/resolveApiErrorMessage';
 import { isAutoLogoutDisabled } from '../../utils/devAuth';
 import {
   isLandingEmbedActive,
@@ -11,11 +12,15 @@ import {
 
 /** Từ chối im lặng mọi lỗi HTTP khi đang xem demo landing — không đụng toast/redirect */
 function rejectLandingEmbedSilent(error) {
+  const userMessage = resolveApiErrorMessage(error, 'Đã xảy ra lỗi');
+  const meta = extractApiErrorMeta(error);
   return Promise.reject({
-    message: error.response?.data?.message || error.message,
-    status: error.response?.status,
-    data: error.response?.data,
-    code: error.code,
+    message: userMessage,
+    userMessage,
+    status: meta.status,
+    data: meta.data,
+    code: meta.code,
+    errorCode: meta.errorCode,
     isLandingEmbedSilent: true,
   });
 }
@@ -84,6 +89,20 @@ function isLikelyBrowserCacheFailure(error) {
   return msg.includes('cache') || msg.includes('err_cache');
 }
 
+function toNormalizedError(error, fallback = 'Đã xảy ra lỗi') {
+  const userMessage = resolveApiErrorMessage(error, fallback);
+  const meta = extractApiErrorMeta(error);
+  return {
+    message: userMessage,
+    userMessage,
+    status: meta.status,
+    data: meta.data,
+    code: meta.code,
+    errorCode: meta.errorCode,
+    original: error,
+  };
+}
+
 // Response interceptor - Handle errors
 apiClient.interceptors.response.use(
   (response) => {
@@ -133,7 +152,7 @@ apiClient.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    const message = error.response?.data?.message || error.message || 'Đã xảy ra lỗi';
+    const message = resolveApiErrorMessage(error, 'Đã xảy ra lỗi');
     
     // Handle specific error codes
     if (error.response?.status === 401) {
@@ -142,7 +161,8 @@ apiClient.interceptors.response.use(
       } else {
         removeToken();
         window.location.href = '/login';
-        toast.error(mapAuthSessionMessageForLogout(error.response?.data?.message || error.message));
+        const authHint = error.response?.data?.errorCode || error.response?.data?.code || message;
+        toast.error(mapAuthSessionMessageForLogout(authHint));
       }
     } else if (error.response?.status === 403) {
       if (!error.config?.skipPermissionDeniedToast) {
@@ -158,7 +178,7 @@ apiClient.interceptors.response.use(
       toast.error(message);
     }
 
-    return Promise.reject(error);
+    return Promise.reject(toNormalizedError(error, 'Đã xảy ra lỗi'));
   }
 );
 

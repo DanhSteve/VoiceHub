@@ -132,6 +132,13 @@ function CalendarPage() {
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   }, [eventsForDisplay]);
 
+  const selectedDateEvents = useMemo(() => {
+    const key = toDateKey(selectedDate);
+    return eventsForDisplay
+      .filter((e) => e.date === key)
+      .sort((a, b) => new Date(a.startAt || 0).getTime() - new Date(b.startAt || 0).getTime());
+  }, [eventsForDisplay, selectedDate]);
+
   const monthCells = useMemo(() => getMonthGridCells(selectedDate), [selectedDate]);
 
   const resetEventForm = () => {
@@ -725,26 +732,17 @@ function CalendarPage() {
                       tabIndex={0}
                       onClick={() => {
                         setSelectedDate(date);
-                        // When clicking a date cell, open create modal with pre-filled event name
-                        const dateStr = toDateKey(date);
-                        const eventTitle = `${t('calendar.newEventDefault', { date: dateStr })}`;
-                        openCreateModal(eventTitle);
                         if (dayEvents.length > 0) {
-                          toast(
-                            t('calendar.toastDayEvents', {
-                              count: dayEvents.length,
-                              day,
-                              month: date.getMonth() + 1,
-                              year: date.getFullYear(),
-                            }),
-                            { icon: '📅' }
-                          );
+                          setSelectedEvent(dayEvents[0]);
                         }
                       }}
                       onKeyDown={(ev) => {
                         if (ev.key === 'Enter' || ev.key === ' ') {
                           ev.preventDefault();
                           setSelectedDate(date);
+                          if (dayEvents.length > 0) {
+                            setSelectedEvent(dayEvents[0]);
+                          }
                         }
                       }}
                       className={`aspect-square cursor-pointer rounded-lg border p-2 transition-all hover:scale-105 ${
@@ -766,13 +764,26 @@ function CalendarPage() {
                       >
                         {day}
                       </div>
-                      {hasEvent && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {dayEvents.slice(0, 3).map((e) => (
-                            <div key={e.id} className="w-1 h-1 rounded-full bg-cyan-400" />
+                      {hasEvent ? (
+                        <div className="mt-1 space-y-1">
+                          {dayEvents.slice(0, 2).map((e) => (
+                            <div
+                              key={e.id}
+                              className={`truncate rounded px-1 py-[1px] text-[10px] font-semibold ${
+                                isDarkMode ? 'bg-cyan-500/20 text-cyan-200' : 'bg-cyan-100 text-cyan-800'
+                              }`}
+                              title={`${e.time || ''} ${e.title}`}
+                            >
+                              {e.time ? `${e.time} ` : ''}{e.title}
+                            </div>
                           ))}
+                          {dayEvents.length > 2 ? (
+                            <div className={`text-[10px] ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                              +{dayEvents.length - 2} sự kiện
+                            </div>
+                          ) : null}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })}
@@ -783,6 +794,36 @@ function CalendarPage() {
 
           {/* Events Sidebar — 1/3 */}
           <div className="min-h-0 space-y-4 overflow-y-auto pr-1 scrollbar-overlay lg:col-span-1 lg:max-h-[calc(100vh-8rem)]">
+            <div>
+              <h3 className={sideHeading}>
+                <span>🗓️</span> {`Sự kiện ngày ${toDateKey(selectedDate)}`}
+              </h3>
+              <div className="space-y-2">
+                {selectedDateEvents.length === 0 ? (
+                  <p className={`rounded-xl border border-dashed px-3 py-2 text-xs ${isDarkMode ? 'border-white/[0.08] text-[#6b7280]' : 'border-slate-200 text-slate-500'}`}>
+                    Không có sự kiện trong ngày đã chọn.
+                  </p>
+                ) : (
+                  selectedDateEvents.map((event) => (
+                    <GlassCard
+                      key={`selected-${event.id}`}
+                      hover
+                      className={sideCardCompact}
+                      onClick={() => setSelectedEvent(event)}
+                    >
+                      <div className={`mb-1 h-1 w-full rounded-full bg-gradient-to-r ${event.color}`} />
+                      <div className={`truncate text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        {event.title}
+                      </div>
+                      <div className={`mt-0.5 text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                        {event.time || '—'}{event.duration ? ` · ${event.duration}` : ''}
+                      </div>
+                    </GlassCard>
+                  ))
+                )}
+              </div>
+            </div>
+
             {/* Today's Events */}
             <div>
               <h3 className={sideHeading}>

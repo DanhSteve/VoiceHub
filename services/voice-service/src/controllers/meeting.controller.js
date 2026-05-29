@@ -3,6 +3,12 @@ const meetingService = require('../services/meeting.service');
 const Meeting = require('../models/Meeting');
 const { logger } = require('/shared');
 
+function safeErrorMessage(error, fallback) {
+  const status = Number(error?.statusCode) || 500;
+  if (status >= 500) return 'Hệ thống cuộc họp đang bận. Vui lòng thử lại sau.';
+  return String(error?.message || fallback);
+}
+
 class MeetingController {
   // Tạo meeting mới
   async createMeeting(req, res) {
@@ -34,7 +40,7 @@ class MeetingController {
       logger.error('Create meeting error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể tạo cuộc họp'),
       });
     }
   }
@@ -53,7 +59,7 @@ class MeetingController {
       logger.error('Start meeting error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể tải cuộc họp'),
       });
     }
   }
@@ -72,7 +78,7 @@ class MeetingController {
       logger.error('End meeting error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể tải danh sách cuộc họp'),
       });
     }
   }
@@ -100,7 +106,7 @@ class MeetingController {
       logger.error('Add participant error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể cập nhật cuộc họp'),
       });
     }
   }
@@ -128,7 +134,7 @@ class MeetingController {
       logger.error('Remove participant error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể xóa cuộc họp'),
       });
     }
   }
@@ -154,7 +160,7 @@ class MeetingController {
       logger.error('Get meeting error:', error);
       res.status(500).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể tham gia cuộc họp'),
       });
     }
   }
@@ -279,12 +285,12 @@ class MeetingController {
       if (error.name === 'CastError' || error.name === 'BSONError') {
         return res.status(400).json({
           success: false,
-          message: error.message || 'Invalid query',
+          message: safeErrorMessage(error, 'Truy vấn không hợp lệ'),
         });
       }
       res.status(500).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể tải thống kê cuộc họp'),
       });
     }
   }
@@ -309,7 +315,7 @@ class MeetingController {
       logger.error('Bootstrap meeting room error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể thao tác phiên cuộc họp'),
       });
     }
   }
@@ -344,7 +350,7 @@ class MeetingController {
       logger.error('Bootstrap room error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeErrorMessage(error, 'Không thể kết thúc cuộc họp'),
       });
     }
   }
@@ -361,7 +367,7 @@ class MeetingController {
       return res.json({ success: true, deletedCount: result.deletedCount });
     } catch (error) {
       logger.error('purgeOrganizationMeetings error:', error);
-      return res.status(500).json({ success: false, message: error.message });
+      return res.status(500).json({ success: false, message: safeErrorMessage(error, 'Không thể tải trạng thái phòng họp') });
     }
   }
 }

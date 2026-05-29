@@ -6,8 +6,22 @@ const { authenticate } = require('/shared/middleware/auth');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
 
 function internalServiceOnly(req, res, next) {
-  const token = req.headers['x-internal-token'] || req.headers['x-chat-internal-token'];
-  if (!CHAT_INTERNAL_TOKEN || token !== CHAT_INTERNAL_TOKEN) {
+  const token = String(
+    req.headers['x-internal-token'] || req.headers['x-chat-internal-token'] || ''
+  ).trim();
+  if (!CHAT_INTERNAL_TOKEN) {
+    return res.status(503).json({
+      success: false,
+      message: 'CHAT_INTERNAL_TOKEN is not configured on chat-service',
+    });
+  }
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Missing x-internal-token',
+    });
+  }
+  if (token !== CHAT_INTERNAL_TOKEN) {
     return res.status(403).json({
       success: false,
       message: 'Forbidden',
@@ -45,6 +59,12 @@ router.post(
   '/internal/purge-organization-messages',
   internalServiceOnly,
   messageController.purgeOrganizationMessagesInternal.bind(messageController)
+);
+
+router.post(
+  '/internal/call-log',
+  internalServiceOnly,
+  messageController.createCallLogInternal.bind(messageController)
 );
 
 // Tất cả routes đều cần authentication

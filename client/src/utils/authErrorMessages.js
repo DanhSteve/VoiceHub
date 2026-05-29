@@ -21,5 +21,9 @@ export function mapAuthSessionMessageForLogout(serverMessage) {
     return 'Vui lòng đăng nhập lại.';
   }
 
-  return raw;
+  if (t.includes('not authenticated') || t.includes('unauthorized')) {
+    return 'Vui lòng đăng nhập lại.';
+  }
+
+  return 'Vui lòng đăng nhập lại.';
 }

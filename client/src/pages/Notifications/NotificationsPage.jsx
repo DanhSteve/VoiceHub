@@ -16,6 +16,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../../features/search';
 import { orgRecordId } from '../../utils/orgListUtils';
+import { buildWorkspacePath } from '../../utils/workspaceTabUtils';
 
 function parseNotificationDataField(raw) {
   if (!raw) return {};
@@ -87,7 +88,7 @@ function NotificationsPage() {
       String(activeWorkspace?.slug || '').trim() ||
       '';
     if (slug) {
-      navigate(`/w/${encodeURIComponent(slug)}?tab=notifications`, { replace: true });
+      navigate(buildWorkspacePath(slug, 'notifications'), { replace: true });
       return;
     }
     navigate(
@@ -217,6 +218,7 @@ function NotificationsPage() {
       item?.workspaceId ||
       item?.organizationId ||
       '';
+    const actionUrl = String(item?.actionUrl || '').trim();
     return {
       id,
       type,
@@ -228,6 +230,8 @@ function NotificationsPage() {
       read: Boolean(item?.isRead),
       priority: data?.priority || 'low',
       action: getActionLabel(rawType, type),
+      actionUrl,
+      data,
       organizationLabel: orgLabel,
       organizationName: orgLabel,
       organizationSlug: orgSlug,
@@ -386,10 +390,29 @@ function NotificationsPage() {
     }
 
     const targetWorkspacePath = notif.organizationSlug
-      ? `/w/${encodeURIComponent(notif.organizationSlug)}`
+      ? buildWorkspacePath(notif.organizationSlug, 'chat')
       : notif.organizationId
         ? `/workspaces?orgId=${encodeURIComponent(notif.organizationId)}`
         : null;
+
+    if (notif.rawType === 'message') {
+      const senderId = String(
+        notif.data?.senderId || notif.data?.friendId || ''
+      ).trim();
+      const fromAction = (() => {
+        const url = String(notif.actionUrl || '');
+        const m = url.match(/[?&]openDmUserId=([^&]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+      })();
+      const peerId = senderId || fromAction;
+      if (peerId) {
+        navigate(`/chat/friends?openDmUserId=${encodeURIComponent(peerId)}`);
+      } else {
+        navigate('/chat/friends');
+      }
+      toast(t('notifications.toastOpenFriendChat'), { icon: '💬' });
+      return;
+    }
 
     switch (notif.type) {
       case 'mention':
@@ -410,13 +433,15 @@ function NotificationsPage() {
         break;
       case 'task':
       case 'deadline':
-        navigate(notif.organizationSlug ? `${targetWorkspacePath}?tab=tasks` : '/tasks');
+        navigate(
+          notif.organizationSlug ? buildWorkspacePath(notif.organizationSlug, 'tasks') : '/tasks'
+        );
         toast(t('notifications.toastOpenTasks'), { icon: '✅' });
         break;
       case 'file':
         navigate(
           notif.organizationSlug
-            ? `/w/${encodeURIComponent(notif.organizationSlug)}?tab=documents`
+            ? buildWorkspacePath(notif.organizationSlug, 'documents')
             : notif.organizationId
               ? `/workspaces?orgId=${encodeURIComponent(notif.organizationId)}&tab=documents`
               : '/documents'

@@ -3,6 +3,21 @@ const { isPublicRoute } = require('../config/services');
 
 const getJwtSecret = () => String(process.env.JWT_SECRET || '').trim();
 
+const CHAT_INTERNAL_TOKEN = String(process.env.CHAT_INTERNAL_TOKEN || '').trim();
+
+function isChatInternalServicePath(path) {
+  const p = String(path || '').replace(/\/+/g, '/');
+  return p.includes('/api/messages/internal/') || p.includes('/api/chat/messages/internal/');
+}
+
+function hasValidChatInternalToken(req) {
+  if (!CHAT_INTERNAL_TOKEN) return false;
+  const got = String(
+    req.headers['x-internal-token'] || req.headers['x-chat-internal-token'] || ''
+  ).trim();
+  return got.length > 0 && got === CHAT_INTERNAL_TOKEN;
+}
+
 /**
  * Middleware xác thực JWT
  * Verify JWT token và gắn req.user
@@ -13,6 +28,19 @@ const authMiddleware = (req, res, next) => {
   const fromOriginal = String(req.originalUrl || req.url || '')
     .split('?')[0]
     .replace(/\/+/g, '/');
+
+  if (
+    isChatInternalServicePath(pathWithoutQuery) ||
+    isChatInternalServicePath(fromOriginal)
+  ) {
+    if (hasValidChatInternalToken(req)) {
+      return next();
+    }
+    return res.status(403).json({
+      success: false,
+      message: 'Forbidden',
+    });
+  }
 
   // Bỏ qua các route public
   if (

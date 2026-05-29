@@ -24,6 +24,32 @@ const {
   assertCanWriteInOrgChannel,
 } = require('../utils/orgChannelPermissions');
 const { resolveOrgChannelAccess } = require('../services/orgAccessReadModel');
+const { maybeNotifyDmReceived } = require('../utils/dmPushNotification');
+
+function resolveParticipantId(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'object' && value._id != null) return String(value._id).trim();
+  return String(value).trim();
+}
+
+/** Realtime DM: gửi cùng payload tới sender + receiver (phòng user:{id}). */
+async function emitDmToParticipants(eventName, message, extra = {}) {
+  if (!eventName || !message) return;
+  const senderId = resolveParticipantId(message.senderId);
+  const receiverId = resolveParticipantId(message.receiverId);
+  if (!senderId || !receiverId) return;
+
+  const payload =
+    extra && typeof extra === 'object' && Object.keys(extra).length > 0
+      ? { ...message, ...extra }
+      : message;
+
+  await emitRealtimeEvent({
+    event: eventName,
+    userIds: [senderId, receiverId],
+    payload,
+  });
+}
 
 /** Header gọi organization-service: tin cậy gateway (giống proxy) hoặc Bearer để /auth/me. */
 function headersForOrganizationForward(req) {
@@ -116,6 +142,46 @@ class MessageController {
         return res.status(404).json({ success: false, message: 'Message not found' });
       }
       return res.json({ success: true, data: message });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Nội bộ: ghi log cuộc gọi 1-1 đã kết thúc (voice-service).
+   */
+  async createCallLogInternal(req, res) {
+    try {
+      const { callerId, calleeId, media, durationSec } = req.body || {};
+      if (!callerId || !calleeId) {
+        return res.status(400).json({
+          success: false,
+          message: 'callerId and calleeId are required',
+        });
+      }
+
+      const message = await messageService.createCallLogMessage({
+        callerId,
+        calleeId,
+        media,
+        durationSec,
+      });
+      const data = (await attachSignedReadUrlToMessage(message)) || message;
+
+      await Promise.all([
+        emitRealtimeEvent({
+          event: 'friend:new_message',
+          userId: String(calleeId),
+          payload: data,
+        }),
+        emitRealtimeEvent({
+          event: 'friend:sent',
+          userId: String(callerId),
+          payload: data,
+        }),
+      ]);
+
+      return res.status(201).json({ success: true, data });
     } catch (error) {
       res.status(500).json({ success: false, message: error.message });
     }
@@ -379,6 +445,7 @@ class MessageController {
             payload: payloadMessage,
           }),
         ]);
+        maybeNotifyDmReceived(payloadMessage).catch(() => null);
       }
 
       if (roomId) {

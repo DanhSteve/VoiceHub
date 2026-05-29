@@ -25,7 +25,7 @@ export default function OrganizationSettingsPage() {
   const [organization, setOrganization] = useState(null);
   const [loading, setLoading] = useState(true);
   const organizationHomePath = organization?.slug
-    ? `/w/${encodeURIComponent(organization.slug)}`
+    ? `/w/${encodeURIComponent(organization.slug)}/chat`
     : '/dashboard';
 
   useEffect(() => {

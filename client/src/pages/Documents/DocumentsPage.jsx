@@ -12,6 +12,7 @@ import UserAvatar from '../../components/Shared/UserAvatar';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { useOrganizationsMy } from '../../hooks/queries';
 import { orgRecordId } from '../../utils/orgListUtils';
+import { buildWorkspacePath } from '../../utils/workspaceTabUtils';
 
 function DocumentsPage() {
   const { isDarkMode } = useTheme();
@@ -164,7 +165,7 @@ function DocumentsPage() {
         ? String(activeWorkspace?.slug || '').trim()
         : '');
     if (slug) {
-      navigate(`/w/${encodeURIComponent(slug)}?tab=documents`, { replace: true });
+      navigate(buildWorkspacePath(slug, 'documents'), { replace: true });
       return;
     }
     navigate(`/workspaces?orgId=${encodeURIComponent(organizationId)}&tab=documents`, {

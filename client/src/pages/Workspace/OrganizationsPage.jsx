@@ -35,6 +35,7 @@ import { useFriendsList } from '../../hooks/queries/useFriendsList';
 import { queryKeys } from '../../lib/queryKeys';
 import { appShellBg } from '../../theme/shellTheme';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
+import { resolveApiErrorMessage } from '../../utils/resolveApiErrorMessage';
 
 import {
   divisionChannelsFromStructure,
@@ -54,7 +55,12 @@ import {
   organizationsListSame,
   workspacePayloadFromOrg,
 } from '../../utils/orgListUtils';
-import { normalizeWorkspaceTab, parseWorkspaceTabFromSearch } from '../../utils/workspaceTabUtils';
+import {
+  buildWorkspacePath,
+  normalizeWorkspaceTab,
+  parseWorkspaceTabFromLocation,
+  resolveLegacyWorkspaceRedirect,
+} from '../../utils/workspaceTabUtils';
 const unwrapData = (payload) => payload?.data ?? payload;
 
 /** Khi đổi phòng ban: không tự nhảy vào kênh voice — ưu tiên kênh chat hoặc để trống. */
@@ -310,9 +316,20 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     !location.state?.openCreateWorkspace &&
     !hasInviteQuery;
   const workspaceTabFromUrl = useMemo(
-    () => parseWorkspaceTabFromSearch(location.search),
-    [location.search]
+    () => parseWorkspaceTabFromLocation(location.pathname, location.search),
+    [location.pathname, location.search]
   );
+
+  useEffect(() => {
+    const target = resolveLegacyWorkspaceRedirect(location.pathname, location.search);
+    if (target) {
+      const current = `${location.pathname}${location.search || ''}`;
+      if (target !== current) {
+        navigate(target, { replace: true });
+        return;
+      }
+    }
+  }, [location.pathname, location.search, navigate]);
 
   useEffect(() => {
     setWorkspaceTabView(workspaceTabFromUrl);
@@ -340,18 +357,14 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
   const handleWorkspaceTabChange = useCallback(
     (tab) => {
       const next = normalizeWorkspaceTab(tab);
-      const current = parseWorkspaceTabFromSearch(location.search);
+      const current = parseWorkspaceTabFromLocation(location.pathname, location.search);
       if (current === next) return;
       const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
       if (!slug || landingDemo) return;
-      const base = `/w/${encodeURIComponent(slug)}`;
-      if (next === 'chat') {
-        navigate(base);
-      } else {
-        navigate(`${base}?tab=${next}`);
-      }
+      navigate(buildWorkspacePath(slug, next));
     },
     [
+      location.pathname,
       location.search,
       selectedOrganization?.slug,
       selectedOrganizationId,
@@ -372,11 +385,10 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       }
       const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
       if (!slug) return;
-      const params = new URLSearchParams();
-      if (file?.roomId) params.set('channelId', String(file.roomId));
-      if (file?.source === 'message' && file?.id) params.set('messageId', String(file.id));
-      const qs = params.toString();
-      navigate(`/w/${encodeURIComponent(slug)}${qs ? `?${qs}` : ''}`);
+      const query = {};
+      if (file?.roomId) query.channelId = String(file.roomId);
+      if (file?.source === 'message' && file?.id) query.messageId = String(file.id);
+      navigate(buildWorkspacePath(slug, 'documents', query));
     },
     [selectedOrganization?.slug, selectedOrganizationId, navigate]
   );
@@ -403,7 +415,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     const slug = String(selectedOrganization?.slug || selectedOrganizationId || '').trim();
     if (!slug) return;
     toast.error('Vui lòng chọn team!');
-    navigate(`/w/${encodeURIComponent(slug)}`);
+    navigate(buildWorkspacePath(slug, 'chat'));
   }, [
     workspaceTabView,
     selectedTeamId,
@@ -1237,12 +1249,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
         setWorkspaceDocFiles(buildOrgFilesFromOverview(overview, t, locale));
       } catch (err) {
         setWorkspaceDocFiles([]);
-        setWorkspaceDocumentsError(
-          err?.response?.data?.message ||
-            err?.response?.data?.error ||
-            err?.message ||
-            t('documents.orgLoadError')
-        );
+        setWorkspaceDocumentsError(resolveApiErrorMessage(err, t('documents.orgLoadError')));
       } finally {
         setLoadingWorkspaceDocuments(false);
       }
@@ -1371,7 +1378,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
       await loadOrganizations();
       const createdSlug = String(created?.slug || normalizedSlug || '').trim();
       if (createdSlug) {
-        navigate(`/w/${encodeURIComponent(createdSlug)}`);
+        navigate(buildWorkspacePath(createdSlug, 'chat'));
       }
     } catch (error) {
       const msg =
@@ -1563,7 +1570,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
     setSelectedOrganizationId(orgId);
     if (selected?.slug) {
       setLastWorkspaceSlug(selected.slug);
-      navigate(`/w/${encodeURIComponent(selected.slug)}`);
+      navigate(buildWorkspacePath(selected.slug, 'chat'));
     }
   };
 
@@ -3106,6 +3113,7 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
             ) : (
             <OrganizationMemberSidebar
               organizationId={selectedOrganizationId}
+              workspaceSlug={String(selectedOrganization?.slug || '').trim()}
               organizationName={selectedOrganization?.name || ''}
               selectedTeamId={selectedTeamId}
               teams={teams}
@@ -3376,7 +3384,9 @@ function OrganizationsPage({ landingDemo = false, initialWorkspaceSlug = '' } = 
                 placeholder="workspace-slug"
                 className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white outline-none placeholder:text-gray-500"
               />
-              <p className="text-xs text-gray-400">Workspace URL: /w/{createWorkspaceSlug || 'your-slug'}</p>
+              <p className="text-xs text-gray-400">
+                Workspace URL: /w/{createWorkspaceSlug || 'your-slug'}/chat
+              </p>
             </div>
           ) : null}
           {createWorkspaceStep === 3 ? (

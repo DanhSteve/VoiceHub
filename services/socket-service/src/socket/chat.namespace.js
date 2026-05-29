@@ -2,6 +2,7 @@ const axios = require('axios');
 const { emitToRoom, emitToUser } = require('./realtimeHub');
 const { publishFriendDm } = require('../messaging/rabbitPublisher');
 const redisPresence = require('../presence/redisPresence');
+const redisFriendChatFocus = require('../presence/redisFriendChatFocus');
 
 // URL nội bộ tới chat-service trong docker-compose
 const CHAT_SERVICE_URL = process.env.CHAT_SERVICE_URL || 'http://chat-service:3006';
@@ -119,7 +120,7 @@ module.exports = function registerChatNamespace(io) {
         );
         socket.emit('presence:batch', { users, timestamp: new Date().toISOString() });
       } catch (err) {
-        socket.emit('error', { message: err.message || 'presence:subscribe failed' });
+        socket.emit('error', { message: 'Không thể theo dõi trạng thái hiện diện lúc này' });
       }
     });
 
@@ -195,6 +196,16 @@ module.exports = function registerChatNamespace(io) {
       emitToUser(receiverId, 'friend:typing_stop', { senderId: String(userId) });
     });
 
+    socket.on('friend:chat_focus', async ({ active } = {}) => {
+      if (!userId) return;
+      const key = String(userId);
+      if (active) {
+        await redisFriendChatFocus.setActive(key);
+      } else {
+        await redisFriendChatFocus.clear(key);
+      }
+    });
+
     socket.on('room:join', ({ roomId }) => {
       if (!roomId) return;
       socket.join(roomId);
@@ -219,6 +230,7 @@ module.exports = function registerChatNamespace(io) {
     socket.on('disconnect', async (reason) => {
       if (userId) {
         const key = String(userId);
+        redisFriendChatFocus.clear(key).catch(() => null);
         const current = onlineUserSockets.get(key) || 0;
         if (current <= 1) {
           onlineUserSockets.delete(key);

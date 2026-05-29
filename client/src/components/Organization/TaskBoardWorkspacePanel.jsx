@@ -235,6 +235,7 @@ function KanbanSortableCard({
 
 export default function TaskBoardWorkspacePanel({
   isDarkMode,
+  workspaceSlug = '',
   boards = [],
   accessibleBoards = [],
   selectedBoardId = '',
@@ -897,6 +898,7 @@ export default function TaskBoardWorkspacePanel({
         isOpen={Boolean(menuList && menuAnchor)}
         anchorRect={menuAnchor}
         isDarkMode={isDarkMode}
+        workspaceSlug={workspaceSlug}
         list={menuList}
         lists={listMap}
         boards={boardsForMove}
@@ -916,6 +918,7 @@ export default function TaskBoardWorkspacePanel({
         isOpen={Boolean(cardMenuCard && cardMenuAnchor)}
         anchorRect={cardMenuAnchor}
         isDarkMode={isDarkMode}
+        workspaceSlug={workspaceSlug}
         card={cardMenuCard}
         lists={listMap}
         currentBoardId={selectedBoardId}
@@ -930,6 +933,7 @@ export default function TaskBoardWorkspacePanel({
       <TaskBoardCardDetailModal
         isOpen={Boolean(detailCard)}
         isDarkMode={isDarkMode}
+        workspaceSlug={workspaceSlug}
         card={detailCard}
         boardId={selectedBoardId}
         listTitle={detailCard ? listTitleForCard(detailCard) : ''}

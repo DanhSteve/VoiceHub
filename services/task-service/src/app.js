@@ -26,8 +26,11 @@ app.get('/health', (req, res) => {
 
 // Task board routes (mount trước /tasks để tránh xung đột /:taskId)
 const taskBoardRoutes = require('./routes/taskBoard.routes');
+const workspaceTaskBoardRoutes = require('./routes/workspaceTaskBoard.routes');
 app.use('/api/tasks/boards', taskBoardRoutes);
 app.use('/api/work/boards', taskBoardRoutes);
+// REST workspace facade — slug → organizationId, delegate cùng controller board
+app.use('/api/workspaces/:workspaceSlug/task-boards', workspaceTaskBoardRoutes);
 
 // Task routes
 const taskRoutes = require('./routes/task.routes');

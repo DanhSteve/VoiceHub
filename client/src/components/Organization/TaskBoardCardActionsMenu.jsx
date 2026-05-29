@@ -11,10 +11,12 @@ export default function TaskBoardCardActionsMenu({
   card,
   lists = [],
   currentBoardId = '',
+  workspaceSlug = '',
   onClose,
   onOpenCard,
   onRefresh,
 }) {
+  const boardApiOpts = workspaceSlug ? { workspaceSlug } : {};
   const [view, setView] = useState('menu');
   const [moveListId, setMoveListId] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -106,7 +108,7 @@ export default function TaskBoardCardActionsMenu({
           disabled={!moveListId || submitting}
           onClick={() =>
             run(async () => {
-              await taskAPI.moveBoardCard(cardId, { toListId: moveListId });
+              await taskAPI.moveBoardCard(cardId, { toListId: moveListId }, boardApiOpts);
               toast.success('Đã di chuyển thẻ');
             })
           }
@@ -182,7 +184,11 @@ export default function TaskBoardCardActionsMenu({
             disabled={submitting}
             onClick={() =>
               run(async () => {
-                await taskAPI.copyBoardCard(cardId, { toListId: String(card.listId || '') });
+                await taskAPI.copyBoardCard(
+                  cardId,
+                  { toListId: String(card.listId || '') },
+                  boardApiOpts
+                );
                 toast.success('Đã sao chép thẻ');
               })
             }
@@ -196,7 +202,7 @@ export default function TaskBoardCardActionsMenu({
             disabled={submitting}
             onClick={() =>
               run(async () => {
-                await taskAPI.archiveBoardCard(cardId);
+                await taskAPI.archiveBoardCard(cardId, boardApiOpts);
                 toast.success('Đã lưu trữ thẻ');
               })
             }

@@ -270,6 +270,7 @@ exports.getMembers = async (req, res, next) => {
         status: 'fail',
         message: error.message,
         code: error.code,
+        messageUser: error.message,
       });
     }
     return next(error);
@@ -290,6 +291,7 @@ exports.getMembersWithRoles = async (req, res, next) => {
         status: 'fail',
         message: error.message,
         code: error.code,
+        messageUser: error.message,
       });
     }
     return next(error);

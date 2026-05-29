@@ -8,6 +8,7 @@ export default function TaskBoardListActionsMenu({
   isOpen,
   anchorRect,
   isDarkMode,
+  workspaceSlug = '',
   list,
   lists = [],
   boards = [],
@@ -16,6 +17,7 @@ export default function TaskBoardListActionsMenu({
   onOpenAddCard,
   onRefresh,
 }) {
+  const boardApiOpts = workspaceSlug ? { workspaceSlug } : {};
   const [view, setView] = useState('menu');
   const [copyTitle, setCopyTitle] = useState('');
   const [moveBoardId, setMoveBoardId] = useState('');
@@ -64,7 +66,7 @@ export default function TaskBoardListActionsMenu({
     let cancelled = false;
     (async () => {
       try {
-        const res = await taskAPI.getBoardDetail(String(moveBoardId));
+        const res = await taskAPI.getBoardDetail(String(moveBoardId), boardApiOpts);
         const detail = unwrapTaskBoardDetailPayload(res);
         const n = Array.isArray(detail?.lists) ? detail.lists.length : 0;
         const onCurrent = String(moveBoardId) === String(currentBoardId);
@@ -163,10 +165,12 @@ export default function TaskBoardListActionsMenu({
           disabled={!copyTitle.trim() || submitting}
           onClick={() =>
             run(async () => {
-              await taskAPI.copyBoardList(currentBoardId, listId, {
-                title: copyTitle.trim(),
-                toBoardId: currentBoardId,
-              });
+              await taskAPI.copyBoardList(
+                currentBoardId,
+                listId,
+                { title: copyTitle.trim(), toBoardId: currentBoardId },
+                boardApiOpts
+              );
               toast.success('Đã sao chép danh sách');
             })
           }
@@ -217,10 +221,12 @@ export default function TaskBoardListActionsMenu({
           disabled={!moveBoardId || submitting}
           onClick={() =>
             run(async () => {
-              await taskAPI.moveBoardList(currentBoardId, listId, {
-                toBoardId: moveBoardId,
-                position: movePosition,
-              });
+              await taskAPI.moveBoardList(
+                currentBoardId,
+                listId,
+                { toBoardId: moveBoardId, position: movePosition },
+                boardApiOpts
+              );
               toast.success('Đã di chuyển danh sách');
             })
           }
@@ -252,7 +258,7 @@ export default function TaskBoardListActionsMenu({
           disabled={!archiveNameOk || submitting}
           onClick={() =>
             run(async () => {
-              await taskAPI.archiveBoardList(currentBoardId, listId);
+              await taskAPI.archiveBoardList(currentBoardId, listId, boardApiOpts);
               toast.success('Đã lưu trữ danh sách');
             })
           }
@@ -272,9 +278,12 @@ export default function TaskBoardListActionsMenu({
               disabled={submitting}
               onClick={() =>
                 run(async () => {
-                  await taskAPI.moveAllBoardListCards(currentBoardId, listId, {
-                    toListId: String(l._id),
-                  });
+                  await taskAPI.moveAllBoardListCards(
+                    currentBoardId,
+                    listId,
+                    { toListId: String(l._id) },
+                    boardApiOpts
+                  );
                   toast.success('Đã chuyển tất cả thẻ');
                 })
               }
@@ -321,10 +330,10 @@ export default function TaskBoardListActionsMenu({
             onClick={() =>
               run(async () => {
                 if (list?.isWatching) {
-                  await taskAPI.unwatchBoardList(currentBoardId, listId);
+                  await taskAPI.unwatchBoardList(currentBoardId, listId, boardApiOpts);
                   toast.success('Đã bỏ theo dõi danh sách');
                 } else {
-                  await taskAPI.watchBoardList(currentBoardId, listId);
+                  await taskAPI.watchBoardList(currentBoardId, listId, boardApiOpts);
                   toast.success('Đang theo dõi danh sách — bạn sẽ nhận thông báo khi có thẻ mới');
                 }
               })

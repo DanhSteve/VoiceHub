@@ -165,6 +165,9 @@ services:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-voicehub}:${RABBITMQ_PASS:-voicehub-dev-change-me}@rabbitmq:5672
       - FRIEND_DM_USE_QUEUE=${FRIEND_DM_USE_QUEUE:-true}
       - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN:-dev-shared-realtime-token-change-me}
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3003
+      - NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN:-dev-gateway-internal-token-change-me}
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN:-dev-user-internal-presence-token-change-me}
       - MEILI_HOST=http://meilisearch:7700
       - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-voicehub-meili-dev-change-me}
       - MESSAGE_SEARCH_ENGINE=${MESSAGE_SEARCH_ENGINE:-meilisearch}
@@ -311,10 +314,15 @@ services:
     environment:
       - SOCKET_SERVICE_URL=http://socket-service:3017
       - REALTIME_INTERNAL_TOKEN=${REALTIME_INTERNAL_TOKEN:-dev-shared-realtime-token-change-me}
+      - CHAT_SERVICE_URL=http://chat-service:3006
+      - CHAT_SERVICE_DIRECT_URL=http://chat-service:3006
+      - CHAT_INTERNAL_TOKEN=${CHAT_INTERNAL_TOKEN:-dev-shared-chat-internal-token-change-me}
+      - USER_SERVICE_INTERNAL_TOKEN=${USER_SERVICE_INTERNAL_TOKEN:-dev-user-internal-presence-token-change-me}
     depends_on:
       - mongodb
       - redis
       - socket-service
+      - chat-service
     networks:
       - enterprise-network
     volumes:

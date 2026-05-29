@@ -25,6 +25,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { useAppStrings } from '../../locales/appStrings';
 import api from '../../services/api';
+import { buildWorkspacePath, parseWorkspaceTabFromLocation } from '../../utils/workspaceTabUtils';
 import {
   useFriendPending,
   useNotificationBadge,
@@ -430,14 +431,18 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     if (path.startsWith(ORG_NOTIFICATIONS_PATH) || path.startsWith('/documents')) {
       const slug = String(org.slug || '').trim();
       const tab = path.startsWith('/documents') ? 'documents' : 'notifications';
-      navigate(slug ? `/w/${encodeURIComponent(slug)}?tab=${tab}` : `/workspaces?orgId=${encodeURIComponent(id)}&tab=${tab}`);
+      navigate(
+        slug
+          ? buildWorkspacePath(slug, tab)
+          : `/workspaces?orgId=${encodeURIComponent(id)}&tab=${tab}`
+      );
       return;
     }
     if (path.startsWith('/w/') || inOrganizationContext) {
-      navigate(slug ? `/w/${encodeURIComponent(slug)}` : '/workspaces');
+      navigate(slug ? buildWorkspacePath(slug, 'chat') : '/workspaces');
       return;
     }
-    navigate(slug ? `/w/${encodeURIComponent(slug)}` : '/workspaces');
+    navigate(slug ? buildWorkspacePath(slug, 'chat') : '/workspaces');
   };
 
   const isOrganizationActive = (org) => {
@@ -466,33 +471,32 @@ const NavigationSidebar = ({ landingDemo = false } = {}) => {
     return location.pathname.startsWith(path);
   };
 
-  const workspaceTab = useMemo(() => {
-    const params = new URLSearchParams(location.search);
-    const tab = String(params.get('tab') || '').trim().toLowerCase();
-    return tab;
-  }, [location.search]);
+  const workspaceTab = useMemo(
+    () => parseWorkspaceTabFromLocation(location.pathname, location.search),
+    [location.pathname, location.search]
+  );
+
+  const navWorkspaceSlug = useMemo(
+    () => String(slugFromPath || activeWorkspace?.slug || lastWorkspaceSlug || '').trim(),
+    [slugFromPath, activeWorkspace?.slug, lastWorkspaceSlug]
+  );
 
   const getOrgNavTargetPath = (item) => {
-    const workspacePath = getLastWorkspacePath();
+    const slug = navWorkspaceSlug;
     if (item.key === 'notifications') {
       if (!inOrganizationContext) return '/notifications';
-      return `${workspacePath}?tab=notifications`;
+      return slug ? buildWorkspacePath(slug, 'notifications') : getLastWorkspacePath();
     }
     if (!inOrganizationContext) return item.path;
-    if (item.key === 'org') return workspacePath;
-    if (item.key === 'tasks') return `${workspacePath}?tab=tasks`;
-    if (item.key === 'documents') return `${workspacePath}?tab=documents`;
+    if (item.key === 'org') return slug ? buildWorkspacePath(slug, 'chat') : getLastWorkspacePath();
+    if (item.key === 'tasks') return slug ? buildWorkspacePath(slug, 'tasks') : item.path;
+    if (item.key === 'documents') return slug ? buildWorkspacePath(slug, 'documents') : item.path;
     return item.path;
   };
 
   const isNavItemActive = (item) => {
     if (inOrganizationContext && item.key === 'org') {
-      return (
-        location.pathname.startsWith('/w/') &&
-        workspaceTab !== 'tasks' &&
-        workspaceTab !== 'documents' &&
-        workspaceTab !== 'notifications'
-      );
+      return location.pathname.startsWith('/w/') && workspaceTab === 'chat';
     }
     if (inOrganizationContext && item.key === 'tasks') {
       return location.pathname.startsWith('/w/') && workspaceTab === 'tasks';

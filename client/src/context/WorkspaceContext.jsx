@@ -48,7 +48,7 @@ export function WorkspaceProvider({ children }) {
 
   const getLastWorkspacePath = useCallback(() => {
     const slug = String(lastWorkspaceSlugState || '').trim();
-    return slug ? `/w/${encodeURIComponent(slug)}` : '/workspaces';
+    return slug ? `/w/${encodeURIComponent(slug)}/chat` : '/workspaces';
   }, [lastWorkspaceSlugState]);
 
   const value = useMemo(

@@ -2,6 +2,12 @@ const notificationService = require('../services/notification.service');
 const { publishDispatchJob } = require('../messaging/notificationDispatch.publisher');
 const { logger } = require('/shared');
 
+function safeMessage(error, fallback) {
+  const status = Number(error?.statusCode) || 500;
+  if (status >= 500) return 'Hệ thống thông báo đang bận. Vui lòng thử lại sau.';
+  return String(error?.message || fallback);
+}
+
 class NotificationController {
   _asyncDispatchEnabled() {
     return String(process.env.NOTIFICATION_ASYNC_DISPATCH || 'false').toLowerCase() === 'true';
@@ -44,7 +50,7 @@ class NotificationController {
       logger.error('Create notification error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tạo thông báo'),
       });
     }
   }
@@ -85,7 +91,7 @@ class NotificationController {
       logger.error('Create bulk notifications error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể gửi thông báo hàng loạt'),
       });
     }
   }
@@ -123,7 +129,7 @@ class NotificationController {
       logger.error('Get user notifications error:', error);
       res.status(500).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tải danh sách thông báo'),
       });
     }
   }
@@ -157,7 +163,7 @@ class NotificationController {
       logger.error('Mark friend-related read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể cập nhật thông báo'),
       });
     }
   }
@@ -185,7 +191,7 @@ class NotificationController {
       logger.error('Mark as read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể đánh dấu đã đọc'),
       });
     }
   }
@@ -212,7 +218,7 @@ class NotificationController {
       logger.error('Mark all as read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể đánh dấu đã đọc toàn bộ'),
       });
     }
   }
@@ -240,7 +246,7 @@ class NotificationController {
       logger.error('Delete notification error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể xóa thông báo'),
       });
     }
   }
@@ -267,7 +273,7 @@ class NotificationController {
       logger.error('Delete all read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tải số lượng thông báo chưa đọc'),
       });
     }
   }

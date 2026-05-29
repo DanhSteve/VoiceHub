@@ -14,8 +14,31 @@ function cacheKey(userId, serverId, action) {
  * Middleware kiểm tra quyền truy cập
  * Gọi Role Service để check permission
  */
+const CHAT_INTERNAL_TOKEN = String(process.env.CHAT_INTERNAL_TOKEN || '').trim();
+
+function isChatInternalServicePath(path) {
+  const p = String(path || '').replace(/\/+/g, '/');
+  return p.includes('/api/messages/internal/') || p.includes('/api/chat/messages/internal/');
+}
+
+function hasValidChatInternalToken(req) {
+  if (!CHAT_INTERNAL_TOKEN) return false;
+  const got = String(
+    req.headers['x-internal-token'] || req.headers['x-chat-internal-token'] || ''
+  ).trim();
+  return got.length > 0 && got === CHAT_INTERNAL_TOKEN;
+}
+
 const permissionMiddleware = async (req, res, next) => {
   try {
+    const pathOnly = String(req.originalUrl || req.url || req.path || '')
+      .split('?')[0]
+      .replace(/\/+/g, '/');
+
+    if (isChatInternalServicePath(pathOnly) && hasValidChatInternalToken(req)) {
+      return next();
+    }
+
     // Bỏ qua routes public (đăng ký, đăng nhập, ...),
     // và các routes được đánh dấu không cần kiểm tra permission
     if (isPublicRoute(req.path) || noPermissionRoutes.some((route) => req.path.startsWith(route))) {
@@ -33,14 +56,12 @@ const permissionMiddleware = async (req, res, next) => {
 
     // Task / Work / AI-task: bỏ qua role theo serverId — chạy NGAY và dùng originalUrl vì req.path
     // có thể không khớp (proxy/mount). task-service tự kiểm tra creator/assignee.
-    const pathOnly = String(req.originalUrl || req.url || req.path || '')
-      .split('?')[0]
-      .replace(/\/+/g, '/');
     const pathNorm = normalizePath(pathOnly).toLowerCase();
     if (
       pathNorm.startsWith('/api/tasks') ||
       pathNorm.startsWith('/api/work') ||
-      pathNorm.startsWith('/api/ai/tasks')
+      pathNorm.startsWith('/api/ai/tasks') ||
+      /^\/api\/workspaces\/[^/]+\/task-boards(\/|$)/.test(pathNorm)
     ) {
       return next();
     }

@@ -10,6 +10,13 @@ const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http:
 );
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 
+function roleServiceError(message, statusCode = 400, errorCode = 'ROLE_OPERATION_FAILED') {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.errorCode = errorCode;
+  return err;
+}
+
 /** Role gắn vị trí cây tổ chức (tag div_/dep_/team_ hoặc nhãn Khối/Phòng/Team). */
 function isHierarchyRoleName(name) {
   const lower = String(name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -100,7 +107,7 @@ class RoleService {
       // Kiểm tra role name đã tồn tại trong server chưa
       const existingRole = await Role.findOne({ name, serverId });
       if (existingRole) {
-        throw new Error('Role name already exists in this server');
+        throw roleServiceError('Tên vai trò đã tồn tại trong tổ chức', 400, 'ROLE_NAME_EXISTS');
       }
 
       const role = new Role({
@@ -126,7 +133,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error creating role:', error);
-      throw new Error(`Error creating role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -137,7 +144,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error getting role:', error);
-      throw new Error(`Error getting role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -152,7 +159,7 @@ class RoleService {
       return roles;
     } catch (error) {
       logger.error('Error getting roles:', error);
-      throw new Error(`Error getting roles: ${error.message}`);
+      throw error;
     }
   }
 
@@ -162,7 +169,7 @@ class RoleService {
       // Kiểm tra role tồn tại
       const role = await Role.findById(roleId);
       if (!role || role.serverId.toString() !== serverId.toString()) {
-        throw new Error('Role not found or invalid for this server');
+        throw roleServiceError('Không tìm thấy vai trò hợp lệ cho tổ chức', 400, 'ROLE_NOT_FOUND');
       }
 
       // Kiểm tra đã có role chưa
@@ -219,7 +226,7 @@ class RoleService {
       };
     } catch (error) {
       logger.error('Error assigning role:', error);
-      throw new Error(`Error assigning role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -233,7 +240,7 @@ class RoleService {
       });
 
       if (!userRole) {
-        throw new Error('User role not found');
+        throw roleServiceError('Không tìm thấy vai trò đã gán cho người dùng', 404, 'USER_ROLE_NOT_FOUND');
       }
 
       // Xóa cache permission
@@ -285,7 +292,7 @@ class RoleService {
       };
     } catch (error) {
       logger.error('Error removing role:', error);
-      throw new Error(`Error removing role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -305,7 +312,7 @@ class RoleService {
       return userRoles.map((ur) => ur.roleId);
     } catch (error) {
       logger.error('Error getting user roles:', error);
-      throw new Error(`Error getting user roles: ${error.message}`);
+      throw error;
     }
   }
 
@@ -328,7 +335,7 @@ class RoleService {
       );
 
       if (!role) {
-        throw new Error('Role not found');
+        throw roleServiceError('Không tìm thấy vai trò', 404, 'ROLE_NOT_FOUND');
       }
 
       // Xóa cache
@@ -342,7 +349,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error updating role:', error);
-      throw new Error(`Error updating role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -356,7 +363,7 @@ class RoleService {
       );
 
       if (!role) {
-        throw new Error('Role not found');
+        throw roleServiceError('Không tìm thấy vai trò', 404, 'ROLE_NOT_FOUND');
       }
 
       // Xóa tất cả user roles
@@ -376,7 +383,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error deleting role:', error);
-      throw new Error(`Error deleting role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -400,7 +407,7 @@ class RoleService {
       };
     } catch (error) {
       logger.error('Error purgeByServerContext:', error);
-      throw new Error(`Error purgeByServerContext: ${error.message}`);
+      throw error;
     }
   }
 }

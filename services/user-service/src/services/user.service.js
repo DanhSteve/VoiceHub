@@ -3,6 +3,13 @@ const { getRedisClient, logger } = require('/shared');
 const { phoneBlindIndex } = require('/shared/utils/fieldCrypto');
 const { writePiiPatch } = require('../utils/profilePii');
 
+function serviceError(message, statusCode = 400, errorCode = 'USER_VALIDATION') {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.errorCode = errorCode;
+  return err;
+}
+
 class UserService {
   // Tạo user profile mới
   async createUserProfile(userData) {
@@ -10,10 +17,10 @@ class UserService {
       const { userId, username, email, displayName, dateOfBirth } = userData;
 
       if (!userId) {
-        throw new Error('userId is required');
+        throw serviceError('Thiếu userId', 400, 'USER_VALIDATION');
       }
       if (!email || typeof email !== 'string' || !String(email).trim()) {
-        throw new Error('email is required');
+        throw serviceError('Thiếu email', 400, 'USER_VALIDATION');
       }
       const normalizedEmail = String(email).trim().toLowerCase();
 
@@ -43,7 +50,7 @@ class UserService {
       }
       const taken = await UserProfile.findOne({ username: finalUsername });
       if (taken) {
-        throw new Error('Username already exists');
+        throw serviceError('Tên người dùng đã tồn tại', 400, 'USER_USERNAME_EXISTS');
       }
 
       const userProfile = new UserProfile({
@@ -67,7 +74,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error creating user profile:', error);
-      throw new Error(`Error creating user profile: ${error.message}`);
+      throw error;
     }
   }
 
@@ -95,7 +102,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error getting user profile:', error);
-      throw new Error(`Error getting user profile: ${error.message}`);
+      throw error;
     }
   }
 
@@ -107,7 +114,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error getting user profile by username:', error);
-      throw new Error(`Error getting user profile: ${error.message}`);
+      throw error;
     }
   }
 
@@ -145,7 +152,7 @@ class UserService {
       );
 
       if (!userProfile) {
-        throw new Error('User profile not found');
+        throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
       }
 
       // Xóa cache
@@ -159,7 +166,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error updating user profile:', error);
-      throw new Error(`Error updating user profile: ${error.message}`);
+      throw error;
     }
   }
 
@@ -168,7 +175,7 @@ class UserService {
     try {
       const userProfile = await UserProfile.findOne({ userId });
       if (!userProfile) {
-        throw new Error('User profile not found');
+        throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
       }
 
       await userProfile.updateStatus(status);
@@ -183,7 +190,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error updating status:', error);
-      throw new Error(`Error updating status: ${error.message}`);
+      throw error;
     }
   }
 
@@ -218,7 +225,7 @@ class UserService {
       };
     } catch (error) {
       logger.error('Error searching users:', error);
-      throw new Error(`Error searching users: ${error.message}`);
+      throw error;
     }
   }
 
@@ -238,7 +245,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error getting user profile by phone:', error);
-      throw new Error(`Error getting user profile by phone: ${error.message}`);
+      throw error;
     }
   }
 
@@ -252,7 +259,7 @@ class UserService {
       );
 
       if (!userProfile) {
-        throw new Error('User profile not found');
+        throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
       }
 
       // Xóa cache
@@ -266,7 +273,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error deleting user profile:', error);
-      throw new Error(`Error deleting user profile: ${error.message}`);
+      throw error;
     }
   }
 }

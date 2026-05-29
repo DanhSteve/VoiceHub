@@ -20,6 +20,20 @@ const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http:
   ''
 );
 
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const isServerError = status >= 500;
+  const safeMessage = isServerError
+    ? 'Hệ thống tạm thời gặp sự cố. Vui lòng thử lại sau.'
+    : String(err?.message || fallbackMessage);
+  return res.status(status).json({
+    success: false,
+    message: safeMessage,
+    errorCode: String(err?.errorCode || fallbackCode || (isServerError ? 'TASK_INTERNAL_ERROR' : '')).trim(),
+    messageUser: safeMessage,
+  });
+}
+
 class TaskController {
   // Tạo task mới
   async createTask(req, res) {
@@ -96,10 +110,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Create task error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể tạo task', 'TASK_CREATE_FAILED');
     }
   }
 
@@ -154,10 +165,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Get task error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải task', 'TASK_GET_FAILED');
     }
   }
 
@@ -327,10 +335,7 @@ class TaskController {
           message: error.message || 'Invalid query parameter',
         });
       }
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải danh sách task', 'TASK_LIST_FAILED');
     }
   }
 
@@ -406,10 +411,7 @@ class TaskController {
           message: error.message || 'Invalid organizationId',
         });
       }
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải thống kê task', 'TASK_STATS_FAILED');
     }
   }
 
@@ -434,10 +436,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Update task error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể cập nhật task', 'TASK_UPDATE_FAILED');
     }
   }
 
@@ -463,10 +462,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Delete task error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể xóa task', 'TASK_DELETE_FAILED');
     }
   }
 
@@ -549,10 +545,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('createTaskFromChatFile error:', error);
-      return res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể xử lý yêu cầu', 'TASK_FILE_CREATE_FAILED');
     }
   }
 
@@ -578,10 +571,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Add comment error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể thêm bình luận', 'TASK_COMMENT_FAILED');
     }
   }
 
@@ -597,7 +587,7 @@ class TaskController {
       return res.json({ success: true, deletedCount: result.deletedCount });
     } catch (error) {
       logger.error('purgeOrganizationTasks error:', error);
-      return res.status(500).json({ success: false, message: error.message });
+      return sendError(res, error, 500, 'Không thể dọn dữ liệu task', 'TASK_PURGE_FAILED');
     }
   }
 }

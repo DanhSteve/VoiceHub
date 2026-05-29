@@ -1,6 +1,18 @@
 const authService = require('../services/auth.service');
 const { resolveFrontendUrl } = require('/shared');
 
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const message = String(err?.message || fallbackMessage);
+  const errorCode = String(err?.errorCode || fallbackCode || '').trim();
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(errorCode ? { errorCode } : {}),
+    ...(message ? { messageUser: message } : {}),
+  });
+}
+
 class AuthController {
   // Đăng ký
   async register(req, res) {
@@ -125,10 +137,7 @@ class AuthController {
       }
 
       console.log('[AuthController] Sending error response to client...');
-      res.status(400).json({
-        success: false,
-        message: error.message || 'Registration failed',
-      });
+      return sendError(res, error, 400, 'Đăng ký thất bại', 'AUTH_REGISTER_FAILED');
       console.log('[AuthController] Error response sent');
     }
   }
@@ -152,10 +161,7 @@ class AuthController {
         data: result,
       });
     } catch (error) {
-      res.status(401).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 401, 'Đăng nhập thất bại', 'AUTH_LOGIN_FAILED');
     }
   }
 
@@ -178,10 +184,7 @@ class AuthController {
         data: result,
       });
     } catch (error) {
-      res.status(401).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 401, 'Làm mới phiên thất bại', 'AUTH_REFRESH_FAILED');
     }
   }
 
@@ -204,10 +207,7 @@ class AuthController {
         message: 'Logged out successfully',
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Đăng xuất thất bại', 'AUTH_LOGOUT_FAILED');
     }
   }
 
@@ -238,10 +238,7 @@ class AuthController {
         message: 'Password changed successfully',
       });
     } catch (error) {
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Đổi mật khẩu thất bại', 'AUTH_CHANGE_PASSWORD_FAILED');
     }
   }
 
@@ -270,10 +267,7 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể xử lý yêu cầu lúc này', 'AUTH_FORGOT_PASSWORD_FAILED');
     }
   }
 
@@ -303,10 +297,7 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể xử lý yêu cầu lúc này', 'AUTH_RESEND_VERIFY_FAILED');
     }
   }
 
@@ -330,10 +321,7 @@ class AuthController {
         message: 'Password reset successfully',
       });
     } catch (error) {
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Đặt lại mật khẩu thất bại', 'AUTH_RESET_PASSWORD_FAILED');
     }
   }
 
@@ -368,10 +356,7 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Xác thực email thất bại', 'AUTH_VERIFY_EMAIL_FAILED');
     }
   }
 
@@ -396,10 +381,7 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không tải được thông tin tài khoản', 'AUTH_ME_FAILED');
     }
   }
 }

@@ -6,7 +6,6 @@ import toast from 'react-hot-toast';
 import {
   Calendar,
   ChevronUp,
-  FileText,
   Heart,
   LayoutGrid,
   LogIn,
@@ -15,7 +14,6 @@ import {
   Mic,
   MicOff,
   Minimize2,
-  Monitor,
   MoreHorizontal,
   PictureInPicture2,
   Plus,
@@ -35,6 +33,7 @@ import userService from '../../services/userService';
 import friendService from '../../services/friendService';
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
 import { useAuth } from '../../context/AuthContext';
+import { useFriendCallSession } from '../../context/FriendCallSessionContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import { appShellBg } from '../../theme/shellTheme';
@@ -94,6 +93,32 @@ const getSignalBaseUrl = () => resolveAppOrigin() || 'http://127.0.0.1:3000';
 
 const getSignalPath = () => import.meta.env.VITE_VOICE_SIGNAL_PATH || '/voice-socket';
 const RECENT_VOICE_CALLS_KEY = 'vh.voice.recentCalls';
+const RESERVED_MEETING_CODE_KEY = 'vh.voice.reservedMeetingCode';
+const RESERVED_MEETING_TTL_MS = 5 * 60 * 1000;
+
+function getOrCreateReservedMeetingCode(generateFn) {
+  try {
+    const raw = sessionStorage.getItem(RESERVED_MEETING_CODE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.code && Number(parsed.expiresAt) > Date.now()) {
+        return String(parsed.code);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  const code = generateFn();
+  try {
+    sessionStorage.setItem(
+      RESERVED_MEETING_CODE_KEY,
+      JSON.stringify({ code, expiresAt: Date.now() + RESERVED_MEETING_TTL_MS })
+    );
+  } catch {
+    /* ignore */
+  }
+  return code;
+}
 
 const initialVoiceAudioPrefs = loadVoiceAudioPrefs();
 
@@ -154,6 +179,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const { roomId } = useParams();
   const [searchParams] = useSearchParams();
   const safeRoomId = roomId?.startsWith(':') ? roomId.slice(1) || '' : roomId || '';
+  const { openFriendCall, session: friendCallSession } = useFriendCallSession();
   const { user } = useAuth();
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
@@ -170,6 +196,10 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
   const [viewStage, setViewStage] = useState('home'); // home | prejoin | inRoom
+  /** create = cuộc họp mới (mã random, không sửa); join = tham gia phòng có sẵn */
+  const [prejoinMode, setPrejoinMode] = useState(null);
+  const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [joinModalCode, setJoinModalCode] = useState('');
   const [activeRoomId, setActiveRoomId] = useState(null);
   const [meetingCode, setMeetingCode] = useState(safeRoomId || '');
   const [displayNameInput, setDisplayNameInput] = useState('');
@@ -314,8 +344,38 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
     const m = searchParams.get('friendCallMedia');
     if (m === 'audio') {
       setPrejoinVideoEnabled(false);
+    } else if (m === 'video') {
+      setPrejoinVideoEnabled(true);
     }
   }, [searchParams]);
+
+  /** URL cũ /voice/friend-1on1-*?callId=… → modal 1-1 trên chat, không lobby VoiceRoom */
+  useEffect(() => {
+    if (landingDemo) return;
+    const callId = String(searchParams.get('callId') || '').trim();
+    const room = String(safeRoomId || '').trim();
+    if (!callId || !room.startsWith('friend-1on1-')) return;
+    if (friendCallSession?.callId === callId) {
+      navigate('/chat/friends', { replace: true });
+      return;
+    }
+    const media = searchParams.get('friendCallMedia') === 'audio' ? 'audio' : 'video';
+    openFriendCall?.({
+      roomId: room,
+      callId,
+      media,
+      peerUserId: '',
+      peerLabel: '',
+    });
+    navigate('/chat/friends', { replace: true });
+  }, [
+    landingDemo,
+    safeRoomId,
+    searchParams,
+    friendCallSession?.callId,
+    openFriendCall,
+    navigate,
+  ]);
 
   useEffect(() => {
     if (viewStage !== 'prejoin' || roomKind !== 'org') return undefined;
@@ -1337,9 +1397,11 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
     if (landingDemo) return undefined;
     if (safeRoomId) {
       setMeetingCode(safeRoomId);
+      setPrejoinMode('join');
       setViewStage((prev) => (prev === 'inRoom' ? 'inRoom' : 'prejoin'));
     } else {
       setViewStage('home');
+      setPrejoinMode(null);
     }
   }, [safeRoomId]);
 
@@ -1413,14 +1475,41 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
   }, [viewStage, hasLocalVideoTrack, isCameraOff, joining, landingDemo]);
 
   const handleNewMeeting = () => {
-    const generated = generateMeetingCode();
-    setMeetingCode(generated);
+    const code = getOrCreateReservedMeetingCode(generateMeetingCode);
+    setMeetingCode(code);
+    setPrejoinMode('create');
     setPrejoinAudioEnabled(true);
     setPrejoinVideoEnabled(true);
     setRoomKind('free');
     setSelectedOrgId('');
     setSelectedDeptId('');
+    setJoinModalOpen(false);
     setViewStage('prejoin');
+  };
+
+  const openJoinModal = () => {
+    setJoinModalCode(String(meetingCode || '').trim());
+    setJoinModalOpen(true);
+  };
+
+  const handleJoinModalConfirm = () => {
+    const code = String(joinModalCode || '').trim();
+    if (!code) {
+      toast.error(t('voiceRoom.meetingIdRequired'));
+      return;
+    }
+    setMeetingCode(code);
+    setPrejoinMode('join');
+    setJoinModalOpen(false);
+    setPrejoinAudioEnabled(true);
+    setPrejoinVideoEnabled(true);
+    setViewStage('prejoin');
+  };
+
+  const handlePrejoinCancel = () => {
+    stopPrejoinPreview();
+    setPrejoinMode(null);
+    setViewStage('home');
   };
 
   const handleJoinMeeting = () => {
@@ -1469,25 +1558,13 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
         id: 'join',
         label: t('voiceRoom.joinNav'),
         icon: LogIn,
-        onClick: () => setViewStage('prejoin'),
+        onClick: openJoinModal,
       },
       {
         id: 'schedule',
         label: t('voiceRoom.schedule'),
         icon: Calendar,
         onClick: () => navigate('/calendar'),
-      },
-      {
-        id: 'share',
-        label: t('voiceRoom.screenShare'),
-        icon: Monitor,
-        onClick: () => setInviteModalOpen(true),
-      },
-      {
-        id: 'notes',
-        label: t('voiceRoom.notes'),
-        icon: FileText,
-        onClick: () => navigate('/documents'),
       },
       {
         id: 'settings',
@@ -1499,7 +1576,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
         },
       },
     ],
-    [navigate, t]
+    [navigate, t, handleNewMeeting, openJoinModal]
   );
 
   /** Khung lobby: sáng = cùng tông shell app; tối = nền đen (trước khi vào phòng) */
@@ -1613,8 +1690,12 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
             >
               {voiceNav.map((item) => {
                 const active =
-                  (item.id === 'new' && viewStage === 'home' && !settingsOpen) ||
-                  (item.id === 'join' && viewStage === 'prejoin') ||
+                  (item.id === 'new' &&
+                    !settingsOpen &&
+                    (viewStage === 'home' ||
+                      (viewStage === 'prejoin' && prejoinMode === 'create'))) ||
+                  (item.id === 'join' &&
+                    (joinModalOpen || (viewStage === 'prejoin' && prejoinMode === 'join'))) ||
                   (item.id === 'settings' && settingsOpen);
                 const Icon = item.icon;
                 return (
@@ -1694,6 +1775,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                         type="button"
                         onClick={() => {
                           setMeetingCode(String(item.roomId || ''));
+                          setPrejoinMode('join');
                           setViewStage('prejoin');
                         }}
                         className={`flex w-full items-center justify-between gap-2 rounded-xl px-2 py-2 text-left transition ${isDarkMode ? 'hover:bg-white/[0.06]' : 'hover:bg-slate-100'}`}
@@ -1839,7 +1921,9 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                         isDarkMode ? 'text-white' : 'text-slate-900'
                       }`}
                     >
-                      {t('voiceRoom.joinTitle')}
+                      {prejoinMode === 'create'
+                        ? t('voiceRoom.createTitle')
+                        : t('voiceRoom.joinTitle')}
                     </h2>
                     <div className="space-y-5">
                       <div>
@@ -1850,14 +1934,29 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                         </label>
                         <input
                           value={meetingCode}
-                          onChange={(e) => setMeetingCode(e.target.value)}
-                          placeholder="vox-hacker-room"
+                          readOnly={prejoinMode === 'create'}
+                          onChange={(e) => {
+                            if (prejoinMode === 'create') return;
+                            setMeetingCode(e.target.value);
+                          }}
+                          placeholder="room-abc123"
                           className={`w-full rounded-xl border px-4 py-3 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/40 ${
-                            isDarkMode
-                              ? 'border-white/10 bg-black/50 text-white placeholder:text-gray-600'
-                              : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400'
+                            prejoinMode === 'create'
+                              ? isDarkMode
+                                ? 'cursor-default border-white/10 bg-black/30 text-gray-300'
+                                : 'cursor-default border-slate-200 bg-slate-50 text-slate-700'
+                              : isDarkMode
+                                ? 'border-white/10 bg-black/50 text-white placeholder:text-gray-600'
+                                : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400'
                           }`}
                         />
+                        {prejoinMode === 'create' ? (
+                          <p
+                            className={`mt-1.5 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}
+                          >
+                            {t('voiceRoom.roomCodeReservedHint')}
+                          </p>
+                        ) : null}
                       </div>
                       <div>
                         <span
@@ -2000,10 +2099,7 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        stopPrejoinPreview();
-                        setViewStage('home');
-                      }}
+                      onClick={handlePrejoinCancel}
                       className={`mt-4 w-full py-2 text-center text-sm transition ${
                         isDarkMode
                           ? 'text-gray-500 hover:text-gray-300'
@@ -2880,6 +2976,75 @@ function VoiceRoomPage({ landingDemo = false } = {}) {
                 </div>,
                 document.body
               )}
+
+        {joinModalOpen &&
+          createPortal(
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+              <div
+                role="dialog"
+                aria-modal="true"
+                className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
+                  isDarkMode ? 'border-white/10 bg-[#1e1e1e]' : 'border-slate-200 bg-white'
+                }`}
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <h3
+                    className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
+                  >
+                    {t('voiceRoom.joinModalTitle')}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setJoinModalOpen(false)}
+                    className={`rounded-lg p-1 ${isDarkMode ? 'text-white/60 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-100'}`}
+                    aria-label={t('voiceRoom.closeAria')}
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <label
+                  className={`mb-1.5 block text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}
+                >
+                  {t('voiceRoom.roomCode')}
+                </label>
+                <input
+                  value={joinModalCode}
+                  onChange={(e) => setJoinModalCode(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleJoinModalConfirm();
+                  }}
+                  autoFocus
+                  placeholder="room-abc123"
+                  className={`mb-6 w-full rounded-xl border px-4 py-3 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/40 ${
+                    isDarkMode
+                      ? 'border-white/10 bg-black/50 text-white placeholder:text-gray-600'
+                      : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400'
+                  }`}
+                />
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setJoinModalOpen(false)}
+                    className={`flex-1 rounded-xl border py-2.5 text-sm font-medium ${
+                      isDarkMode
+                        ? 'border-white/10 text-gray-300 hover:bg-white/5'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {t('nav.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleJoinModalConfirm}
+                    className="flex-1 rounded-xl bg-gradient-to-r from-cyan-600 via-teal-600 to-sky-500 py-2.5 text-sm font-semibold text-white hover:brightness-110"
+                  >
+                    {t('voiceRoom.joinModalContinue')}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
       </div>
     </div>
   );
