@@ -115,6 +115,7 @@ function App() {
         {/* Route xác thực email - path "/verify-email?token=xxx" */}
         {/* VerifyEmailPage sẽ gọi authService.verifyEmail() → auth-service */}
         <Route path="/verify-email" element={<VerifyEmailPage />} />
+        <Route path="/verify-email-change" element={<VerifyEmailPage />} />
 
         {/* Route quên mật khẩu */}
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />

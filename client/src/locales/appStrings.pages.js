@@ -283,6 +283,10 @@ export const pageStrings = {
       markOneRead: 'Đánh dấu đã đọc',
       deleteBtn: '🗑️ Xóa',
       empty: 'Không có thông báo nào!',
+      columnNew: 'Thông báo mới',
+      columnHistory: 'Lịch sử thông báo',
+      emptyNew: 'Không có thông báo mới',
+      emptyHistory: 'Chưa có thông báo đã đọc',
       confirmDeleteTitle: 'Xóa thông báo',
       confirmDeleteMsg: 'Xóa thông báo này?',
       actionTask: 'Xem Task',
@@ -443,6 +447,7 @@ export const pageStrings = {
       viewWeek: 'Tuần',
       viewMonth: 'Tháng',
       createBtn: '➕ Tạo',
+      createAppointmentBtn: 'Tạo lịch hẹn',
       ariaPickDate: 'Chọn ngày',
       ariaRefresh: 'Làm mới dữ liệu',
       ariaSettings: 'Cài đặt',
@@ -629,6 +634,8 @@ export const pageStrings = {
       toastFont: 'Đã đặt cỡ chữ: {name}',
       toastSaveOrg: 'Đã lưu thông tin tổ chức',
       toastSaveProfile: 'Đã cập nhật hồ sơ cá nhân',
+      toastEmailChangeRequested:
+        'Đã gửi link xác thực email mới. Vui lòng kiểm tra hộp thư để hoàn tất cập nhật.',
       toastCopyKey: 'Đã sao chép API key',
       toastCopyFail: 'Không thể sao chép API key',
       toastDeleteKey: 'Đã xóa API key',
@@ -659,6 +666,8 @@ export const pageStrings = {
       timeHourAgo: '{n} giờ trước',
       timeDayAgo: '{n} ngày trước',
       userFallback: 'Người dùng',
+      emailChangeHint:
+        'Bạn có thể đổi email tại đây. Email mới chỉ được cập nhật sau khi xác thực qua liên kết gửi đến hộp thư.',
     },
     tasks: {
       noDeadline: 'Không hạn',
@@ -2204,6 +2213,10 @@ export const pageStrings = {
       markOneRead: 'Mark read',
       deleteBtn: '🗑️ Delete',
       empty: 'No notifications!',
+      columnNew: 'New notifications',
+      columnHistory: 'Notification history',
+      emptyNew: 'No new notifications',
+      emptyHistory: 'No read notifications yet',
       confirmDeleteTitle: 'Delete notification',
       confirmDeleteMsg: 'Delete this notification?',
       actionTask: 'View task',
@@ -2364,6 +2377,7 @@ export const pageStrings = {
       viewWeek: 'Week',
       viewMonth: 'Month',
       createBtn: '➕ Create',
+      createAppointmentBtn: 'Create appointment',
       ariaPickDate: 'Pick date',
       ariaRefresh: 'Refresh data',
       ariaSettings: 'Settings',
@@ -2550,6 +2564,8 @@ export const pageStrings = {
       toastFont: 'Font size: {name}',
       toastSaveOrg: 'Organization details saved',
       toastSaveProfile: 'Profile updated',
+      toastEmailChangeRequested:
+        'A verification link was sent to your new email. Please verify it to complete the update.',
       toastCopyKey: 'API key copied',
       toastCopyFail: 'Could not copy API key',
       toastDeleteKey: 'API key removed',
@@ -2580,6 +2596,8 @@ export const pageStrings = {
       timeHourAgo: '{n} h ago',
       timeDayAgo: '{n} days ago',
       userFallback: 'User',
+      emailChangeHint:
+        'You can update email here. The new email is applied only after you verify the link sent to that inbox.',
     },
     tasks: {
       noDeadline: 'No due date',

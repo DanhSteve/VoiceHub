@@ -17,6 +17,8 @@ function VerifyEmailPage() {
   const [loading, setLoading] = useState(true);
   const [verified, setVerified] = useState(false);
   const token = searchParams.get('token');
+  const mode = String(searchParams.get('mode') || '').trim().toLowerCase();
+  const isEmailChangeMode = mode === 'email-change' || window.location.pathname === '/verify-email-change';
   const hasRunRef = useRef(false);
 
   const btnPrimary = authPrimaryButtonClass(isDarkMode);
@@ -41,15 +43,25 @@ function VerifyEmailPage() {
     const run = async () => {
       setLoading(true);
       try {
-        const response = await authService.verifyEmail(token);
+        const response = isEmailChangeMode
+          ? await authService.verifyEmailChange(token)
+          : await authService.verifyEmail(token);
 
         if (response.success) {
           setVerified(true);
-          toast.success(t('verifyEmail.toastSuccess'));
+          toast.success(
+            isEmailChangeMode ? t('verifyEmail.toastChangeEmailSuccess') : t('verifyEmail.toastSuccess')
+          );
           setTimeout(() => {
-            navigate('/login', {
-              state: { message: t('verifyEmail.loginFlashVerified') },
-            });
+            if (isEmailChangeMode) {
+              navigate('/settings', {
+                state: { message: t('verifyEmail.settingsFlashEmailChanged') },
+              });
+            } else {
+              navigate('/login', {
+                state: { message: t('verifyEmail.loginFlashVerified') },
+              });
+            }
           }, 2000);
         } else {
           const errorMessage = response.message || t('verifyEmail.verifyFailedGeneric');
@@ -70,7 +82,7 @@ function VerifyEmailPage() {
     };
 
     run();
-  }, [token, navigate, t]);
+  }, [token, navigate, t, isEmailChangeMode]);
 
   return (
     <AuthPageLayout aside={<AuthMarketingAside />}>

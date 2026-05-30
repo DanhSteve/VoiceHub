@@ -43,10 +43,12 @@ router.post('/resend-verification', authController.resendVerification.bind(authC
 router.post('/reset-password', authController.resetPassword.bind(authController));
 // Verify email: GET với token trong query string, KHÔNG dùng JWT
 router.get('/verify-email', authController.verifyEmail.bind(authController));
+router.get('/verify-email-change', authController.verifyEmailChange.bind(authController));
 
 // Protected routes
 router.post('/logout', authenticate, authController.logout.bind(authController));
 router.post('/change-password', authenticate, authController.changePassword.bind(authController));
+router.post('/change-email/request', authenticate, authController.requestEmailChange.bind(authController));
 router.get('/me', authenticate, authController.getMe.bind(authController));
 
 module.exports = router;

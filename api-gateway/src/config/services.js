@@ -83,6 +83,7 @@ const publicRoutes = [
   '/api/auth/resend-verification',
   '/api/auth/reset-password',
   '/api/auth/verify-email',
+  '/api/auth/verify-email-change',
   '/api/health/gateway-trust',
   '/health',
   '/metrics',

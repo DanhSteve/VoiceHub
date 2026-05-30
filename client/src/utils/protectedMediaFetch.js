@@ -25,7 +25,8 @@ export async function fetchProtectedAvatarBlob({ userId, avatar, cacheBust } = {
     const res = await apiClient.get(`/users/${encodeURIComponent(String(userId))}/avatar${qs}`, {
       responseType: 'blob',
     });
-    return res.data;
+    // apiClient interceptor đã unwrap response.data, nên với blob sẽ trả thẳng Blob.
+    return res instanceof Blob ? res : res?.data;
   }
 
   const path = uploadPathFromAvatar(avatar);

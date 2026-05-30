@@ -823,7 +823,7 @@ const OrganizationMainPanel = ({
     return {
       ...ent,
       composerBar: isDarkMode
-        ? 'relative mt-auto shrink-0 rounded-b-xl border-t border-white/[0.06] bg-[#11141C]/98 px-4 pb-3 pt-2.5'
+        ? 'relative mt-auto shrink-0 rounded-b-xl border-t border-white/[0.06] bg-transparent px-4 pb-3 pt-2.5'
         : 'relative mt-auto shrink-0 rounded-b-xl border-t border-slate-200/80 bg-white px-4 pb-3 pt-2.5',
       composerWrap: 'shrink-0 bg-transparent p-0',
     };
@@ -1264,8 +1264,8 @@ const OrganizationMainPanel = ({
           </div>
         </aside>
 
-        <div className={`${workspace.main} h-full min-h-0 overflow-hidden`}>
-          <header className={workspace.header}>
+        <div className={`${workspace.main} h-full min-h-0 overflow-hidden ${isDarkMode ? '!bg-transparent' : ''}`}>
+          <header className={`${workspace.header} ${isDarkMode ? '!bg-transparent' : ''}`}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <nav

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
+import authService from '../../services/authService';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import { unwrapOrganizationsMy } from '../../hooks/queries/fetchers';
 import { GradientButton, NotificationModal } from '../../components/Shared';
@@ -36,6 +37,7 @@ function ProfileModal({ isOpen, onClose }) {
     bio: '',
     phone: '',
     location: '',
+    email: '',
   });
   const [activeProfileTab, setActiveProfileTab] = useState('main');
   const [notice, setNotice] = useState(null);
@@ -163,6 +165,7 @@ function ProfileModal({ isOpen, onClose }) {
         bio: bioPlain,
         phone: phoneValue,
         location: data?.location ?? '',
+        email: data?.email ?? authUser?.email ?? '',
       });
       applyBirthPartsFromProfile(data?.dateOfBirth);
       setBirthError('');
@@ -240,6 +243,8 @@ function ProfileModal({ isOpen, onClose }) {
           location: form.location?.trim() || undefined,
         });
       } else if (activeProfileTab === 'account') {
+        const nextEmail = String(form.email || '').trim().toLowerCase();
+        const currentEmail = String(email || '').trim().toLowerCase();
         Object.assign(payload, {
           phone: form.phone?.trim() || undefined,
         });
@@ -260,6 +265,10 @@ function ProfileModal({ isOpen, onClose }) {
         }
         setBirthError('');
         payload.dateOfBirth = dob.iso;
+        if (nextEmail && nextEmail !== currentEmail) {
+          await authService.requestEmailChange(nextEmail);
+          notify.success(t('settingsPage.toastEmailChangeRequested'));
+        }
       } else if (activeProfileTab === 'organization') {
         if (!selectedOrgId) {
           showNotice(t('profileModal.orgSelectRequired'), 'fail');
@@ -278,7 +287,9 @@ function ProfileModal({ isOpen, onClose }) {
       if (authUser) {
         updateUser(mergeAuthUserFromProfile(authUser, updated));
       }
-      notify.success(t('profileModal.saveOk'));
+      if (!(activeProfileTab === 'account' && String(form.email || '').trim().toLowerCase() !== String(email || '').trim().toLowerCase())) {
+        notify.success(t('profileModal.saveOk'));
+      }
       if (activeProfileTab !== 'organization') {
         onClose?.();
       }
@@ -515,9 +526,14 @@ function ProfileModal({ isOpen, onClose }) {
               <>
                 <div>
                   <label className={labelClass}>{t('settingsPage.email')}</label>
-                  <input type="email" value={email || ''} readOnly className={`${inputClass} cursor-not-allowed opacity-80`} />
+                  <input
+                    type="email"
+                    value={form.email || ''}
+                    onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                    className={inputClass}
+                  />
                   <p className={`mt-1 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-                    {t('profileModal.emailReadonlyHint')}
+                    {t('settingsPage.emailChangeHint')}
                   </p>
                 </div>
                 <div>

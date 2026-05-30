@@ -303,6 +303,52 @@ class AuthController {
     }
   }
 
+  async requestEmailChange(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      const { email } = req.body || {};
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Email is required' });
+      }
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.requestEmailChange(userId, email, frontendUrl);
+      return res.json({
+        success: true,
+        message: result.message,
+        data: {
+          emailScheduled: !!result.emailScheduled,
+          ...(result.verificationToken ? { verificationToken: result.verificationToken } : {}),
+          ...(result.verificationUrl ? { verificationUrl: result.verificationUrl } : {}),
+        },
+      });
+    } catch (error) {
+      return sendError(res, error, 400, 'Yêu cầu đổi email thất bại', 'AUTH_CHANGE_EMAIL_REQUEST_FAILED');
+    }
+  }
+
+  async verifyEmailChange(req, res) {
+    try {
+      const token = req.query.token || req.body?.token;
+      if (!token) {
+        return res.status(400).json({
+          success: false,
+          message: 'Verification token is required',
+        });
+      }
+      const result = await authService.verifyEmailChange(token);
+      return res.json({
+        success: true,
+        message: 'Email đã được cập nhật thành công.',
+        data: result,
+      });
+    } catch (error) {
+      return sendError(res, error, 400, 'Xác thực đổi email thất bại', 'AUTH_CHANGE_EMAIL_VERIFY_FAILED');
+    }
+  }
+
   // Reset mật khẩu
   async resetPassword(req, res) {
     try {

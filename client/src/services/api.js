@@ -102,7 +102,6 @@ api.interceptors.request.use(
   // Success handler: modify config trước khi gửi
   (config) => {
     if (isLandingEmbedWriteGuardActive() && isWriteHttpMethod(config.method)) {
-      toast('Chế độ demo — không ghi dữ liệu lên server.', { icon: '🔒', duration: 2800 });
       const block = new Error('LANDING_EMBED_WRITE_BLOCKED');
       block.code = 'LANDING_EMBED_WRITE_BLOCKED';
       block.isLandingEmbedBlock = true;

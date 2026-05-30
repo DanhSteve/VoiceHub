@@ -12,6 +12,11 @@ router.patch(
   internalServiceAuth,
   userController.patchInternalStatus.bind(userController)
 );
+router.patch(
+  '/internal/email',
+  internalServiceAuth,
+  userController.patchInternalEmail.bind(userController)
+);
 
 router.post(
   '/internal/presence/batch',

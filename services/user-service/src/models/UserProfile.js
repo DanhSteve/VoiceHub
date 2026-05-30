@@ -115,7 +115,6 @@ const userProfileSchema = new mongoose.Schema(
 
 // Virtual để lấy thông tin cơ bản
 userProfileSchema.index({ email: 1 });
-userProfileSchema.index({ emailBlindIndex: 1 }, { unique: true, sparse: true });
 
 userProfileSchema.virtual('publicInfo').get(function () {
   return {

@@ -288,6 +288,50 @@ class EmailService {
   }
 
   /**
+   * Gửi email xác thực thay đổi email.
+   */
+  async sendEmailChangeVerificationEmail(email, verificationToken, frontendUrl) {
+    try {
+      if (!this.isAvailable()) {
+        console.warn('[EmailService] Email change verification skipped: service not configured');
+        return null;
+      }
+      const base =
+        (frontendUrl && String(frontendUrl).trim()) ||
+        process.env.FRONTEND_URL ||
+        'http://localhost:5173';
+      const baseNormalized = String(base).replace(/\/+$/, '');
+      const verificationUrl = `${baseNormalized}/verify-email-change?token=${verificationToken}`;
+
+      const mailOptions = {
+        from: `"${process.env.EMAIL_FROM_NAME || 'VoiceChat App'}" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: 'Xác thực email mới của bạn',
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"></head>
+          <body style="font-family:Arial,sans-serif;line-height:1.6;color:#333;">
+            <p>Xin chào,</p>
+            <p>Bạn vừa yêu cầu đổi email đăng nhập cho tài khoản VoiceHub.</p>
+            <p>Vui lòng xác thực email mới bằng cách mở liên kết bên dưới:</p>
+            <p><a href="${verificationUrl}" style="display:inline-block;padding:10px 18px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;">Xác thực email mới</a></p>
+            <p>Hoặc mở trực tiếp: <br/><span style="word-break:break-all;">${verificationUrl}</span></p>
+            <p><strong>Lưu ý:</strong> Link này hết hạn sau 24 giờ.</p>
+            <p>Nếu bạn không yêu cầu đổi email, hãy bỏ qua email này.</p>
+          </body>
+          </html>
+        `,
+        text: `Xác thực email mới của bạn: ${verificationUrl}`,
+      };
+      return await this.transporter.sendMail(mailOptions);
+    } catch (error) {
+      console.error('Error sending email-change verification email:', error);
+      return null;
+    }
+  }
+
+  /**
    * Gửi email mời vào phòng thoại (public room link).
    */
   async sendVoiceRoomInviteEmail(email, { inviteUrl, roomId, hostName }) {

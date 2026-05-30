@@ -118,7 +118,9 @@ export const extraStrings = {
       registerFlashInvalid:
         'Token xác thực không hợp lệ hoặc đã hết hạn. Vui lòng đăng ký lại hoặc yêu cầu email xác thực mới.',
       toastSuccess: 'Xác thực email thành công! Bạn có thể đăng nhập ngay.',
+      toastChangeEmailSuccess: 'Xác thực email mới thành công! Email của bạn đã được cập nhật.',
       loginFlashVerified: 'Email đã được xác thực thành công. Vui lòng đăng nhập.',
+      settingsFlashEmailChanged: 'Email đã được xác thực và cập nhật thành công.',
       verifyFailedGeneric: 'Xác thực email không thành công.',
       verifyFailedPrefix: 'Xác thực email không thành công:',
       titleSuccess: 'Xác thực thành công',
@@ -302,7 +304,9 @@ export const extraStrings = {
       registerFlashInvalid:
         'The verification link is invalid or expired. Please sign up again or request a new email.',
       toastSuccess: 'Email verified! You can sign in now.',
+      toastChangeEmailSuccess: 'New email verified! Your account email has been updated.',
       loginFlashVerified: 'Your email is verified. Please sign in.',
+      settingsFlashEmailChanged: 'Your email was verified and updated successfully.',
       verifyFailedGeneric: 'Email verification failed.',
       verifyFailedPrefix: 'Email verification failed:',
       titleSuccess: 'Verified',

@@ -102,7 +102,15 @@ class UserService {
 
       let userProfile = await UserProfile.findOne({ userId });
       if (userProfile) {
-        await maybeMigrateProfilePii(UserProfile, userProfile);
+        try {
+          await maybeMigrateProfilePii(UserProfile, userProfile);
+        } catch (migrateError) {
+          logger.warn(
+            `Skip profile PII migration for userId=${userId}: ${
+              migrateError?.message || 'unknown migration error'
+            }`
+          );
+        }
       }
 
       // Cache user profile (plaintext PII cho API)
@@ -194,12 +202,18 @@ class UserService {
   // Cập nhật status
   async updateStatus(userId, status) {
     try {
-      const userProfile = await UserProfile.findOne({ userId });
+      const patch = { status };
+      if (status === 'online' || status === 'offline') {
+        patch.lastSeen = new Date();
+      }
+      const userProfile = await UserProfile.findOneAndUpdate(
+        { userId },
+        { $set: patch },
+        { new: true, runValidators: false }
+      );
       if (!userProfile) {
         throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
       }
-
-      await userProfile.updateStatus(status);
 
       // Xóa cache
       const redis = getRedisClient();
@@ -269,6 +283,27 @@ class UserService {
       logger.error('Error getting user profile by phone:', error);
       throw error;
     }
+  }
+
+  async updateUserEmailInternal(userId, email) {
+    const uid = String(userId || '').trim();
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!uid || !normalizedEmail) {
+      throw serviceError('Thiếu userId hoặc email', 400, 'USER_VALIDATION');
+    }
+    const userProfile = await UserProfile.findOneAndUpdate(
+      { userId: uid },
+      { $set: { email: normalizedEmail } },
+      { new: true, runValidators: true }
+    );
+    if (!userProfile) {
+      throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
+    }
+    const redis = getRedisClient();
+    if (redis) {
+      await redis.del(`user:${uid}`);
+    }
+    return userProfile;
   }
 
   // Xóa user profile (soft delete)

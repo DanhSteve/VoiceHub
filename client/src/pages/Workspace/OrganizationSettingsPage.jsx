@@ -16,7 +16,9 @@ const unwrap = (payload) => payload?.data ?? payload;
 export default function OrganizationSettingsPage() {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
-  const shell = isDarkMode ? 'flex min-h-screen bg-[#0b0e14]' : `flex min-h-screen ${appShellBg(false)}`;
+  const shell = isDarkMode
+    ? 'flex h-[100dvh] overflow-hidden bg-[#0b0e14]'
+    : `flex h-[100dvh] overflow-hidden ${appShellBg(false)}`;
   const { orgId } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();

@@ -61,7 +61,10 @@ export const roleAPI = {
      DELETE: /roles/{roleId}
      Return: { success: true }
   */
-  deleteRole: (roleId) => {
+  deleteRole: (roleId, serverId = null) => {
+    if (serverId) {
+      return apiClient.delete(`/roles/${roleId}`, { data: { serverId, organizationId: serverId } });
+    }
     return apiClient.delete(`/roles/${roleId}`);
   },
 

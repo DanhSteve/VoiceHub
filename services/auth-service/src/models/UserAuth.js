@@ -67,6 +67,25 @@ const userAuthSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    pendingEmail: {
+      type: String,
+      default: null,
+      trim: true,
+      lowercase: true,
+    },
+    pendingEmailBlindIndex: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+    emailChangeToken: {
+      type: String,
+      default: null,
+    },
+    emailChangeExpiresAt: {
+      type: Date,
+      default: null,
+    },
     passwordResetToken: {
       type: String,
       default: null,

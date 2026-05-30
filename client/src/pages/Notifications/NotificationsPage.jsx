@@ -7,7 +7,6 @@ import { ConfirmDialog, GlassCard, GradientButton, NotificationBellBadge } from 
 import { useSocket } from '../../context/SocketContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
-import { appShellBg } from '../../theme/shellTheme';
 import api from '../../services/api';
 import friendService from '../../services/friendService';
 import {
@@ -605,6 +604,16 @@ function NotificationsPage() {
     });
   }, [notifications, filter, notifSearch, organizationIdFilter, notificationScope]);
 
+  const newNotifications = useMemo(
+    () => filteredNotifications.filter((n) => !n.read),
+    [filteredNotifications]
+  );
+
+  const historyNotifications = useMemo(
+    () => filteredNotifications.filter((n) => n.read),
+    [filteredNotifications]
+  );
+
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const notifFilterOptions = useMemo(() => {
@@ -626,16 +635,176 @@ function NotificationsPage() {
     return null;
   }
 
-  const shell = `${appShellBg(isDarkMode)} ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`;
+  const shell = isDarkMode ? 'text-slate-100' : 'text-slate-900';
   const gc = isDarkMode ? 'border border-slate-800 bg-slate-900/60' : 'border border-slate-200 bg-white shadow-sm';
+  const columnShell = isDarkMode
+    ? 'flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-slate-900/30 backdrop-blur-sm'
+    : 'flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200/90 bg-white/70 shadow-sm backdrop-blur-sm';
+  const columnHeader = isDarkMode
+    ? 'shrink-0 border-b border-white/[0.06] bg-white/[0.03] px-4 py-3'
+    : 'shrink-0 border-b border-slate-200/90 bg-slate-50/90 px-4 py-3';
+
+  const renderNotificationCard = (notif, idx) => (
+    <GlassCard
+      key={notif.id}
+      hover
+      className={`animate-slideUp ${gc} ${!notif.read ? (isDarkMode ? 'border-l-4 border-cyan-500' : 'border-l-4 border-cyan-600') : ''}`}
+      style={{ animationDelay: `${idx * 0.05}s` }}
+    >
+      <div className="flex items-start gap-4">
+        {notif.useBellCard && notif.type === 'friend' ? (
+          <div className="flex-shrink-0 pt-0.5">
+            <NotificationBellBadge
+              count={notif.read ? 0 : 1}
+              sizeClass="h-12 w-12"
+              isDark={isDarkMode}
+            />
+          </div>
+        ) : (
+          <div
+            className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-2xl ${
+              notif.priority === 'high'
+                ? 'from-red-500 to-orange-500'
+                : notif.priority === 'medium'
+                  ? 'from-blue-500 to-cyan-500'
+                  : 'from-green-500 to-emerald-500'
+            }`}
+          >
+            {notif.icon}
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-center gap-2">
+            <h3 className={`font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{notif.title}</h3>
+            {!notif.read && (
+              <span className="rounded-full bg-cyan-600 px-2 py-0.5 text-xs font-bold text-white">
+                {t('common.newBadge')}
+              </span>
+            )}
+            {notif.priority === 'high' && (
+              <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs font-bold text-white">
+                {t('common.importantBadge')}
+              </span>
+            )}
+          </div>
+          <p className={`mb-2 text-sm ${isDarkMode ? 'text-gray-300' : 'text-slate-600'}`}>{notif.message}</p>
+          <div className={`flex items-center gap-3 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+            <span>🕐 {notif.time}</span>
+            <span>•</span>
+            <span className="capitalize">{notif.type}</span>
+            {notif.organizationName ? (
+              <>
+                <span>•</span>
+                <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
+                  {notif.organizationName}
+                </span>
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-col gap-2">
+          {getNotifActionKind(notif) === 'voice_join' ? (
+            <GradientButton
+              variant="primary"
+              className="!rounded-xl !px-5 !py-2.5 text-sm font-bold whitespace-nowrap shadow-lg"
+              disabled={Boolean(actingNotifId)}
+              onClick={() => handleApproveVoiceJoin(notif)}
+            >
+              {actingNotifId === notif.id ? t('notifications.loading') : t('notifications.actionApprove')}
+            </GradientButton>
+          ) : getNotifActionKind(notif) === 'friend_request' ? (
+            <>
+              <GradientButton
+                variant="friend"
+                className="!rounded-xl !px-5 !py-2.5 text-sm font-bold whitespace-nowrap shadow-lg"
+                disabled={Boolean(actingNotifId)}
+                onClick={() => handleAcceptFriendRequest(notif)}
+              >
+                {actingNotifId === notif.id ? t('notifications.loading') : t('notifications.actionAccept')}
+              </GradientButton>
+              <button
+                type="button"
+                disabled={Boolean(actingNotifId)}
+                onClick={() => handleRejectFriendRequest(notif)}
+                className="rounded-lg border border-slate-700 bg-[#040f2a] px-4 py-2 text-sm font-semibold text-gray-300 transition hover:bg-slate-800/70 disabled:opacity-50"
+              >
+                {t('notifications.actionReject')}
+              </button>
+            </>
+          ) : getNotifActionKind(notif) === 'navigate' ? (
+            <button
+              type="button"
+              onClick={() => handleOpenNotification(notif)}
+              className="rounded-lg border border-slate-800 bg-[#040f2a] px-4 py-2 text-sm font-semibold whitespace-nowrap transition hover:bg-slate-800/70"
+            >
+              {notif.action}
+            </button>
+          ) : null}
+          {!notif.read && (
+            <button
+              type="button"
+              onClick={() => handleMarkAsRead(notif.id)}
+              className="rounded-lg border border-slate-800 bg-[#040f2a] px-4 py-2 text-xs text-gray-400 transition-all hover:bg-slate-800/70 hover:text-white"
+            >
+              {t('notifications.markOneRead')}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setDeleteNotifConfirmId(notif.id)}
+            className="rounded-lg border border-slate-800 bg-[#040f2a] px-4 py-2 text-xs text-red-400 transition-all hover:bg-slate-800/70 hover:text-red-300"
+          >
+            {t('notifications.deleteBtn')}
+          </button>
+        </div>
+      </div>
+    </GlassCard>
+  );
+
+  const renderNotificationColumn = (title, count, items, emptyMessage, emptyIcon, showLoadingWhenEmpty = false) => (
+    <section className={columnShell}>
+      <header className={columnHeader}>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className={`text-sm font-bold tracking-wide sm:text-base ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+            {title}
+          </h2>
+          <span
+            className={`rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums ${
+              isDarkMode ? 'bg-cyan-500/15 text-cyan-300' : 'bg-cyan-100 text-cyan-800'
+            }`}
+          >
+            {count}
+          </span>
+        </div>
+      </header>
+      <div className="scrollbar-notifications min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
+        <div className="space-y-3">
+          {notificationsLoading && showLoadingWhenEmpty && items.length === 0 && (
+            <p className={`py-8 text-center text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+              {t('notifications.loading')}
+            </p>
+          )}
+          {!(notificationsLoading && showLoadingWhenEmpty && items.length === 0) && items.length === 0 && (
+            <div className="py-12 text-center">
+              <div className="mb-2 text-4xl opacity-80">{emptyIcon}</div>
+              <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>{emptyMessage}</p>
+            </div>
+          )}
+          {!notificationsLoading && items.map((notif, idx) => renderNotificationCard(notif, idx))}
+        </div>
+      </div>
+    </section>
+  );
 
   return (
     <>
       <ThreeFrameLayout
+        centerScrollable={false}
         center={
-          <div className={`p-5 lg:p-6 min-h-full ${shell}`}>
+          <div className={`flex h-full min-h-0 flex-col p-5 lg:p-6 ${shell}`}>
         <PageSearchToolbar
-          className="-mx-5 mb-6 lg:-mx-6"
+          className="-mx-5 mb-4 shrink-0 !bg-transparent lg:-mx-6 lg:mb-5"
+          layout="filters-inline"
           value={notifSearch}
           onChange={setNotifSearch}
           placeholder={t('notifications.searchPlaceholder')}
@@ -656,7 +825,7 @@ function NotificationsPage() {
           <button
             type="button"
             onClick={() => navigate('/chat/friends?tab=requests')}
-            className={`mb-6 w-full rounded-xl px-4 py-3 text-left text-sm font-semibold transition ${
+            className={`mb-4 w-full shrink-0 rounded-xl px-4 py-3 text-left text-sm font-semibold transition lg:mb-5 ${
               isDarkMode
                 ? 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20'
                 : 'border border-cyan-200 bg-cyan-50 text-cyan-900 hover:bg-cyan-100'
@@ -667,7 +836,7 @@ function NotificationsPage() {
         )}
 
         {/* Stats */}
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 lg:mb-5">
           <GlassCard hover className={gc}>
             <div className="flex items-center gap-3">
               <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-600 to-teal-600 text-2xl">
@@ -714,121 +883,27 @@ function NotificationsPage() {
           </GlassCard>
         </div>
 
-        {/* Notifications List */}
-        <div className="space-y-3">
-          {notificationsLoading && (
-            <p className={`text-center text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>{t('notifications.loading')}</p>
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 gap-4 lg:grid-cols-2 lg:grid-rows-1">
+          {renderNotificationColumn(
+            t('notifications.columnNew'),
+            newNotifications.length,
+            newNotifications,
+            t('notifications.emptyNew'),
+            '✨',
+            true
           )}
-          {!notificationsLoading &&
-            filteredNotifications.map((notif, idx) => (
-            <GlassCard key={notif.id} hover className={`animate-slideUp ${gc} ${!notif.read ? (isDarkMode ? 'border-l-4 border-cyan-500' : 'border-l-4 border-cyan-600') : ''}`} style={{animationDelay: `${idx * 0.05}s`}}>
-              <div className="flex items-start gap-4">
-                {notif.useBellCard && notif.type === 'friend' ? (
-                  <div className="flex-shrink-0 pt-0.5">
-                    <NotificationBellBadge
-                      count={notif.read ? 0 : 1}
-                      sizeClass="h-12 w-12"
-                      isDark={isDarkMode}
-                    />
-                  </div>
-                ) : (
-                <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${
-                  notif.priority === 'high' ? 'from-red-500 to-orange-500' :
-                  notif.priority === 'medium' ? 'from-blue-500 to-cyan-500' :
-                  'from-green-500 to-emerald-500'
-                } flex items-center justify-center text-2xl flex-shrink-0`}>
-                  {notif.icon}
-                </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="font-bold text-white">{notif.title}</h3>
-                    {!notif.read && (
-                      <span className="rounded-full bg-cyan-600 px-2 py-0.5 text-xs font-bold text-white">{t('common.newBadge')}</span>
-                    )}
-                    {notif.priority === 'high' && (
-                      <span className="px-2 py-0.5 rounded-full bg-red-600 text-xs font-bold">{t('common.importantBadge')}</span>
-                    )}
-                  </div>
-                  <p className="text-gray-300 text-sm mb-2">{notif.message}</p>
-                  <div className="flex items-center gap-3 text-xs text-gray-500">
-                    <span>🕐 {notif.time}</span>
-                    <span>•</span>
-                    <span className="capitalize">{notif.type}</span>
-                    {notif.organizationName ? (
-                      <>
-                        <span>•</span>
-                        <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
-                          {notif.organizationName}
-                        </span>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {getNotifActionKind(notif) === 'voice_join' ? (
-                    <GradientButton
-                      variant="primary"
-                      className="!px-5 !py-2.5 !rounded-xl text-sm font-bold whitespace-nowrap shadow-lg"
-                      disabled={Boolean(actingNotifId)}
-                      onClick={() => handleApproveVoiceJoin(notif)}
-                    >
-                      {actingNotifId === notif.id
-                        ? t('notifications.loading')
-                        : t('notifications.actionApprove')}
-                    </GradientButton>
-                  ) : getNotifActionKind(notif) === 'friend_request' ? (
-                    <>
-                      <GradientButton
-                        variant="friend"
-                        className="!px-5 !py-2.5 !rounded-xl text-sm font-bold whitespace-nowrap shadow-lg"
-                        disabled={Boolean(actingNotifId)}
-                        onClick={() => handleAcceptFriendRequest(notif)}
-                      >
-                        {actingNotifId === notif.id
-                          ? t('notifications.loading')
-                          : t('notifications.actionAccept')}
-                      </GradientButton>
-                      <button
-                        type="button"
-                        disabled={Boolean(actingNotifId)}
-                        onClick={() => handleRejectFriendRequest(notif)}
-                        className="rounded-lg border border-slate-700 bg-[#040f2a] px-4 py-2 text-sm font-semibold text-gray-300 transition hover:bg-slate-800/70 disabled:opacity-50"
-                      >
-                        {t('notifications.actionReject')}
-                      </button>
-                    </>
-                  ) : getNotifActionKind(notif) === 'navigate' ? (
-                    <button
-                      type="button"
-                      onClick={() => handleOpenNotification(notif)}
-                      className="rounded-lg border border-slate-800 bg-[#040f2a] px-4 py-2 text-sm font-semibold whitespace-nowrap transition hover:bg-slate-800/70"
-                    >
-                      {notif.action}
-                    </button>
-                  ) : null}
-                  {!notif.read && (
-                    <button 
-                      onClick={() => handleMarkAsRead(notif.id)}
-                      className="bg-[#040f2a] border border-slate-800 px-4 py-2 rounded-lg hover:bg-slate-800/70 transition-all text-xs text-gray-400 hover:text-white"
-                    >
-                      {t('notifications.markOneRead')}
-                    </button>
-                  )}
-                  <button 
-                    onClick={() => setDeleteNotifConfirmId(notif.id)}
-                    className="bg-[#040f2a] border border-slate-800 px-4 py-2 rounded-lg hover:bg-slate-800/70 transition-all text-xs text-red-400 hover:text-red-300"
-                  >
-                    {t('notifications.deleteBtn')}
-                  </button>
-                </div>
-              </div>
-            </GlassCard>
-          ))}
+          {renderNotificationColumn(
+            t('notifications.columnHistory'),
+            historyNotifications.length,
+            historyNotifications,
+            t('notifications.emptyHistory'),
+            '📭',
+            false
+          )}
         </div>
 
         {!notificationsLoading && notifInfiniteQuery.hasNextPage && (
-          <div className="flex justify-center pt-4">
+          <div className="flex shrink-0 justify-center pt-3">
             <GradientButton
               type="button"
               variant="secondary"
@@ -839,13 +914,6 @@ function NotificationsPage() {
                 ? t('notifications.loading')
                 : t('notifications.loadMore')}
             </GradientButton>
-          </div>
-        )}
-
-        {!notificationsLoading && filteredNotifications.length === 0 && (
-          <div className="text-center py-20">
-            <div className="text-6xl mb-4">🎉</div>
-            <p className="text-xl text-gray-400">{t('notifications.empty')}</p>
           </div>
         )}
           </div>

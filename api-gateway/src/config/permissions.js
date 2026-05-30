@@ -111,6 +111,7 @@ const routeActionMap = {
 const noPermissionRoutes = [
   '/api/auth/logout',
   '/api/auth/change-password',
+  '/api/auth/change-email/request',
   '/api/auth/me',
   // User profile & avatar không phụ thuộc server/organization
   '/api/users/me',
@@ -138,22 +139,32 @@ const ORG_SCOPED_ACTION_BY_METHOD = {
   DELETE: 'organization:delete',
 };
 
+const normalizeToApiPath = (path = '') => {
+  const sanitized = String(path || '').split('?')[0] || '/';
+  return sanitized.startsWith('/api') ? sanitized : `/api${sanitized}`;
+};
+
 const getAction = (method, path) => {
-  const pathWithoutQuery = path.split('?')[0];
+  const pathWithoutQuery = String(path || '').split('?')[0];
+  const apiPath = normalizeToApiPath(pathWithoutQuery);
 
   // Kiểm tra routes không cần permission
-  if (noPermissionRoutes.some((route) => pathWithoutQuery.startsWith(route))) {
+  if (
+    noPermissionRoutes.some(
+      (route) => pathWithoutQuery.startsWith(route) || apiPath.startsWith(route)
+    )
+  ) {
     return null;
   }
 
   // Mọi route /api/organizations/:orgId/... (trừ /my) — organization-service tự kiểm tra membership/RBAC
-  const orgScoped = pathWithoutQuery.match(/^\/api\/organizations\/([^/]+)(?:\/|$)/);
+  const orgScoped = apiPath.match(/^\/api\/organizations\/([^/]+)(?:\/|$)/);
   if (orgScoped && orgScoped[1] && orgScoped[1] !== 'my') {
     const scopedAction = ORG_SCOPED_ACTION_BY_METHOD[method];
     if (scopedAction) return scopedAction;
   }
 
-  const key = `${method} ${pathWithoutQuery}`;
+  const key = `${method} ${apiPath}`;
   
   // Tìm exact match trước
   if (routeActionMap[key]) {
@@ -172,7 +183,7 @@ const getAction = (method, path) => {
       `^${patternPath.replace(/:[^/]+/g, '[^/]+')}(?:/.*)?$`
     );
 
-    if (patternRegex.test(pathWithoutQuery)) {
+    if (patternRegex.test(apiPath)) {
       return action;
     }
   }
@@ -187,12 +198,22 @@ const getAction = (method, path) => {
  */
 const extractServerId = (req) => {
   const path = req.path || '';
-  const isOrganizationRoute = path.startsWith('/api/organizations');
   const pathWithoutQuery = path.split('?')[0];
+  const apiPath = normalizeToApiPath(pathWithoutQuery);
+  const isOrganizationRoute = apiPath.startsWith('/api/organizations');
+  const serverIdFromRolePath =
+    apiPath.match(/^\/api\/roles\/server\/([^/]+)(?:\/|$)/)?.[1] || null;
+  const serverIdFromPermissionPath =
+    apiPath.match(/^\/api\/permissions\/user\/[^/]+\/server\/([^/]+)(?:\/|$)/)?.[1] ||
+    null;
+  const serverIdFromUserRolePath =
+    apiPath.match(/^\/api\/roles\/user\/[^/]+\/server\/([^/]+)(?:\/|$)/)?.[1] || null;
   const organizationIdFromPath =
-    pathWithoutQuery.match(/^\/api\/organizations\/([^/]+)(?:\/|$)/)?.[1] || null;
+    apiPath.match(/^\/api\/organizations\/([^/]+)(?:\/|$)/)?.[1] || null;
   const normalizedOrgId =
     organizationIdFromPath && organizationIdFromPath !== 'my' ? organizationIdFromPath : null;
+  const normalizedServerIdFromPath =
+    serverIdFromRolePath || serverIdFromPermissionPath || serverIdFromUserRolePath;
 
   // Ưu tiên: query > params > body > header
   // Sử dụng optional chaining để tránh lỗi khi req.body undefined
@@ -200,6 +221,7 @@ const extractServerId = (req) => {
     req.query?.serverId ||
     req.query?.organizationId ||
     (isOrganizationRoute ? req.query?.orgId : null) ||
+    normalizedServerIdFromPath ||
     req.params?.serverId ||
     req.params?.organizationId ||
     req.params?.orgId ||

@@ -1,4 +1,5 @@
 const UserAuth = require('../models/UserAuth');
+const axios = require('axios');
 const { validateRegistrationDateOfBirth } = require('../utils/dateOfBirth');
 const { hashPassword, comparePassword, validatePasswordStrength } = require('../utils/password');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
@@ -31,6 +32,23 @@ async function ensureMongoReady(scope = 'AUTH') {
   if (readyState === 1) return;
   // Không reconnect trong request để tránh reset connection pool cạnh tranh với background reconnect.
   throw createServiceError('Hệ thống đang bận. Vui lòng thử lại sau.', 503, 'AUTH_DB_UNAVAILABLE');
+}
+
+async function syncUserProfileEmail(userId, email) {
+  const internalToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
+  const userServiceUrl = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+  if (!internalToken || !userServiceUrl || !userId || !email) return;
+  await axios.patch(
+    `${userServiceUrl}/api/users/internal/email`,
+    { userId: String(userId), email: String(email).trim().toLowerCase() },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-token': internalToken,
+      },
+      timeout: Number(process.env.USER_BOOTSTRAP_TIMEOUT_MS || 15000),
+    }
+  );
 }
 
 class AuthService {
@@ -477,6 +495,100 @@ class AuthService {
     } catch (error) {
       throw error;
     }
+  }
+
+  async requestEmailChange(userId, newEmail, frontendUrl) {
+    const uid = String(userId || '').trim();
+    if (!uid) {
+      throw createServiceError('Unauthorized', 401, 'AUTH_UNAUTHORIZED');
+    }
+    const normalizedEmail = normalizeEmail(newEmail);
+    if (!normalizedEmail) {
+      throw createServiceError('Email is required', 400, 'AUTH_EMAIL_REQUIRED');
+    }
+
+    const userAuth = await UserAuth.findOne({ userId: uid });
+    if (!userAuth) {
+      throw createServiceError('User not found', 404, 'AUTH_USER_NOT_FOUND');
+    }
+
+    const currentEmail = await hydrateAuthEmailDoc(userAuth);
+    if (normalizeEmail(currentEmail) === normalizedEmail) {
+      throw createServiceError('Email mới trùng email hiện tại', 400, 'AUTH_EMAIL_SAME_AS_CURRENT');
+    }
+
+    const existing = await findUserAuthByEmail(normalizedEmail, { maxTimeMS: 15000, lean: true });
+    if (existing && String(existing.userId || '') !== String(uid)) {
+      throw createServiceError('Email đã được sử dụng', 400, 'AUTH_EMAIL_EXISTS');
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    userAuth.pendingEmail = normalizedEmail;
+    userAuth.emailChangeToken = token;
+    userAuth.emailChangeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await userAuth.save();
+
+    let emailScheduled = false;
+    if (emailService.isAvailable()) {
+      const info = await emailService.sendEmailChangeVerificationEmail(normalizedEmail, token, frontendUrl);
+      emailScheduled = Boolean(info);
+    }
+    const response = {
+      message: 'Nếu email hợp lệ, link xác thực đã được gửi.',
+      emailScheduled,
+    };
+    if (!emailScheduled && process.env.NODE_ENV !== 'production') {
+      const baseNormalized = String(
+        (frontendUrl && String(frontendUrl).trim()) ||
+          process.env.FRONTEND_URL ||
+          'http://localhost:5173'
+      ).replace(/\/+$/, '');
+      response.verificationToken = token;
+      response.verificationUrl = `${baseNormalized}/verify-email-change?token=${token}`;
+    }
+    return response;
+  }
+
+  async verifyEmailChange(token) {
+    const verificationToken = String(token || '').trim();
+    if (!verificationToken) {
+      throw createServiceError('Verification token is required', 400, 'AUTH_EMAIL_CHANGE_TOKEN_REQUIRED');
+    }
+    const userAuth = await UserAuth.findOne({
+      emailChangeToken: verificationToken,
+      emailChangeExpiresAt: { $gt: new Date() },
+    });
+    if (!userAuth) {
+      throw createServiceError('Invalid or expired verification token', 400, 'AUTH_EMAIL_CHANGE_TOKEN_INVALID');
+    }
+
+    const nextEmail = normalizeEmail(userAuth.pendingEmail);
+    if (!nextEmail) {
+      throw createServiceError('Yêu cầu đổi email không hợp lệ', 400, 'AUTH_EMAIL_CHANGE_INVALID');
+    }
+
+    const existing = await findUserAuthByEmail(nextEmail, { maxTimeMS: 15000, lean: true });
+    if (existing && String(existing._id) !== String(userAuth._id)) {
+      throw createServiceError('Email đã được sử dụng', 400, 'AUTH_EMAIL_EXISTS');
+    }
+
+    Object.assign(userAuth, writeEmailFields(nextEmail));
+    userAuth.pendingEmail = null;
+    userAuth.pendingEmailBlindIndex = null;
+    userAuth.emailChangeToken = null;
+    userAuth.emailChangeExpiresAt = null;
+    await userAuth.save();
+
+    try {
+      await syncUserProfileEmail(userAuth.userId, nextEmail);
+    } catch (e) {
+      console.warn('[AuthService] verifyEmailChange: failed to sync user-profile email:', e?.message || e);
+    }
+
+    return {
+      userId: String(userAuth.userId || ''),
+      email: nextEmail,
+    };
   }
 
   // Reset mật khẩu

@@ -103,6 +103,23 @@ class UserController {
         });
       }
 
+      const profileEmail = String(userProfile?.email || '').trim().toLowerCase();
+      const authEmail = String(req.headers['x-user-email'] || req.user?.email || '')
+        .trim()
+        .toLowerCase();
+      if (!profileEmail && authEmail) {
+        try {
+          userProfile = await userService.updateUserEmailInternal(userId, authEmail);
+          logger.info(`Recovered missing profile email for userId=${userId}`);
+        } catch (repairErr) {
+          logger.warn(
+            `Failed to recover missing profile email for userId=${userId}: ${
+              repairErr?.message || 'unknown error'
+            }`
+          );
+        }
+      }
+
       res.json({
         success: true,
         data: safeProfilePayload(userProfile),
@@ -380,6 +397,31 @@ class UserController {
         success: false,
         message: error.message,
       });
+    }
+  }
+
+  /**
+   * Cập nhật email profile từ auth-service sau khi xác thực đổi email thành công.
+   * PATCH body: { userId, email } — đã qua internalServiceAuth.
+   */
+  async patchInternalEmail(req, res) {
+    try {
+      const userId = String(req.body?.userId || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      if (!userId || !email) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId and email are required',
+        });
+      }
+      const userProfile = await userService.updateUserEmailInternal(userId, email);
+      return res.json({
+        success: true,
+        data: safeProfilePayload(userProfile),
+      });
+    } catch (error) {
+      logger.error('Internal patch email error:', error);
+      return sendError(res, error, 400, 'Không thể cập nhật email nội bộ', 'USER_INTERNAL_EMAIL_FAILED');
     }
   }
 
