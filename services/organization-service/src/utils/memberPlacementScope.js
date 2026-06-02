@@ -11,21 +11,24 @@ const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').
 
 const shortId = (id) => String(id || '').slice(-6);
 
-function roleInternalHeaders() {
+function roleInternalHeaders(userId) {
   const h = { 'Content-Type': 'application/json' };
   if (GATEWAY_INTERNAL_TOKEN) h['x-gateway-internal-token'] = GATEWAY_INTERNAL_TOKEN;
+  const uid = String(userId || '').trim();
+  if (uid) h['x-user-id'] = uid;
   return h;
 }
 
 async function fetchUserRoleNamesInOrg(userId, orgId) {
   if (!userId || !orgId) return [];
+  const uid = String(userId).trim();
   try {
     const res = await axios.get(
-      `${ROLE_PERMISSION_BASE}/api/roles/user/${encodeURIComponent(String(userId))}/server/${encodeURIComponent(
+      `${ROLE_PERMISSION_BASE}/api/roles/user/${encodeURIComponent(uid)}/server/${encodeURIComponent(
         String(orgId)
       )}`,
       {
-        headers: roleInternalHeaders(),
+        headers: roleInternalHeaders(uid),
         timeout: 8000,
         validateStatus: () => true,
       }

@@ -169,13 +169,18 @@ function rolePermissionInternalHeaders() {
   return h;
 }
 
-async function fetchOrgRolesList(orgId) {
+async function fetchOrgRolesList(orgId, userId) {
   const oid = String(orgId || '').trim();
-  if (!oid || !GATEWAY_INTERNAL_TOKEN) return [];
+  const uid = String(userId || '').trim();
+  if (!oid || !uid || !GATEWAY_INTERNAL_TOKEN) return [];
   try {
+    const headers = {
+      ...rolePermissionInternalHeaders(),
+      'x-user-id': uid,
+    };
     const res = await axios.get(
       `${ROLE_PERMISSION_BASE}/api/roles/server/${encodeURIComponent(oid)}`,
-      { headers: rolePermissionInternalHeaders(), timeout: 8000, validateStatus: () => true }
+      { headers, timeout: 8000, validateStatus: () => true }
     );
     if (res.status >= 400) return [];
     const body = res.data?.data ?? res.data;
@@ -282,9 +287,10 @@ exports.getMembers = async (req, res, next) => {
 /** Gom members + roles RBAC — một request cho sidebar (wave-2d). */
 exports.getMembersWithRoles = async (req, res, next) => {
   try {
+    const userId = String(req.user?.id || req.user?.userId || req.user?._id || '');
     const [members, roles] = await Promise.all([
       listMembersForOrg(req),
-      fetchOrgRolesList(req.params.orgId),
+      fetchOrgRolesList(req.params.orgId, userId),
     ]);
     return res.json({ status: 'success', data: { members, roles } });
   } catch (error) {
