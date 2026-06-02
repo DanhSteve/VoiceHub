@@ -14,6 +14,16 @@ const userAuthSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
+    /** HMAC blind index khi email at-rest được mã hóa */
+    emailBlindIndex: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+    encV: {
+      type: Number,
+      default: 0,
+    },
     password: {
       type: String,
       required: true,
@@ -30,7 +40,7 @@ const userAuthSchema = new mongoose.Schema(
       trim: true,
     },
     dateOfBirth: {
-      type: Date,
+      type: mongoose.Schema.Types.Mixed,
       required: false,
     },
     refreshToken: {
@@ -54,6 +64,25 @@ const userAuthSchema = new mongoose.Schema(
       default: null,
     },
     emailVerificationExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    pendingEmail: {
+      type: String,
+      default: null,
+      trim: true,
+      lowercase: true,
+    },
+    pendingEmailBlindIndex: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+    emailChangeToken: {
+      type: String,
+      default: null,
+    },
+    emailChangeExpiresAt: {
       type: Date,
       default: null,
     },
@@ -83,8 +112,9 @@ const userAuthSchema = new mongoose.Schema(
   }
 );
 
-// Indexes (unique indexes)
-userAuthSchema.index({ email: 1 }, { unique: true });
+// Unique: plaintext email (legacy / encryption off) hoặc blind index (encryption on)
+userAuthSchema.index({ email: 1 }, { unique: true, sparse: true });
+userAuthSchema.index({ emailBlindIndex: 1 }, { unique: true, sparse: true });
 userAuthSchema.index({ userId: 1 }, { unique: true, sparse: true });
 userAuthSchema.index({ refreshToken: 1 });
 

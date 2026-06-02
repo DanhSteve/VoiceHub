@@ -12,7 +12,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLocale } from '../../context/LocaleContext';
 import { useAppStrings } from '../../locales/appStrings';
 import { getToken } from '../../utils/tokenStorage';
-import { getUserDisplayName, resolveMediaUrl } from '../../utils/helpers';
+import { getUserDisplayName } from '../../utils/helpers';
 import { resolveAppOrigin } from '../../utils/browserOrigin';
 import UserAvatar from '../Shared/UserAvatar';
 import { isAvatarImageUrl, voiceSpeakingRingClass } from '../../utils/avatarDisplay';
@@ -1026,7 +1026,8 @@ export default function OrganizationVoiceChannelView({
           className={`flex items-center gap-2.5 rounded-lg px-2 py-2 ${isDarkMode ? 'bg-white/[0.03]' : 'bg-slate-50'}`}
         >
           <UserAvatar
-            avatar={isAvatarImageUrl(localAvatar) ? resolveMediaUrl(localAvatar) : null}
+            avatar={localAvatar}
+            userId={voiceUserId}
             name={localDisplayName}
             size="sm"
             ringClassName={voiceSpeakingRingClass(localVoiceEnergy && !isMuted)}
@@ -1051,6 +1052,7 @@ export default function OrganizationVoiceChannelView({
           return (
             <div key={p.socketId} className="flex items-center gap-2.5 rounded-lg px-2 py-2">
               <UserAvatar
+                userId={p.userId}
                 name={p.displayName}
                 size="sm"
                 ringClassName={voiceSpeakingRingClass(speaking)}

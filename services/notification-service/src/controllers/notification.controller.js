@@ -2,6 +2,12 @@ const notificationService = require('../services/notification.service');
 const { publishDispatchJob } = require('../messaging/notificationDispatch.publisher');
 const { logger } = require('/shared');
 
+function safeMessage(error, fallback) {
+  const status = Number(error?.statusCode) || 500;
+  if (status >= 500) return 'Hệ thống thông báo đang bận. Vui lòng thử lại sau.';
+  return String(error?.message || fallback);
+}
+
 class NotificationController {
   _asyncDispatchEnabled() {
     return String(process.env.NOTIFICATION_ASYNC_DISPATCH || 'false').toLowerCase() === 'true';
@@ -44,7 +50,7 @@ class NotificationController {
       logger.error('Create notification error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tạo thông báo'),
       });
     }
   }
@@ -85,7 +91,7 @@ class NotificationController {
       logger.error('Create bulk notifications error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể gửi thông báo hàng loạt'),
       });
     }
   }
@@ -93,7 +99,15 @@ class NotificationController {
   // Lấy notifications của user
   async getUserNotifications(req, res) {
     try {
-      const userId = req.user?.id || req.userContext?.userId || req.params.userId;
+      const authenticatedUserId = req.user?.id || req.userContext?.userId;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      const paramUserId = req.params.userId ? String(req.params.userId).trim() : null;
+      if (paramUserId && paramUserId !== String(authenticatedUserId)) {
+        return res.status(403).json({ success: false, message: 'Forbidden' });
+      }
+      const userId = authenticatedUserId;
       const { isRead, type, page, limit, organizationId, scope, before, fields } =
         req.query;
 
@@ -123,12 +137,62 @@ class NotificationController {
       logger.error('Get user notifications error:', error);
       res.status(500).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tải danh sách thông báo'),
+      });
+    }
+  }
+
+  /** Gọi nội bộ từ voice-service sau duyệt/từ chối yêu cầu vào phòng */
+  async markVoiceRoomJoinRequestReadInternal(req, res) {
+    try {
+      const { userId, roomId, requestId, requestUserId } = req.body || {};
+      if (!userId || !roomId) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId and roomId are required',
+        });
+      }
+      const result = await notificationService.markVoiceRoomJoinRequestRead(userId, {
+        roomId,
+        requestId,
+        requestUserId,
+      });
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      logger.error('Mark voice room join request read (internal) error:', error);
+      return res.status(400).json({
+        success: false,
+        message: safeMessage(error, 'Không thể cập nhật thông báo'),
       });
     }
   }
 
   // Đánh dấu đã đọc mọi thông báo kết bạn liên quan tới một user (sau accept/reject)
+  async markVoiceRoomJoinRequestRead(req, res) {
+    try {
+      const userId = req.user?.id || req.userContext?.userId;
+      const { roomId, requestId, requestUserId } = req.body || {};
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      if (!roomId) {
+        return res.status(400).json({ success: false, message: 'roomId is required' });
+      }
+      const result = await notificationService.markVoiceRoomJoinRequestRead(userId, {
+        roomId,
+        requestId,
+        requestUserId,
+      });
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      logger.error('Mark voice room join request read error:', error);
+      return res.status(400).json({
+        success: false,
+        message: safeMessage(error, 'Không thể cập nhật thông báo'),
+      });
+    }
+  }
+
   async markFriendRelatedRead(req, res) {
     try {
       const userId = req.user?.id || req.userContext?.userId;
@@ -157,7 +221,7 @@ class NotificationController {
       logger.error('Mark friend-related read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể cập nhật thông báo'),
       });
     }
   }
@@ -185,7 +249,7 @@ class NotificationController {
       logger.error('Mark as read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể đánh dấu đã đọc'),
       });
     }
   }
@@ -212,7 +276,7 @@ class NotificationController {
       logger.error('Mark all as read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể đánh dấu đã đọc toàn bộ'),
       });
     }
   }
@@ -240,7 +304,7 @@ class NotificationController {
       logger.error('Delete notification error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể xóa thông báo'),
       });
     }
   }
@@ -267,7 +331,7 @@ class NotificationController {
       logger.error('Delete all read error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tải số lượng thông báo chưa đọc'),
       });
     }
   }

@@ -4,6 +4,7 @@ const roomManager = require('../sfu/roomManager');
 const voiceRoomSessionService = require('../services/voiceRoomSession.service');
 
 const getUserFromSocket = (socket) => socket.data?.user || socket.user || {};
+const callbackError = () => ({ success: false, error: 'Không thể xử lý thao tác thoại lúc này' });
 
 function registerVoiceNamespace(io) {
   const voiceNamespace = io.of('/voice');
@@ -19,6 +20,15 @@ function registerVoiceNamespace(io) {
       try {
         const roomId = payload.roomId;
         if (!roomId) throw new Error('roomId is required');
+
+        const voiceRoomAccess = require('../services/voiceRoomAccess.service');
+        const authHeader = socket.handshake?.headers?.authorization;
+        await voiceRoomAccess.assertVoiceRoomAccess({
+          roomId: String(roomId),
+          userId: String(userId),
+          organizationId: payload.organizationId,
+          authorizationHeader: authHeader,
+        });
 
         const joined = await roomManager.joinRoom({
           roomId,
@@ -58,7 +68,8 @@ function registerVoiceNamespace(io) {
           displayName,
         });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        const msg = error?.statusCode === 403 ? 'Forbidden' : error?.message;
+        callback({ success: false, error: msg || 'Không thể tham gia phòng thoại' });
       }
     });
 
@@ -73,7 +84,7 @@ function registerVoiceNamespace(io) {
         });
         callback({ success: true, transport });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 
@@ -88,7 +99,7 @@ function registerVoiceNamespace(io) {
         });
         callback({ success: true });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 
@@ -114,7 +125,7 @@ function registerVoiceNamespace(io) {
           kind: result.kind,
         });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 
@@ -124,7 +135,7 @@ function registerVoiceNamespace(io) {
         const producers = roomManager.getProducersForRoom({ roomId, socketId: socket.id });
         callback({ success: true, producers });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 
@@ -140,7 +151,7 @@ function registerVoiceNamespace(io) {
         });
         callback({ success: true, consumer });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 
@@ -154,7 +165,7 @@ function registerVoiceNamespace(io) {
         });
         callback({ success: true });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 
@@ -168,7 +179,7 @@ function registerVoiceNamespace(io) {
         });
         callback({ success: true });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 
@@ -182,7 +193,7 @@ function registerVoiceNamespace(io) {
         });
         callback({ success: true });
       } catch (error) {
-        callback({ success: false, error: error.message });
+        callback(callbackError());
       }
     });
 

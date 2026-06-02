@@ -1,3 +1,5 @@
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
 require('dotenv').config();
 
 const http = require('http');
@@ -24,13 +26,18 @@ const parsedOrigins = corsOrigin
   .map((origin) => origin.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim())
   .filter(Boolean);
 
+const hasWildcardCors = parsedOrigins.some((o) => o === '*');
+if (isProd && hasWildcardCors) {
+  console.warn('[socket-service] CORS_ORIGIN contains * — ignored in production');
+}
+const safeProdOrigins = parsedOrigins.filter((o) => o !== '*');
 const socketCorsOrigin = !isProd
   ? true
-  : parsedOrigins.length === 0
+  : safeProdOrigins.length === 0
     ? false
-    : parsedOrigins.length === 1
-      ? parsedOrigins[0]
-      : parsedOrigins;
+    : safeProdOrigins.length === 1
+      ? safeProdOrigins[0]
+      : safeProdOrigins;
 
 app.use(
   cors({
@@ -113,7 +120,7 @@ function startListen() {
     );
     const presenceToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
     console.log(
-      `[socket-service] Presence → user-service: USER_SERVICE_URL=${process.env.USER_SERVICE_URL || 'http://user-service:3004'} ` +
+      `[socket-service] Presence → user-service: USER_SERVICE_URL=${process.env.USER_SERVICE_URL} ` +
         `internal token ${presenceToken ? 'SET (len=' + presenceToken.length + ')' : 'MISSING (disconnect sẽ KHÔNG cập nhật offline trong DB)'}`
     );
   });

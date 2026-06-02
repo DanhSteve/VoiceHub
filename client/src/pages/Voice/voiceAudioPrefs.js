@@ -77,6 +77,114 @@ export function buildAudioConstraints(deviceId, { strictDevice = true } = {}) {
   return audio;
 }
 
+const VIDEO_CONSTRAINT_ATTEMPTS = [
+  { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+  { width: { ideal: 640 }, height: { ideal: 480 } },
+  { facingMode: 'user' },
+  true,
+];
+
+function getMediaDevices() {
+  return typeof navigator !== 'undefined' ? navigator.mediaDevices : null;
+}
+
+export function shouldAbortMediaRetry(err) {
+  const name = String(err?.name || '');
+  return name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError';
+}
+
+/** Thông báo lỗi camera/mic thân thiện (Chrome: "Could not start video source"). */
+export function formatMediaDeviceError(error, t) {
+  const name = String(error?.name || '');
+  const raw = String(error?.message || '');
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    return t('friendChat.callCameraDenied');
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return t('friendChat.callCameraNotFound');
+  }
+  if (name === 'NotReadableError' || /could not start video source/i.test(raw)) {
+    return t('friendChat.callCameraBusy');
+  }
+  if (name === 'OverconstrainedError') {
+    return t('friendChat.callCameraFail');
+  }
+  return raw || t('friendChat.callCameraFail');
+}
+
+/**
+ * Chỉ camera — thử nhiều mức constraint, cuối cùng lần lượt từng thiết bị video.
+ */
+export async function acquireVideoStream() {
+  const mediaDevices = getMediaDevices();
+  if (!mediaDevices?.getUserMedia) {
+    throw new Error('Media devices unavailable');
+  }
+
+  let lastErr;
+  for (const video of VIDEO_CONSTRAINT_ATTEMPTS) {
+    try {
+      return await mediaDevices.getUserMedia({ video, audio: false });
+    } catch (err) {
+      lastErr = err;
+      if (shouldAbortMediaRetry(err)) throw err;
+    }
+  }
+
+  try {
+    const devices = await mediaDevices.enumerateDevices();
+    const cameras = devices.filter((d) => d.kind === 'videoinput' && d.deviceId);
+    for (const cam of cameras) {
+      try {
+        return await mediaDevices.getUserMedia({
+          video: { deviceId: { ideal: cam.deviceId } },
+          audio: false,
+        });
+      } catch (err) {
+        lastErr = err;
+        if (shouldAbortMediaRetry(err)) throw err;
+      }
+    }
+  } catch {
+    /* enumerateDevices có thể fail trước khi cấp quyền */
+  }
+
+  throw lastErr || new Error('Could not start video source');
+}
+
+/**
+ * Mic + camera cho gọi video bạn bè — fallback tách audio/video nếu gộp một lần thất bại.
+ */
+export async function acquireFriendCallMediaStream({ micDeviceId = '' } = {}) {
+  const mediaDevices = getMediaDevices();
+  if (!mediaDevices?.getUserMedia) {
+    throw new Error('Media devices unavailable');
+  }
+
+  const audio = buildAudioConstraints(micDeviceId);
+  let lastErr;
+
+  for (const video of VIDEO_CONSTRAINT_ATTEMPTS) {
+    try {
+      return await mediaDevices.getUserMedia({ audio, video });
+    } catch (err) {
+      lastErr = err;
+      if (shouldAbortMediaRetry(err)) throw err;
+    }
+  }
+
+  try {
+    const audioStream = await acquireMicStream(micDeviceId);
+    const videoStream = await acquireVideoStream();
+    const merged = new MediaStream();
+    audioStream.getAudioTracks().forEach((t) => merged.addTrack(t));
+    videoStream.getVideoTracks().forEach((t) => merged.addTrack(t));
+    return merged;
+  } catch (err) {
+    throw lastErr || err;
+  }
+}
+
 /** Xin mic — thử exact device trước, fallback ideal nếu máy đang chiếm thiết bị (BT/voice). */
 export async function acquireMicStream(deviceId) {
   const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : null;

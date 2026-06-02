@@ -206,6 +206,11 @@ const authService = {
     return response;
   },
 
+  requestEmailChange: async (email) => {
+    const response = await api.post('/auth/change-email/request', { email });
+    return response;
+  },
+
   /* ----- RESET PASSWORD: Đặt lại mật khẩu -----
      
      Gọi: POST /auth/reset-password
@@ -259,6 +264,11 @@ const authService = {
   verifyEmail: async (verificationToken) => {
     // Dùng GET với token trong query string, KHÔNG dùng JWT
     const response = await api.get(`/auth/verify-email?token=${encodeURIComponent(verificationToken)}`);
+    return response;
+  },
+
+  verifyEmailChange: async (verificationToken) => {
+    const response = await api.get(`/auth/verify-email-change?token=${encodeURIComponent(verificationToken)}`);
     return response;
   },
 };

@@ -425,10 +425,12 @@ function SocketProvider({ children }) {
      Sau đó socket sẽ nhận events của room đó
   ======================================== */
   const joinRoom = useCallback(
-    (roomId) => {
-      emit('room:join', { roomId });
+    (roomId, organizationId = null) => {
+      const payload = { roomId };
+      if (organizationId) payload.organizationId = String(organizationId);
+      emit('room:join', payload);
     },
-    [emit] // Phụ thuộc emit function
+    [emit]
   );
 
   /* ========================================

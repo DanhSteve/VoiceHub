@@ -3,6 +3,12 @@ const documentService = require('../services/document.service');
 const Document = require('../models/Document');
 const { logger } = require('/shared');
 
+function safeMessage(error, fallback) {
+  const status = Number(error?.statusCode) || 500;
+  if (status >= 500) return 'Dịch vụ tài liệu đang bận. Vui lòng thử lại sau.';
+  return String(error?.message || fallback);
+}
+
 class DocumentController {
   // Tạo document mới
   async createDocument(req, res) {
@@ -48,7 +54,7 @@ class DocumentController {
       logger.error('Create document error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tạo tài liệu'),
       });
     }
   }
@@ -91,7 +97,7 @@ class DocumentController {
       logger.error('Get document error:', error);
       res.status(500).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tải tài liệu'),
       });
     }
   }
@@ -142,7 +148,7 @@ class DocumentController {
       logger.error('Get documents error:', error);
       res.status(500).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tải danh sách tài liệu'),
       });
     }
   }
@@ -170,7 +176,7 @@ class DocumentController {
       logger.error('Update document error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể cập nhật tài liệu'),
       });
     }
   }
@@ -205,7 +211,7 @@ class DocumentController {
       logger.error('Upload new version error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể xóa tài liệu'),
       });
     }
   }
@@ -234,7 +240,7 @@ class DocumentController {
       logger.error('Delete document error:', error);
       res.status(400).json({
         success: false,
-        message: error.message,
+        message: safeMessage(error, 'Không thể tải quyền truy cập tài liệu'),
       });
     }
   }
@@ -257,7 +263,7 @@ class DocumentController {
       return res.json({ success: true, deletedCount: result.deletedCount });
     } catch (error) {
       logger.error('purgeOrganizationDocuments error:', error);
-      return res.status(500).json({ success: false, message: error.message });
+      return res.status(500).json({ success: false, message: safeMessage(error, 'Không thể tải thống kê tài liệu') });
     }
   }
 }

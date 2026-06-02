@@ -75,8 +75,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'auth-service' });
 });
 
-// Email service status endpoint (for debugging)
+// Email service status endpoint (debug only — không expose trên production)
 app.get('/email-status', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   const emailService = require('./utils/email');
   const hasUser = !!process.env.EMAIL_USER;
   const hasPassword = !!process.env.EMAIL_PASSWORD;

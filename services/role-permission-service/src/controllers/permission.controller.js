@@ -1,6 +1,18 @@
 const permissionService = require('../services/permission.service');
 const { logger } = require('/shared');
 
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const message = String(err?.message || fallbackMessage);
+  const errorCode = String(err?.errorCode || fallbackCode || '').trim();
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(errorCode ? { errorCode } : {}),
+    messageUser: message,
+  });
+}
+
 class PermissionController {
   // Kiểm tra quyền truy cập (cho API Gateway)
   async checkPermission(req, res) {
@@ -22,14 +34,7 @@ class PermissionController {
       });
     } catch (error) {
       logger.error('Check permission error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-        data: {
-          allowed: false,
-          reason: 'Permission check failed',
-        },
-      });
+      return sendError(res, error, 500, 'Không thể kiểm tra quyền truy cập', 'PERMISSION_CHECK_FAILED');
     }
   }
 
@@ -45,10 +50,7 @@ class PermissionController {
       });
     } catch (error) {
       logger.error('Get user permissions error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải quyền người dùng', 'PERMISSION_GET_FAILED');
     }
   }
 
@@ -64,10 +66,7 @@ class PermissionController {
       });
     } catch (error) {
       logger.error('Get user role error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải vai trò người dùng', 'PERMISSION_ROLE_FAILED');
     }
   }
 }

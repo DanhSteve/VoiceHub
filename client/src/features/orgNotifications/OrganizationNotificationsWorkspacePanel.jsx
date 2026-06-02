@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { buildWorkspacePath } from '../../utils/workspaceTabUtils';
 import toast from 'react-hot-toast';
 import { useAppStrings } from '../../locales/appStrings';
 import { PageSearchToolbar, SearchFilterChips } from '../search';
@@ -170,22 +171,22 @@ export default function OrganizationNotificationsWorkspacePanel({
 
     const slug = notif.organizationSlug || organizationSlug;
     const orgId = notif.organizationId || organizationId;
-    const workspacePath = slug ? `/w/${encodeURIComponent(slug)}` : orgId ? `/w/${encodeURIComponent(orgId)}` : '/workspaces';
-
-    switch (notif.type) {
-      case 'mention':
-        navigate(workspacePath);
-        break;
-      case 'task':
-        navigate(`${workspacePath}?tab=tasks`);
-        break;
-      case 'file':
-        navigate(`${workspacePath}?tab=documents`);
-        break;
-      default:
-        navigate(workspacePath);
-        break;
+    if (slug) {
+      switch (notif.type) {
+        case 'task':
+          navigate(buildWorkspacePath(slug, 'tasks'));
+          break;
+        case 'file':
+          navigate(buildWorkspacePath(slug, 'documents'));
+          break;
+        default:
+          navigate(buildWorkspacePath(slug, 'chat'));
+          break;
+      }
+      return;
     }
+    const fallbackPath = orgId ? `/workspaces?orgId=${encodeURIComponent(orgId)}` : '/workspaces';
+    navigate(fallbackPath);
   };
 
   return (

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../../context/ThemeContext';
-import { appShellBg } from '../../theme/shellTheme';
 import ThreeFrameLayout from '../../components/Layout/ThreeFrameLayout';
 import { ConfirmDialog, GlassCard, GradientButton, Modal } from '../../components/Shared';
 import { useCalendarFeed } from '../../hooks/useCalendarFeed';
@@ -40,7 +39,6 @@ function CalendarPage() {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
   const { locale } = useLocale();
-  const [view, setView] = useState('month');
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [showCreateEventModal, setShowCreateEventModal] = useState(false);
@@ -69,8 +67,6 @@ function CalendarPage() {
 
   const {
     events,
-    loading,
-    error,
     tasksForAlerts,
     reloadLocal,
     refetch,
@@ -131,6 +127,13 @@ function CalendarPage() {
       })
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   }, [eventsForDisplay]);
+
+  const selectedDateEvents = useMemo(() => {
+    const key = toDateKey(selectedDate);
+    return eventsForDisplay
+      .filter((e) => e.date === key)
+      .sort((a, b) => new Date(a.startAt || 0).getTime() - new Date(b.startAt || 0).getTime());
+  }, [eventsForDisplay, selectedDate]);
 
   const monthCells = useMemo(() => getMonthGridCells(selectedDate), [selectedDate]);
 
@@ -455,11 +458,7 @@ function CalendarPage() {
     toast(t('calendar.toastDetail'), { icon: 'ℹ️' });
   };
 
-  const calShell = `${appShellBg(isDarkMode)} ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`;
-  const calHeader = isDarkMode ? 'border-slate-800 bg-slate-900/40' : 'border-slate-200 bg-white';
-  const viewInactive = isDarkMode
-    ? 'border border-slate-800 bg-[#040f2a] text-gray-400 hover:bg-slate-800/70'
-    : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50';
+  const calShell = isDarkMode ? 'text-slate-100' : 'text-slate-900';
 
   const calChrome = isDarkMode
     ? 'border border-slate-600/60 bg-gradient-to-b from-[#0a1224] via-[#060d1c] to-[#030a14] shadow-[0_4px_24px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.04]'
@@ -526,76 +525,21 @@ function CalendarPage() {
     <>
       <ThreeFrameLayout
         center={
-          <div className={`flex h-full flex-col ${calShell}`}>
-        {/* Header gọn — lịch là trọng tâm */}
-        <div className={`shrink-0 border-b px-3 py-2.5 sm:px-4 sm:py-3 ${calHeader}`}>
-          <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
-            <div className="min-w-0 flex flex-wrap items-end gap-x-4 gap-y-2">
-              <div>
-                <h1 className={`text-xl font-extrabold sm:text-2xl ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{t('calendar.title')}</h1>
-                <p className={`text-xs sm:text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-600'}`}>
-                  {t('calendar.pageSubtitle')}
-                  {loading && t('calendar.loadingSuffix')}
-                  {error && ` · ${error}`}
-                </p>
-              </div>
-              {/* Thống kê dạng chip nhỏ — không dùng GlassCard p-6 */}
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                {[
-                  { icon: '📅', value: todayEvents.length, label: t('calendar.statToday') },
-                  { icon: '🔜', value: upcomingEvents.length, label: t('calendar.statUpcoming') },
-                  { icon: '🎤', value: eventsForDisplay.filter((e) => e.type === 'meeting').length, label: t('calendar.statMeetings') },
-                  { icon: '⏰', value: eventsForDisplay.filter((e) => e.type === 'deadline').length, label: t('calendar.statDeadlines') },
-                ].map((s) => (
-                  <div
-                    key={s.label}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 sm:px-2.5 ${isDarkMode ? 'border-slate-700/50 bg-[#0a1322]/90' : 'border-slate-200 bg-white'}`}
-                    title={s.label}
-                  >
-                    <span className="text-sm sm:text-base leading-none" aria-hidden>
-                      {s.icon}
-                    </span>
-                    <span className={`text-sm font-bold tabular-nums leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{s.value}</span>
-                    <span
-                      className={`max-w-[5.5rem] truncate text-[11px] font-medium leading-tight sm:max-w-none sm:text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-700'}`}
-                    >
-                      {s.label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <div className="flex gap-1">
-                {['day', 'week', 'month'].map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setView(v)}
-                    className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-all sm:px-3 sm:text-sm ${
-                      view === v
-                        ? 'bg-gradient-to-r from-cyan-600 to-teal-600 text-white'
-                        : viewInactive
-                    }`}
-                  >
-                    {v === 'day' ? t('calendar.viewDay') : v === 'week' ? t('calendar.viewWeek') : t('calendar.viewMonth')}
-                  </button>
-                ))}
-              </div>
-              <GradientButton variant="primary" className="!px-3 !py-2 text-sm" onClick={openCreateModal}>
-                {t('calendar.createBtn')}
-              </GradientButton>
-            </div>
-          </div>
-        </div>
-
+          <div className={`flex h-full min-h-0 flex-col ${calShell}`}>
         <PageSearchToolbar
+          className="shrink-0 !bg-transparent"
+          layout="filters-inline"
           value={eventSearchQuery}
           onChange={setEventSearchQuery}
           placeholder={t('calendar.searchEventsPlaceholder')}
           isDarkMode={isDarkMode}
           id="calendar-event-search"
           aria-label={t('calendar.searchEventsAria')}
+          actions={
+            <GradientButton variant="primary" className="!whitespace-nowrap !px-4 !py-2 text-sm" onClick={openCreateModal}>
+              {t('calendar.createAppointmentBtn')}
+            </GradientButton>
+          }
         >
           <SearchFilterChips
             aria-label={t('calendar.kindFilterAria')}
@@ -725,26 +669,17 @@ function CalendarPage() {
                       tabIndex={0}
                       onClick={() => {
                         setSelectedDate(date);
-                        // When clicking a date cell, open create modal with pre-filled event name
-                        const dateStr = toDateKey(date);
-                        const eventTitle = `${t('calendar.newEventDefault', { date: dateStr })}`;
-                        openCreateModal(eventTitle);
                         if (dayEvents.length > 0) {
-                          toast(
-                            t('calendar.toastDayEvents', {
-                              count: dayEvents.length,
-                              day,
-                              month: date.getMonth() + 1,
-                              year: date.getFullYear(),
-                            }),
-                            { icon: '📅' }
-                          );
+                          setSelectedEvent(dayEvents[0]);
                         }
                       }}
                       onKeyDown={(ev) => {
                         if (ev.key === 'Enter' || ev.key === ' ') {
                           ev.preventDefault();
                           setSelectedDate(date);
+                          if (dayEvents.length > 0) {
+                            setSelectedEvent(dayEvents[0]);
+                          }
                         }
                       }}
                       className={`aspect-square cursor-pointer rounded-lg border p-2 transition-all hover:scale-105 ${
@@ -766,13 +701,26 @@ function CalendarPage() {
                       >
                         {day}
                       </div>
-                      {hasEvent && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {dayEvents.slice(0, 3).map((e) => (
-                            <div key={e.id} className="w-1 h-1 rounded-full bg-cyan-400" />
+                      {hasEvent ? (
+                        <div className="mt-1 space-y-1">
+                          {dayEvents.slice(0, 2).map((e) => (
+                            <div
+                              key={e.id}
+                              className={`truncate rounded px-1 py-[1px] text-[10px] font-semibold ${
+                                isDarkMode ? 'bg-cyan-500/20 text-cyan-200' : 'bg-cyan-100 text-cyan-800'
+                              }`}
+                              title={`${e.time || ''} ${e.title}`}
+                            >
+                              {e.time ? `${e.time} ` : ''}{e.title}
+                            </div>
                           ))}
+                          {dayEvents.length > 2 ? (
+                            <div className={`text-[10px] ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                              +{dayEvents.length - 2} sự kiện
+                            </div>
+                          ) : null}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })}
@@ -783,6 +731,36 @@ function CalendarPage() {
 
           {/* Events Sidebar — 1/3 */}
           <div className="min-h-0 space-y-4 overflow-y-auto pr-1 scrollbar-overlay lg:col-span-1 lg:max-h-[calc(100vh-8rem)]">
+            <div>
+              <h3 className={sideHeading}>
+                <span>🗓️</span> {`Sự kiện ngày ${toDateKey(selectedDate)}`}
+              </h3>
+              <div className="space-y-2">
+                {selectedDateEvents.length === 0 ? (
+                  <p className={`rounded-xl border border-dashed px-3 py-2 text-xs ${isDarkMode ? 'border-white/[0.08] text-[#6b7280]' : 'border-slate-200 text-slate-500'}`}>
+                    Không có sự kiện trong ngày đã chọn.
+                  </p>
+                ) : (
+                  selectedDateEvents.map((event) => (
+                    <GlassCard
+                      key={`selected-${event.id}`}
+                      hover
+                      className={sideCardCompact}
+                      onClick={() => setSelectedEvent(event)}
+                    >
+                      <div className={`mb-1 h-1 w-full rounded-full bg-gradient-to-r ${event.color}`} />
+                      <div className={`truncate text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        {event.title}
+                      </div>
+                      <div className={`mt-0.5 text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                        {event.time || '—'}{event.duration ? ` · ${event.duration}` : ''}
+                      </div>
+                    </GlassCard>
+                  ))
+                )}
+              </div>
+            </div>
+
             {/* Today's Events */}
             <div>
               <h3 className={sideHeading}>

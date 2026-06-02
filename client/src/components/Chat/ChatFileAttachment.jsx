@@ -14,6 +14,7 @@ import toast from 'react-hot-toast';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
 import ChatMessageText from './ChatMessageText';
+import FriendCallLogMessage from './FriendCallLogMessage';
 
 /** Hien thi tin nhan file/hinh: the tep thay vi chuoi URL Firebase dai. */
 
@@ -283,12 +284,24 @@ export function ChatMessageAttachmentBody({
   mentionVariant = null,
   mentionLabels = [],
   onImageClick,
+  currentUserId = null,
+  onFriendCallBack = null,
 }) {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
   const content = message?.content;
   const fm = message?.fileMeta;
   const mt = message?.messageType || 'text';
+
+  if (mt === 'call_log') {
+    return (
+      <FriendCallLogMessage
+        message={message}
+        currentUserId={currentUserId}
+        onCallBack={onFriendCallBack}
+      />
+    );
+  }
 
   if (mt === 'business_card') {
     let card = {};

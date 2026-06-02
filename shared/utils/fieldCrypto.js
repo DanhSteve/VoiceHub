@@ -52,6 +52,21 @@ function phoneBlindIndex(normalizedPhone) {
   return crypto.createHash('sha256').update(`phone|${normalizedPhone}`).digest('hex');
 }
 
+/** HMAC blind index cho email (login / unique) khi email at-rest được mã hóa. */
+function emailBlindIndex(normalizedEmail) {
+  const email = String(normalizedEmail || '')
+    .trim()
+    .toLowerCase();
+  if (!email) return null;
+  const master = parseMasterKey();
+  if (master) {
+    const h = crypto.createHmac('sha256', deriveBlindKey(master));
+    h.update(`email|${email}`);
+    return h.digest('hex');
+  }
+  return crypto.createHash('sha256').update(`email|${email}`).digest('hex');
+}
+
 function parseEnvelopeString(value) {
   if (typeof value !== 'string' || !value.startsWith(ENVELOPE_PREFIX)) return null;
   const b64 = value.slice(ENVELOPE_PREFIX.length);
@@ -172,6 +187,7 @@ module.exports = {
   isEncrypted,
   isEncryptionEnabled,
   phoneBlindIndex,
+  emailBlindIndex,
   safeRedact,
   parseMasterKey,
 };

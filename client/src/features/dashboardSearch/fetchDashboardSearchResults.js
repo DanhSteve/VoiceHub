@@ -362,15 +362,6 @@ export async function fetchDashboardSearchResults({
         ];
       }
       items = filterByDetailQuery(items, q);
-    } else if (pageId === 'analytics' && subfilterId === 'overview') {
-      items = [
-        {
-          id: 'analytics-open',
-          title: t('dashboard.globalSearch.analyticsOpen'),
-          subtitle: t('dashboard.globalSearch.analyticsOpenSub'),
-        },
-      ];
-      items = filterByDetailQuery(items, q);
     }
 
     if (pageId !== 'tasks' && pageId !== 'notifications' && pageId !== 'calendar') {

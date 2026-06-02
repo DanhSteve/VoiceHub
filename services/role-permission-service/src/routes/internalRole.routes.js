@@ -9,4 +9,16 @@ router.post(
   roleController.purgeByServerContext.bind(roleController)
 );
 
+router.post(
+  '/backfill-role-read',
+  internalGatewayAuth,
+  roleController.backfillRoleRead.bind(roleController)
+);
+
+router.post(
+  '/backfill-role-read/:serverId',
+  internalGatewayAuth,
+  roleController.backfillRoleRead.bind(roleController)
+);
+
 module.exports = router;

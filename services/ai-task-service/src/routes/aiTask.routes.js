@@ -1,3 +1,5 @@
+const TASK_SERVICE_URL = String(process.env.TASK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!TASK_SERVICE_URL) throw new Error('Thiếu biến môi trường: TASK_SERVICE_URL');
 const express = require('express');
 const axios = require('axios');
 const { buildTrustedGatewayHeaders } = require('../../../../shared/middleware/gatewayTrust');
@@ -6,6 +8,15 @@ const SyncSuggestion = require('../models/SyncSuggestion');
 const { publishJson } = require('../messaging/rabbit');
 
 const router = express.Router();
+
+function fail(res, status, message, errorCode) {
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(errorCode ? { errorCode } : {}),
+    messageUser: message,
+  });
+}
 
 /**
  * MVP async extract:
@@ -60,11 +71,11 @@ router.post('/extract', async (req, res) => {
 
 router.get('/extractions/:id', async (req, res) => {
   const userId = req.user?.id || req.headers['x-user-id'];
-  if (!userId) return res.status(401).json({ success: false, message: 'Missing user context' });
+  if (!userId) return fail(res, 401, 'Thiếu thông tin người dùng', 'AI_USER_CONTEXT_MISSING');
   const extraction = await AiTaskExtraction.findById(req.params.id).lean();
-  if (!extraction) return res.status(404).json({ success: false, message: 'Not found' });
+  if (!extraction) return fail(res, 404, 'Không tìm thấy dữ liệu trích xuất', 'AI_EXTRACTION_NOT_FOUND');
   if (String(extraction.generatedBy) !== String(userId)) {
-    return res.status(403).json({ success: false, message: 'Forbidden' });
+    return fail(res, 403, 'Bạn không có quyền truy cập dữ liệu này', 'AI_EXTRACTION_FORBIDDEN');
   }
   return res.json({ success: true, data: extraction });
 });
@@ -100,7 +111,7 @@ router.post('/confirm', async (req, res) => {
     return res.status(403).json({ success: false, message: 'Forbidden' });
   }
   if (!['ready', 'confirmed'].includes(extraction.status)) {
-    return res.status(409).json({ success: false, message: `Extraction is not ready (status=${extraction.status})` });
+    return fail(res, 409, 'Nội dung AI chưa sẵn sàng để xác nhận', 'AI_EXTRACTION_NOT_READY');
   }
 
   if (extraction.status === 'confirmed' && extraction.taskId) {
@@ -109,18 +120,15 @@ router.post('/confirm', async (req, res) => {
       extraction.confirmIdempotencyKey &&
       idemKey !== extraction.confirmIdempotencyKey
     ) {
-      return res.status(409).json({ success: false, message: 'Idempotency key mismatch for confirmed extraction' });
+      return fail(res, 409, 'Yêu cầu bị trùng hoặc không hợp lệ', 'AI_CONFIRM_IDEMPOTENCY_CONFLICT');
     }
     return res.json({ success: true, data: { taskId: String(extraction.taskId), extractionId: String(extraction._id) } });
   }
 
-  const taskServiceUrl = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
+  const taskServiceUrl = process.env.TASK_SERVICE_URL;
   const draft = extraction.draft || {};
   if (!draft.dueDate) {
-    return res.status(422).json({
-      success: false,
-      message: 'Tin nhắn chưa có deadline rõ ngày/giờ nên chưa thể tạo task tự động',
-    });
+    return fail(res, 422, 'Tin nhắn chưa có deadline rõ ngày/giờ nên chưa thể tạo task tự động', 'AI_DUE_DATE_REQUIRED');
   }
   const assigneeId = resolveTrustedAssigneeId(extraction, bodyAssigneeId);
   const attachments = Array.isArray(draft.attachments) ? draft.attachments : [];
@@ -180,11 +188,7 @@ router.post('/confirm', async (req, res) => {
       typeof createRes.data?.message === 'string' && createRes.data.message.trim()
         ? createRes.data.message.trim()
         : 'Create task failed';
-    return res.status(400).json({
-      success: false,
-      message: taskMsg,
-      details: { httpStatus: createRes.status, body: createRes.data },
-    });
+    return fail(res, 400, taskMsg, 'AI_CONFIRM_CREATE_TASK_FAILED');
   }
 
   extraction.status = 'confirmed';
@@ -215,7 +219,7 @@ router.post('/:taskId/sync-suggestions/:id/approve', async (req, res) => {
     return res.status(409).json({ success: false, message: `Suggestion already ${suggestion.status}` });
   }
 
-  const taskServiceUrl = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
+  const taskServiceUrl = process.env.TASK_SERVICE_URL;
   const taskRes = await axios.get(`${taskServiceUrl}/api/tasks/${suggestion.taskId}`, {
     headers: buildTrustedGatewayHeaders(userId),
     timeout: 15000,
@@ -223,7 +227,7 @@ router.post('/:taskId/sync-suggestions/:id/approve', async (req, res) => {
   });
   const task = taskRes.data?.data;
   if (taskRes.status !== 200 || !taskRes.data?.success || !task) {
-    return res.status(400).json({ success: false, message: 'Task not found', details: { httpStatus: taskRes.status } });
+    return fail(res, 400, 'Không tìm thấy task cần đồng bộ', 'AI_SYNC_TASK_NOT_FOUND');
   }
 
   const lockedStatuses = new Set(['in_progress', 'review', 'done']);
@@ -242,7 +246,7 @@ router.post('/:taskId/sync-suggestions/:id/approve', async (req, res) => {
       validateStatus: () => true,
     });
     if (updateRes.status !== 200 || !updateRes.data?.success) {
-      return res.status(400).json({ success: false, message: 'Update task failed', details: updateRes.data });
+      return fail(res, 400, 'Không thể cập nhật task từ đề xuất', 'AI_SYNC_UPDATE_FAILED');
     }
     await AiTaskExtraction.findByIdAndUpdate(suggestion.extractionId, { $set: { 'sync.lastSyncedAt': new Date() } });
   }

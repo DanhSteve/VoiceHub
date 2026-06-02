@@ -38,6 +38,7 @@ import TasksKanbanDnd, { COL_DONE, COL_PROGRESS, COL_TODO } from '../Tasks/Tasks
 import { shouldPlaceToolbarBelowBubble } from '../../utils/messageToolbarPlacement';
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
 import { displayDepartmentName, channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
+import { resolveApiErrorMessage } from '../../utils/resolveApiErrorMessage';
 
 import OrganizationVoiceChannelView from './OrganizationVoiceChannelView';
 import OrganizationWorkspaceStructureSidebar from './OrganizationWorkspaceStructureSidebar';
@@ -101,6 +102,20 @@ function senderAvatarUrl(message, isMine, currentUser) {
   if (u && typeof u === 'object') {
     return u.avatar || u.profile?.avatar || null;
   }
+  return null;
+}
+
+function senderUserId(message, isMine, currentUser) {
+  if (isMine) {
+    const id = currentUser?.id || currentUser?._id || currentUser?.userId;
+    return id != null ? String(id) : null;
+  }
+  const u = message?.senderId;
+  if (u && typeof u === 'object') {
+    const id = u._id || u.id || u.userId;
+    return id != null ? String(id) : null;
+  }
+  if (u != null && u !== '') return String(u);
   return null;
 }
 
@@ -545,6 +560,14 @@ const OrganizationMainPanel = ({
 
   const orgIdForTask =
     organizationId || selectedOrganization?._id || selectedOrganization?.id || null;
+  const workspaceSlugForTask = String(selectedOrganization?.slug || '').trim();
+  const taskBoardApiCtx = useMemo(
+    () => ({
+      organizationId: orgIdForTask ? String(orgIdForTask) : '',
+      workspaceSlug: workspaceSlugForTask,
+    }),
+    [orgIdForTask, workspaceSlugForTask]
+  );
   useEffect(() => {
     if (!initialTaskBoardTeam) return;
     setTaskBoardTeam(initialTaskBoardTeam);
@@ -560,7 +583,7 @@ const OrganizationMainPanel = ({
     }
     setLoadingTaskBoards(true);
     try {
-      const filters = { organizationId: String(orgIdForTask) };
+      const filters = { ...taskBoardApiCtx };
       if (selectedTeamId) filters.teamId = String(selectedTeamId);
       const res = await taskAPI.getBoards(filters);
       const list = unwrapTaskBoardListPayload(res);
@@ -570,11 +593,11 @@ const OrganizationMainPanel = ({
       }
     } catch (err) {
       setTaskBoards([]);
-      toast.error(err?.response?.data?.message || 'Không tải được Task Board');
+      toast.error(resolveApiErrorMessage(err, 'Không tải được Task Board'));
     } finally {
       setLoadingTaskBoards(false);
     }
-  }, [orgIdForTask, selectedTeamId, organizationId, selectedTaskBoardId]);
+  }, [taskBoardApiCtx, selectedTeamId, organizationId, selectedTaskBoardId]);
 
   const loadTaskBoardDetail = useCallback(async (boardId, options = {}) => {
     const silent = Boolean(options?.silent);
@@ -584,15 +607,15 @@ const OrganizationMainPanel = ({
     }
     if (!silent) setLoadingTaskBoardDetail(true);
     try {
-      const res = await taskAPI.getBoardDetail(String(boardId));
+      const res = await taskAPI.getBoardDetail(String(boardId), taskBoardApiCtx);
       setTaskBoardDetail(unwrapTaskBoardDetailPayload(res));
     } catch (err) {
       setTaskBoardDetail(null);
-      toast.error(err?.response?.data?.message || err?.message || 'Không tải được chi tiết Task Board');
+      toast.error(resolveApiErrorMessage(err, 'Không tải được chi tiết Task Board'));
     } finally {
       if (!silent) setLoadingTaskBoardDetail(false);
     }
-  }, []);
+  }, [taskBoardApiCtx]);
 
   const loadAccessibleTaskBoards = useCallback(async () => {
     if (!orgIdForTask) {
@@ -600,12 +623,12 @@ const OrganizationMainPanel = ({
       return;
     }
     try {
-      const res = await taskAPI.getBoards({ organizationId: String(orgIdForTask) });
+      const res = await taskAPI.getBoards({ ...taskBoardApiCtx });
       setAccessibleTaskBoards(unwrapTaskBoardListPayload(res));
     } catch {
       setAccessibleTaskBoards([]);
     }
-  }, [orgIdForTask]);
+  }, [taskBoardApiCtx]);
 
   useEffect(() => {
     if (workspaceTab !== 'tasks') return;
@@ -643,17 +666,20 @@ const OrganizationMainPanel = ({
             lists: next.map((l, idx) => ({ ...l, order: (idx + 1) * 1000 })),
           };
         });
-        await taskAPI.reorderBoardList(String(selectedTaskBoardId), String(listId), {
-          position,
-        });
+        await taskAPI.reorderBoardList(
+          String(selectedTaskBoardId),
+          String(listId),
+          { position },
+          taskBoardApiCtx
+        );
       } catch (err) {
         if (rollbackLists) {
           setTaskBoardDetail((prev) => (prev ? { ...prev, lists: rollbackLists } : prev));
         }
-        toast.error(err?.response?.data?.message || 'Không thể sắp xếp danh sách');
+        toast.error(resolveApiErrorMessage(err, 'Không thể sắp xếp danh sách'));
       }
     },
-    [selectedTaskBoardId]
+    [selectedTaskBoardId, taskBoardApiCtx]
   );
 
   const handleCreateTaskBoard = async (payload) => {
@@ -662,7 +688,7 @@ const OrganizationMainPanel = ({
     try {
       const scopeType = String(taskBoardTeam.scopeType || 'team').toLowerCase();
       const res = await taskAPI.createBoard({
-        organizationId: String(orgIdForTask),
+        ...taskBoardApiCtx,
         ...(scopeType === 'team'
           ? { teamId: String(taskBoardTeam._id) }
           : { scopeType, scopeId: String(taskBoardTeam._id) }),
@@ -675,7 +701,7 @@ const OrganizationMainPanel = ({
       onCreateTaskBoardFromTeamMenu?.(null);
       toast.success('Tạo Task Board thành công');
     } catch (err) {
-      toast.error(err?.response?.data?.message || err?.message || 'Không tạo được Task Board');
+      toast.error(resolveApiErrorMessage(err, 'Không tạo được Task Board'));
     } finally {
       setCreatingTaskBoard(false);
     }
@@ -684,7 +710,7 @@ const OrganizationMainPanel = ({
   const handleAddBoardList = async (title) => {
     if (!selectedTaskBoardId) return null;
     try {
-      const res = await taskAPI.createBoardList(selectedTaskBoardId, { title });
+      const res = await taskAPI.createBoardList(selectedTaskBoardId, { title }, taskBoardApiCtx);
       const list = unwrapTaskApiPayload(res);
       if (list?._id) {
         setTaskBoardDetail((prev) => {
@@ -699,7 +725,7 @@ const OrganizationMainPanel = ({
       await loadTaskBoardDetail(selectedTaskBoardId);
       return null;
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Không thêm được danh sách');
+      toast.error(resolveApiErrorMessage(err, 'Không thêm được danh sách'));
       throw err;
     }
   };
@@ -707,7 +733,7 @@ const OrganizationMainPanel = ({
   const handleAddBoardCard = async (listId, cardData) => {
     if (!selectedTaskBoardId) return;
     try {
-      const res = await taskAPI.createBoardCard(selectedTaskBoardId, cardData);
+      const res = await taskAPI.createBoardCard(selectedTaskBoardId, cardData, taskBoardApiCtx);
       const card = unwrapTaskApiPayload(res);
       if (!card?._id) return;
       setTaskBoardDetail((prev) => {
@@ -723,7 +749,7 @@ const OrganizationMainPanel = ({
         return { ...prev, cards, lists };
       });
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Không thêm được công việc');
+      toast.error(resolveApiErrorMessage(err, 'Không thêm được công việc'));
     }
   };
 
@@ -734,9 +760,9 @@ const OrganizationMainPanel = ({
       if (index != null && Number.isFinite(Number(index))) {
         payload.index = Number(index);
       }
-      await taskAPI.moveBoardCard(String(cardId), payload);
+      await taskAPI.moveBoardCard(String(cardId), payload, taskBoardApiCtx);
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Không thể chuyển card');
+      toast.error(resolveApiErrorMessage(err, 'Không thể chuyển card'));
       throw err;
     }
   };
@@ -744,7 +770,7 @@ const OrganizationMainPanel = ({
   const handleUpdateBoardCard = async (cardId, updates) => {
     if (!cardId || !selectedTaskBoardId) return;
     try {
-      const res = await taskAPI.updateBoardCard(String(cardId), updates || {});
+      const res = await taskAPI.updateBoardCard(String(cardId), updates || {}, taskBoardApiCtx);
       const updated = unwrapTaskApiPayload(res);
       setTaskBoardDetail((prev) => {
         if (!prev?.cards) return prev;
@@ -760,7 +786,7 @@ const OrganizationMainPanel = ({
         return { ...prev, cards };
       });
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Không thể cập nhật card');
+      toast.error(resolveApiErrorMessage(err, 'Không thể cập nhật card'));
       throw err;
     }
   };
@@ -797,7 +823,7 @@ const OrganizationMainPanel = ({
     return {
       ...ent,
       composerBar: isDarkMode
-        ? 'relative mt-auto shrink-0 rounded-b-xl border-t border-white/[0.06] bg-[#11141C]/98 px-4 pb-3 pt-2.5'
+        ? 'relative mt-auto shrink-0 rounded-b-xl border-t border-white/[0.06] bg-transparent px-4 pb-3 pt-2.5'
         : 'relative mt-auto shrink-0 rounded-b-xl border-t border-slate-200/80 bg-white px-4 pb-3 pt-2.5',
       composerWrap: 'shrink-0 bg-transparent p-0',
     };
@@ -1238,8 +1264,8 @@ const OrganizationMainPanel = ({
           </div>
         </aside>
 
-        <div className={`${workspace.main} h-full min-h-0 overflow-hidden`}>
-          <header className={workspace.header}>
+        <div className={`${workspace.main} h-full min-h-0 overflow-hidden ${isDarkMode ? '!bg-transparent' : ''}`}>
+          <header className={`${workspace.header} ${isDarkMode ? '!bg-transparent' : ''}`}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <nav
@@ -1380,6 +1406,7 @@ const OrganizationMainPanel = ({
             ) : workspaceTab === 'tasks' ? (
               <TaskBoardWorkspacePanel
                 isDarkMode={isDarkMode}
+                workspaceSlug={workspaceSlugForTask}
                 boards={taskBoards}
                 accessibleBoards={accessibleTaskBoards}
                 selectedBoardId={selectedTaskBoardId}
@@ -1577,18 +1604,15 @@ const OrganizationMainPanel = ({
                           </div>
                         )}
                         <div className="flex w-full items-start justify-start gap-3">
-                        <div
-                          className="mt-0.5 flex h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-bold text-white shadow-inner"
+                        <UserAvatar
+                          avatar={avatarUrl}
+                          userId={senderUserId(message, isMine, currentUser)}
+                          name={displayName}
+                          size="md"
+                          className="mt-0.5"
                           title={displayName}
-                        >
-                          {avatarUrl && String(avatarUrl).startsWith('http') ? (
-                            <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="flex h-full w-full items-center justify-center">
-                              {avatarInitials}
-                            </span>
-                          )}
-                        </div>
+                          ringClassName="shadow-inner"
+                        />
                         <div className="min-w-0 max-w-[min(100%,42rem)] flex-1">
                           <div
                             className="mb-1 flex flex-wrap items-center gap-2 justify-start"
@@ -1984,6 +2008,7 @@ const OrganizationMainPanel = ({
         }}
         messageId={createTaskSourceMessage?._id || createTaskSourceMessage?.id}
         organizationId={orgIdForTask ? String(orgIdForTask) : null}
+        workspaceSlug={workspaceSlugForTask}
         currentUserId={currentUserId}
         mentions={createTaskMentions}
         channelId={selectedChannelId ? String(selectedChannelId) : null}

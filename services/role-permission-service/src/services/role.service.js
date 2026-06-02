@@ -4,11 +4,16 @@ const UserRole = require('../models/UserRole');
 const { getRedisClient, roleWebhook, logger } = require('/shared');
 const axios = require('axios');
 
-const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-  /\/$/,
-  ''
-);
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
+
+function roleServiceError(message, statusCode = 400, errorCode = 'ROLE_OPERATION_FAILED') {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.errorCode = errorCode;
+  return err;
+}
 
 /** Role gắn vị trí cây tổ chức (tag div_/dep_/team_ hoặc nhãn Khối/Phòng/Team). */
 function isHierarchyRoleName(name) {
@@ -100,7 +105,7 @@ class RoleService {
       // Kiểm tra role name đã tồn tại trong server chưa
       const existingRole = await Role.findOne({ name, serverId });
       if (existingRole) {
-        throw new Error('Role name already exists in this server');
+        throw roleServiceError('Tên vai trò đã tồn tại trong tổ chức', 400, 'ROLE_NAME_EXISTS');
       }
 
       const role = new Role({
@@ -126,7 +131,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error creating role:', error);
-      throw new Error(`Error creating role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -137,7 +142,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error getting role:', error);
-      throw new Error(`Error getting role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -152,7 +157,7 @@ class RoleService {
       return roles;
     } catch (error) {
       logger.error('Error getting roles:', error);
-      throw new Error(`Error getting roles: ${error.message}`);
+      throw error;
     }
   }
 
@@ -162,7 +167,7 @@ class RoleService {
       // Kiểm tra role tồn tại
       const role = await Role.findById(roleId);
       if (!role || role.serverId.toString() !== serverId.toString()) {
-        throw new Error('Role not found or invalid for this server');
+        throw roleServiceError('Không tìm thấy vai trò hợp lệ cho tổ chức', 400, 'ROLE_NOT_FOUND');
       }
 
       // Kiểm tra đã có role chưa
@@ -219,7 +224,7 @@ class RoleService {
       };
     } catch (error) {
       logger.error('Error assigning role:', error);
-      throw new Error(`Error assigning role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -233,7 +238,7 @@ class RoleService {
       });
 
       if (!userRole) {
-        throw new Error('User role not found');
+        throw roleServiceError('Không tìm thấy vai trò đã gán cho người dùng', 404, 'USER_ROLE_NOT_FOUND');
       }
 
       // Xóa cache permission
@@ -285,7 +290,7 @@ class RoleService {
       };
     } catch (error) {
       logger.error('Error removing role:', error);
-      throw new Error(`Error removing role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -305,7 +310,7 @@ class RoleService {
       return userRoles.map((ur) => ur.roleId);
     } catch (error) {
       logger.error('Error getting user roles:', error);
-      throw new Error(`Error getting user roles: ${error.message}`);
+      throw error;
     }
   }
 
@@ -328,7 +333,7 @@ class RoleService {
       );
 
       if (!role) {
-        throw new Error('Role not found');
+        throw roleServiceError('Không tìm thấy vai trò', 404, 'ROLE_NOT_FOUND');
       }
 
       // Xóa cache
@@ -342,7 +347,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error updating role:', error);
-      throw new Error(`Error updating role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -356,7 +361,7 @@ class RoleService {
       );
 
       if (!role) {
-        throw new Error('Role not found');
+        throw roleServiceError('Không tìm thấy vai trò', 404, 'ROLE_NOT_FOUND');
       }
 
       // Xóa tất cả user roles
@@ -376,7 +381,7 @@ class RoleService {
       return role;
     } catch (error) {
       logger.error('Error deleting role:', error);
-      throw new Error(`Error deleting role: ${error.message}`);
+      throw error;
     }
   }
 
@@ -400,8 +405,71 @@ class RoleService {
       };
     } catch (error) {
       logger.error('Error purgeByServerContext:', error);
-      throw new Error(`Error purgeByServerContext: ${error.message}`);
+      throw error;
     }
+  }
+
+  hasRoleReadPermission(permissions) {
+    return (permissions || []).some(
+      (perm) =>
+        perm?.resource === 'role' &&
+        Array.isArray(perm.actions) &&
+        (perm.actions.includes('read') || perm.actions.includes('*') || perm.actions.includes('admin'))
+    );
+  }
+
+  withRoleReadPermission(permissions) {
+    const perms = Array.isArray(permissions)
+      ? permissions.map((perm) => ({
+          resource: perm.resource,
+          actions: Array.isArray(perm.actions) ? [...perm.actions] : [],
+        }))
+      : [];
+    const rolePerm = perms.find((perm) => perm.resource === 'role');
+    if (rolePerm) {
+      if (!rolePerm.actions.includes('read')) {
+        rolePerm.actions.push('read');
+      }
+      return perms;
+    }
+    perms.push({ resource: 'role', actions: ['read'] });
+    return perms;
+  }
+
+  /**
+   * Bổ sung role:read cho role org cũ (member/admin/HR) để GET /api/roles/* không 403.
+   */
+  async backfillRoleReadPermission(serverId = null) {
+    const filter = {};
+    if (serverId) {
+      const sid = new mongoose.Types.ObjectId(String(serverId));
+      filter.$or = [{ serverId: sid }, { organizationId: sid }];
+    }
+    const roles = await Role.find(filter).select('permissions serverId').lean();
+    let updated = 0;
+    const redis = getRedisClient();
+    const touchedServers = new Set();
+
+    for (const role of roles) {
+      if (this.hasRoleReadPermission(role.permissions)) continue;
+      const nextPermissions = this.withRoleReadPermission(role.permissions);
+      await Role.updateOne({ _id: role._id }, { $set: { permissions: nextPermissions } });
+      updated += 1;
+      if (role.serverId) touchedServers.add(String(role.serverId));
+    }
+
+    if (redis && touchedServers.size > 0) {
+      for (const sid of touchedServers) {
+        try {
+          const keys = await redis.keys(`permissions:*:${sid}`);
+          if (keys?.length) await redis.del(...keys);
+        } catch (cacheErr) {
+          logger.warn('[role.service] backfillRoleReadPermission cache purge', cacheErr.message);
+        }
+      }
+    }
+
+    return { scanned: roles.length, updated, serverId: serverId ? String(serverId) : null };
   }
 }
 

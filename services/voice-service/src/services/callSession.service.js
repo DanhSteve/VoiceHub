@@ -1,3 +1,5 @@
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
 const axios = require('axios');
 const mongoose = require('../db');
 const CallSession = require('../models/CallSession');
@@ -5,21 +7,119 @@ const { applyCallAction } = require('../call/callFsm');
 const { emitRealtimeEvent } = require('/shared/utils/realtime');
 const { logger } = require('/shared');
 
-const FRIEND_SERVICE_URL = process.env.FRIEND_SERVICE_URL || 'http://friend-service:3014';
+const FRIEND_SERVICE_URL = String(process.env.FRIEND_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!FRIEND_SERVICE_URL) throw new Error('Thiếu biến môi trường: FRIEND_SERVICE_URL');
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
+const USER_SERVICE_INTERNAL_TOKEN = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
+const CHAT_INTERNAL_TOKEN = String(process.env.CHAT_INTERNAL_TOKEN || '').trim();
+
+/** Luôn ưu tiên gọi thẳng chat-service (S2S), tránh lọt qua gateway JWT. */
+function resolveChatServiceBaseUrl() {
+  const direct = String(process.env.CHAT_SERVICE_DIRECT_URL || '').trim();
+  if (direct) return direct.replace(/\/+$/, '');
+
+  const base = CHAT_SERVICE_URL;
+  if (
+    /:3000$/.test(base) ||
+    base.includes('api-gateway') ||
+    base.includes('voicehub.local')
+  ) {
+    const err = new Error(
+      'CHAT_SERVICE_URL phải trỏ trực tiếp chat-service (S2S). Dùng CHAT_SERVICE_DIRECT_URL nếu cần override.'
+    );
+    err.code = 'INVALID_CHAT_SERVICE_URL';
+    throw err;
+  }
+  return base;
+}
+
+const CHAT_SERVICE_BASE_URL = resolveChatServiceBaseUrl();
+
+function chatInternalHeaders() {
+  return {
+    'x-internal-token': CHAT_INTERNAL_TOKEN,
+    'x-chat-internal-token': CHAT_INTERNAL_TOKEN,
+  };
+}
 const RING_MS = Math.max(5000, Number(process.env.CALL_RING_TIMEOUT_MS || 45000));
 
 const ringTimers = new Map();
 
-function basePayload(session) {
+function basePayload(session, extra = {}) {
   return {
     callId: String(session._id),
     roomId: session.roomId,
     fromUserId: session.callerId,
     toUserId: session.calleeId,
+    fromDisplayName: String(session.callerDisplayName || extra.fromDisplayName || '').trim(),
     status: session.status,
     media: session.media || 'video',
     timestamp: new Date().toISOString(),
+    ...extra,
   };
+}
+
+async function fetchUserDisplayName(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid || !USER_SERVICE_INTERNAL_TOKEN) return '';
+  try {
+    const resp = await axios.get(
+      `${USER_SERVICE_URL}/api/users/internal/profile/${encodeURIComponent(uid)}`,
+      {
+        headers: { 'x-internal-token': USER_SERVICE_INTERNAL_TOKEN },
+        timeout: 8000,
+        validateStatus: () => true,
+      }
+    );
+    if (resp.status !== 200) return '';
+    const u = resp.data?.data ?? resp.data;
+    const parts = [u?.lastName, u?.firstName].filter(Boolean).join(' ').trim();
+    return String(parts || u?.displayName || u?.username || '').trim();
+  } catch (err) {
+    logger.warn('[callSession] fetch caller name failed:', err?.message || err);
+    return '';
+  }
+}
+
+async function publishCallLogMessage(session) {
+  if (!session?.startedAt || !session?.endedAt) return;
+  if (!CHAT_INTERNAL_TOKEN) {
+    logger.warn('[callSession] CHAT_INTERNAL_TOKEN missing; skip call log message');
+    return;
+  }
+  const durationSec = Math.max(
+    0,
+    Math.floor((new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime()) / 1000)
+  );
+  const body = {
+    callerId: String(session.callerId),
+    calleeId: String(session.calleeId),
+    media: session.media || 'video',
+    durationSec,
+  };
+  const directChat = String(process.env.CHAT_SERVICE_DIRECT_URL || '').trim().replace(/\/+$/, '');
+  const candidates = [CHAT_SERVICE_BASE_URL, directChat].filter(Boolean);
+  const bases = [...new Set(candidates)];
+
+  for (const base of bases) {
+    try {
+      const resp = await axios.post(`${base}/api/messages/internal/call-log`, body, {
+        headers: chatInternalHeaders(),
+        timeout: 12000,
+        validateStatus: () => true,
+      });
+      if (resp.status >= 200 && resp.status < 300) {
+        logger.info(`[callSession] call log published via ${base} (${durationSec}s)`);
+        return;
+      }
+      logger.warn(
+        `[callSession] call log publish HTTP ${resp.status} @ ${base}: ${resp.data?.message || 'unknown'}`
+      );
+    } catch (err) {
+      logger.warn(`[callSession] call log publish failed @ ${base}:`, err?.message || err);
+    }
+  }
 }
 
 async function emitToBoth(eventName, session, extra = {}) {
@@ -164,6 +264,9 @@ async function initiate({ callerId, calleeId, media, authorizationHeader }) {
 
   scheduleRingTimeout(doc._id);
 
+  const fromDisplayName = await fetchUserDisplayName(c1);
+  if (fromDisplayName) doc.callerDisplayName = fromDisplayName;
+
   await emitRealtimeEvent({
     event: 'call:invite',
     userId: String(c2),
@@ -262,6 +365,7 @@ async function end(callId, userId) {
   doc.endedReason = r.endedReason;
   await doc.save();
   await emitToBoth('call:ended', doc, { endedReason: r.endedReason });
+  await publishCallLogMessage(doc);
   return doc;
 }
 
@@ -272,6 +376,44 @@ function startRingSweepInterval() {
   }, ms);
 }
 
+const FRIEND_ROOM_PREFIX = 'friend-1on1-';
+
+async function assertFriendCallRoomAccess(roomId, userId) {
+  const rid = String(roomId || '').trim();
+  if (!rid.startsWith(FRIEND_ROOM_PREFIX)) {
+    return null;
+  }
+  const callId = rid.slice(FRIEND_ROOM_PREFIX.length);
+  if (!mongoose.Types.ObjectId.isValid(callId)) {
+    const e = new Error('Invalid friend call room');
+    e.statusCode = 403;
+    throw e;
+  }
+  const doc = await CallSession.findById(callId).lean();
+  if (!doc) {
+    const e = new Error('Call session not found');
+    e.statusCode = 404;
+    throw e;
+  }
+  const uid = String(userId || '').trim();
+  if (uid !== String(doc.callerId) && uid !== String(doc.calleeId)) {
+    const e = new Error('Forbidden');
+    e.statusCode = 403;
+    throw e;
+  }
+  if (!['accepted', 'ringing'].includes(String(doc.status || ''))) {
+    const e = new Error('Call not active');
+    e.statusCode = 403;
+    throw e;
+  }
+  if (doc.roomId && String(doc.roomId) !== rid) {
+    const e = new Error('Room mismatch');
+    e.statusCode = 403;
+    throw e;
+  }
+  return doc;
+}
+
 module.exports = {
   initiate,
   accept,
@@ -279,6 +421,7 @@ module.exports = {
   cancel,
   end,
   getByIdForUser,
+  assertFriendCallRoomAccess,
   sweepExpiredRinging,
   startRingSweepInterval,
   basePayload,

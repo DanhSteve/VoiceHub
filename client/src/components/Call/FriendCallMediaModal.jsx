@@ -1,14 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { Circle, Mic, MicOff, PhoneOff, Square, Video, VideoOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 import friendCallService from '../../services/friendCallService';
-import { acquireMicStream, buildAudioConstraints } from '../../pages/Voice/voiceAudioPrefs';
+import userService from '../../services/userService';
+import {
+  acquireFriendCallMediaStream,
+  acquireMicStream,
+  acquireVideoStream,
+  formatMediaDeviceError,
+  loadVoiceAudioPrefs,
+  shouldAbortMediaRetry,
+} from '../../pages/Voice/voiceAudioPrefs';
 import { useAuth } from '../../context/AuthContext';
 import { useFriendCallSession } from '../../context/FriendCallSessionContext';
+import { useAudioSpeaking } from '../../hooks/useAudioSpeaking';
+import { useFriendsList } from '../../hooks/queries';
 import { useAppStrings } from '../../locales/appStrings';
+import { voiceSpeakingRingClass } from '../../utils/avatarDisplay';
 import { getUserDisplayName } from '../../utils/helpers';
+import {
+  pickPeerDisplayLabel,
+  resolveFriendProfileFromList,
+} from '../../utils/resolveFriendDisplayName';
 import { resolveAppOrigin } from '../../utils/browserOrigin';
 import UserAvatar from '../Shared/UserAvatar';
 
@@ -60,6 +75,29 @@ function buildRecordingStream(localStream, remoteStream) {
   return out;
 }
 
+function FriendCallPeerPresence({ name, avatar, isSpeaking, voiceLevel }) {
+  const ringClass = voiceSpeakingRingClass(isSpeaking);
+  const ringStyle = isSpeaking
+    ? {
+        boxShadow: `0 0 ${10 + voiceLevel * 24}px rgba(52,211,153,${0.3 + voiceLevel * 0.5})`,
+      }
+    : undefined;
+
+  return (
+    <div className="flex flex-col items-center gap-4 px-4">
+      <div
+        className="rounded-2xl p-1 transition-[box-shadow] duration-100"
+        style={ringStyle}
+      >
+        <UserAvatar avatar={avatar} name={name} size="hero" ringClassName={ringClass} />
+      </div>
+      <p className="max-w-[min(100%,20rem)] truncate text-center text-lg font-semibold text-white">
+        {name}
+      </p>
+    </div>
+  );
+}
+
 /**
  * Modal cuộc gọi 1-1 (mediasoup) — recv trước produce, hangup/mute phản hồi ngay, cam + ghi âm thật.
  */
@@ -71,11 +109,15 @@ export default function FriendCallMediaModal() {
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState('');
   const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOff, setIsCameraOff] = useState(true);
+  const [isCameraOff, setIsCameraOff] = useState(() => session?.media === 'audio');
+  const [hasLocalVideoTrack, setHasLocalVideoTrack] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [remoteTile, setRemoteTile] = useState(null);
+  const [fetchedPeer, setFetchedPeer] = useState({ name: '', avatar: null });
+  const friendsQuery = useFriendsList();
 
   const localVideoRef = useRef(null);
+  const sessionPeerRef = useRef({ label: '', avatar: null });
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const mediasoupRef = useRef({
@@ -97,6 +139,70 @@ export default function FriendCallMediaModal() {
 
   const displayName =
     getUserDisplayName(user) || user?.email?.split('@')[0] || t('common.you');
+
+  const micDeviceId = useMemo(() => {
+    const uid = user?.id || user?._id || user?.userId || '';
+    return loadVoiceAudioPrefs(uid).micDeviceId || '';
+  }, [user?.id, user?._id, user?.userId]);
+
+  useEffect(() => {
+    if (!session?.callId) return;
+    setIsCameraOff(session.media === 'audio');
+    setHasLocalVideoTrack(false);
+    setRemoteTile(null);
+    setError('');
+  }, [session?.callId, session?.media]);
+
+  useEffect(() => {
+    sessionPeerRef.current = {
+      label: session?.peerLabel || '',
+      avatar: session?.peerAvatar || null,
+    };
+  }, [session?.peerLabel, session?.peerAvatar]);
+
+  useEffect(() => {
+    const uid = String(session?.peerUserId || '').trim();
+    if (!uid) {
+      setFetchedPeer({ name: '', avatar: null });
+      return undefined;
+    }
+    const fromFriends = resolveFriendProfileFromList(friendsQuery.data, uid);
+    if (fromFriends.name || fromFriends.avatar) {
+      setFetchedPeer(fromFriends);
+      return undefined;
+    }
+    let cancelled = false;
+    userService
+      .getProfile(uid)
+      .then((resp) => {
+        if (cancelled) return;
+        const u = resp?.data?.data ?? resp?.data;
+        const name =
+          String(u?.displayName || u?.username || '').trim() || getUserDisplayName(u);
+        setFetchedPeer({ name, avatar: u?.avatar || null });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.peerUserId, friendsQuery.data]);
+
+  const peerDisplayName = useMemo(() => {
+    const fallback = t('friendChat.friendDefault');
+    const sessionName = session?.peerLabel || fetchedPeer.name || '';
+    const socketName = remoteTile?.displayName || '';
+    return pickPeerDisplayLabel(socketName, sessionName, fallback);
+  }, [remoteTile?.displayName, session?.peerLabel, fetchedPeer.name, t]);
+
+  const peerAvatar = session?.peerAvatar || fetchedPeer.avatar || remoteTile?.avatar || null;
+
+  const { isSpeaking: remoteSpeaking, level: remoteVoiceLevel } = useAudioSpeaking(
+    remoteTile?.stream,
+    {
+      enabled: Boolean(remoteTile?.stream),
+      monitorKey: session?.callId ? `friend-call-${session.callId}` : 'friend-call',
+    }
+  );
 
   const teardown = useCallback(async ({ notifyServer = true } = {}) => {
     if (tearingDownRef.current) return;
@@ -186,6 +292,8 @@ export default function FriendCallMediaModal() {
     roomIdRef.current = '';
     callIdRef.current = '';
     setRemoteTile(null);
+    setHasLocalVideoTrack(false);
+    setIsCameraOff(true);
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
@@ -221,10 +329,14 @@ export default function FriendCallMediaModal() {
       });
 
     const updateRemoteTile = (socketId, displayNameLabel, stream) => {
-      const hasVideo = Boolean(stream?.getVideoTracks?.().length);
+      const hasVideo = Boolean(
+        stream?.getVideoTracks?.().some((tr) => tr.readyState === 'live' || tr.readyState === 'ended')
+      );
+      const sess = sessionPeerRef.current;
       setRemoteTile({
         socketId,
-        displayName: displayNameLabel || peerLabel,
+        displayName: pickPeerDisplayLabel(displayNameLabel, sess.label || peerLabel, peerLabel),
+        avatar: sess.avatar,
         stream,
         hasVideo,
       });
@@ -275,17 +387,27 @@ export default function FriendCallMediaModal() {
         roomId: roomIdRef.current,
         consumerId: consumer.id,
       });
-      consumer.resume();
-      if (consumer.track) consumer.track.enabled = true;
+      if (consumer.paused) {
+        await consumer.resume();
+      }
+      if (consumer.track && !consumer.track.enabled) {
+        consumer.track.enabled = true;
+      }
 
       const stream = currentStream;
-      requestAnimationFrame(() => {
-        if (stream.getVideoTracks().length > 0 && remoteVideoRef.current) {
-          void playRemoteStream(remoteVideoRef.current, stream);
-        } else if (remoteAudioRef.current) {
-          void playRemoteStream(remoteAudioRef.current, stream);
-        }
-      });
+      const attachPlayback = () => {
+        requestAnimationFrame(() => {
+          if (stream.getVideoTracks().length > 0 && remoteVideoRef.current) {
+            void playRemoteStream(remoteVideoRef.current, stream);
+          } else if (remoteAudioRef.current) {
+            void playRemoteStream(remoteAudioRef.current, stream);
+          }
+        });
+      };
+      attachPlayback();
+      if (consumer.track) {
+        consumer.track.onunmute = attachPlayback;
+      }
     };
 
     (async () => {
@@ -293,6 +415,7 @@ export default function FriendCallMediaModal() {
       setError('');
       setRemoteTile(null);
       setIsCameraOff(!startWithVideo);
+      let videoCallDegraded = false;
 
       try {
         await api
@@ -302,20 +425,31 @@ export default function FriendCallMediaModal() {
           .catch(() => null);
         if (cancelled) return;
 
-        const localStream = startWithVideo
-          ? await navigator.mediaDevices.getUserMedia({
-              audio: buildAudioConstraints(''),
-              video: true,
-            })
-          : await acquireMicStream('');
+        let localStream;
+        if (startWithVideo) {
+          try {
+            localStream = await acquireFriendCallMediaStream({ micDeviceId });
+          } catch (mediaErr) {
+            if (shouldAbortMediaRetry(mediaErr)) throw mediaErr;
+            console.warn('[friend-call] video+audio failed, trying audio-only', mediaErr);
+            toast.error(formatMediaDeviceError(mediaErr, t));
+            toast(t('friendChat.callCameraFallbackAudio'), { icon: '📷' });
+            localStream = await acquireMicStream(micDeviceId);
+            videoCallDegraded = true;
+          }
+        } else {
+          localStream = await acquireMicStream(micDeviceId);
+        }
         if (cancelled) {
           localStream.getTracks().forEach((tr) => tr.stop());
           return;
         }
 
         mediasoupRef.current.localStream = localStream;
-        if (localVideoRef.current && localStream.getVideoTracks().length) {
-          localVideoRef.current.srcObject = localStream;
+        const hasVideo = !videoCallDegraded && localStream.getVideoTracks().length > 0;
+        setHasLocalVideoTrack(hasVideo);
+        if (videoCallDegraded || !hasVideo) {
+          setIsCameraOff(true);
         }
 
         const token = normalizeToken(localStorage.getItem('token'));
@@ -428,7 +562,7 @@ export default function FriendCallMediaModal() {
           });
         }
 
-        if (startWithVideo) {
+        if (startWithVideo && hasVideo) {
           const videoTrack = localStream.getVideoTracks()[0];
           if (videoTrack && device.canProduce('video')) {
             videoTrack.enabled = true;
@@ -437,13 +571,21 @@ export default function FriendCallMediaModal() {
               appData: { mediaTag: 'video' },
             });
             setIsCameraOff(false);
+            setHasLocalVideoTrack(true);
           }
         }
 
         setIsMuted(false);
       } catch (e) {
         console.error(e);
-        const msg = e?.message || t('voiceRoom.connectFail');
+        const msg =
+          e?.name === 'NotAllowedError' ||
+          e?.name === 'NotReadableError' ||
+          e?.name === 'NotFoundError' ||
+          e?.name === 'OverconstrainedError' ||
+          /could not start video source/i.test(String(e?.message || ''))
+            ? formatMediaDeviceError(e, t)
+            : e?.message || t('voiceRoom.connectFail');
         setError(msg);
         toast.error(msg);
         closeFriendCall();
@@ -457,7 +599,29 @@ export default function FriendCallMediaModal() {
       cancelled = true;
       void teardown({ notifyServer: true });
     };
-  }, [session?.callId, session?.roomId, session?.media, session?.peerLabel, displayName, t, teardown, closeFriendCall]);
+  }, [
+    session?.callId,
+    session?.roomId,
+    session?.media,
+    micDeviceId,
+    displayName,
+    t,
+    teardown,
+    closeFriendCall,
+  ]);
+
+  useEffect(() => {
+    const el = localVideoRef.current;
+    const stream = mediasoupRef.current.localStream;
+    if (!el || !stream || isCameraOff || !hasLocalVideoTrack) {
+      if (el) el.srcObject = null;
+      return;
+    }
+    if (el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+    el.play?.().catch(() => {});
+  }, [hasLocalVideoTrack, isCameraOff, joining]);
 
   useEffect(() => {
     const v = remoteVideoRef.current;
@@ -475,6 +639,28 @@ export default function FriendCallMediaModal() {
       if (v) v.srcObject = null;
     }
   }, [remoteTile]);
+
+  const bindRemoteVideoRef = useCallback(
+    (node) => {
+      remoteVideoRef.current = node;
+      if (node && remoteTile?.hasVideo && remoteTile?.stream) {
+        void playRemoteStream(node, remoteTile.stream);
+      }
+    },
+    [remoteTile]
+  );
+
+  const bindLocalVideoRef = useCallback(
+    (node) => {
+      localVideoRef.current = node;
+      const stream = mediasoupRef.current.localStream;
+      if (node && stream && !isCameraOff && hasLocalVideoTrack) {
+        if (node.srcObject !== stream) node.srcObject = stream;
+        node.play?.().catch(() => {});
+      }
+    },
+    [isCameraOff, hasLocalVideoTrack]
+  );
 
   const handleHangup = () => {
     closeFriendCall();
@@ -505,10 +691,7 @@ export default function FriendCallMediaModal() {
           toast.error(t('friendChat.callCodecVideoFail'));
           return;
         }
-        const cam = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
+        const cam = await acquireVideoStream();
         const vt = cam.getVideoTracks()[0];
         if (!vt) return;
 
@@ -526,9 +709,7 @@ export default function FriendCallMediaModal() {
             appData: { mediaTag: 'video' },
           });
         }
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = localStream;
-        }
+        setHasLocalVideoTrack(true);
         setIsCameraOff(false);
       } else {
         mediasoupRef.current.videoProducer?.close();
@@ -537,12 +718,12 @@ export default function FriendCallMediaModal() {
           tr.stop();
           localStream.removeTrack(tr);
         });
-        if (localVideoRef.current) localVideoRef.current.srcObject = null;
+        setHasLocalVideoTrack(false);
         setIsCameraOff(true);
       }
     } catch (err) {
       console.error(err);
-      toast.error(t('voiceRoom.camFail'));
+      toast.error(formatMediaDeviceError(err, t));
     }
   };
 
@@ -609,7 +790,8 @@ export default function FriendCallMediaModal() {
 
   if (!session) return null;
 
-  const showLocalVideo = !isCameraOff && mediasoupRef.current.localStream?.getVideoTracks?.().length;
+  const isAudioCall = session?.media === 'audio';
+  const showLocalVideo = !isAudioCall && !isCameraOff && hasLocalVideoTrack;
 
   return (
     <div
@@ -620,7 +802,7 @@ export default function FriendCallMediaModal() {
     >
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
         <h1 id="friend-call-modal-title" className="text-sm font-semibold tracking-tight">
-          {session.peerLabel || t('friendChat.incomingCallTitle')}
+          {peerDisplayName}
         </h1>
         <span className="text-xs text-white/50">
           {session.media === 'audio' ? t('friendChat.incomingCallAudio') : t('friendChat.incomingCallVideo')}
@@ -639,24 +821,30 @@ export default function FriendCallMediaModal() {
 
         <div className="relative aspect-video w-full max-w-3xl overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
           {remoteTile?.hasVideo && remoteTile?.stream ? (
-            <video ref={remoteVideoRef} className="h-full w-full object-cover" autoPlay playsInline />
+            <>
+              <video ref={bindRemoteVideoRef} className="h-full w-full object-cover" autoPlay playsInline />
+              <audio ref={remoteAudioRef} autoPlay playsInline className="sr-only" />
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pb-4 pt-10">
+                <p className="truncate text-center text-base font-semibold text-white">{peerDisplayName}</p>
+              </div>
+            </>
           ) : (
             <>
               <audio ref={remoteAudioRef} autoPlay playsInline className="sr-only" />
-              <div className="flex h-full min-h-[220px] w-full flex-col items-center justify-center gap-2 bg-zinc-900">
-                <UserAvatar
-                  avatar={remoteTile?.avatar}
-                  name={remoteTile?.displayName || session.peerLabel}
-                  size="2xl"
+              <div className="flex h-full min-h-[280px] w-full items-center justify-center bg-zinc-900">
+                <FriendCallPeerPresence
+                  name={peerDisplayName}
+                  avatar={peerAvatar}
+                  isSpeaking={remoteSpeaking}
+                  voiceLevel={remoteVoiceLevel}
                 />
-                <p className="text-sm text-white/80">{remoteTile?.displayName || session.peerLabel || '…'}</p>
               </div>
             </>
           )}
 
           {showLocalVideo && (
             <div className="absolute bottom-3 right-3 h-28 w-40 overflow-hidden rounded-lg border border-white/20 bg-black shadow-lg">
-              <video ref={localVideoRef} className="h-full w-full object-cover" autoPlay playsInline muted />
+              <video ref={bindLocalVideoRef} className="h-full w-full object-cover" autoPlay playsInline muted />
             </div>
           )}
         </div>
@@ -674,28 +862,32 @@ export default function FriendCallMediaModal() {
         >
           {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
         </button>
-        <button
-          type="button"
-          onClick={() => void toggleCamera()}
-          disabled={joining}
-          className={`flex h-12 w-12 items-center justify-center rounded-full ${
-            isCameraOff ? 'bg-white/10 hover:bg-white/20' : 'bg-emerald-600/90 hover:bg-emerald-500'
-          }`}
-          aria-label={isCameraOff ? t('friendChat.callCamOn') : t('friendChat.callCamOff')}
-        >
-          {isCameraOff ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
-        </button>
-        <button
-          type="button"
-          onClick={toggleRecord}
-          disabled={joining}
-          className={`flex h-12 w-12 items-center justify-center rounded-full ${
-            isRecording ? 'bg-red-600 animate-pulse' : 'bg-white/10 hover:bg-white/20'
-          }`}
-          aria-label={isRecording ? t('friendChat.callRecordStop') : t('friendChat.callRecordStart')}
-        >
-          {isRecording ? <Square className="h-5 w-5 fill-current" /> : <Circle className="h-5 w-5" />}
-        </button>
+        {!isAudioCall && (
+          <button
+            type="button"
+            onClick={() => void toggleCamera()}
+            disabled={joining}
+            className={`flex h-12 w-12 items-center justify-center rounded-full ${
+              isCameraOff ? 'bg-white/10 hover:bg-white/20' : 'bg-emerald-600/90 hover:bg-emerald-500'
+            }`}
+            aria-label={isCameraOff ? t('friendChat.callCamOn') : t('friendChat.callCamOff')}
+          >
+            {isCameraOff ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
+          </button>
+        )}
+        {!isAudioCall && (
+          <button
+            type="button"
+            onClick={toggleRecord}
+            disabled={joining}
+            className={`flex h-12 w-12 items-center justify-center rounded-full ${
+              isRecording ? 'bg-red-600 animate-pulse' : 'bg-white/10 hover:bg-white/20'
+            }`}
+            aria-label={isRecording ? t('friendChat.callRecordStop') : t('friendChat.callRecordStart')}
+          >
+            {isRecording ? <Square className="h-5 w-5 fill-current" /> : <Circle className="h-5 w-5" />}
+          </button>
+        )}
         <button
           type="button"
           onClick={handleHangup}

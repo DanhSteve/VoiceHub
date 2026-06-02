@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowRight, CheckCircle2, LogIn, Mail } from 'lucide-react';
 import AuthPageLayout from '../../components/Auth/AuthPageLayout';
@@ -12,7 +12,13 @@ import { useAppStrings } from '../../locales/appStrings';
 function ForgotPasswordPage() {
   const { isDarkMode } = useTheme();
   const { t } = useAppStrings();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
+
+  useEffect(() => {
+    const fromQuery = String(searchParams.get('email') || '').trim();
+    if (fromQuery) setEmail(fromQuery);
+  }, [searchParams]);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [devResetUrl, setDevResetUrl] = useState('');

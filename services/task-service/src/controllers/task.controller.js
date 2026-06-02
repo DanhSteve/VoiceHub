@@ -3,6 +3,7 @@ const taskService = require('../services/task.service');
 const Task = require('../models/Task');
 const mongoose = require('../db');
 const { logger } = require('/shared');
+const { isEncryptionEnabled } = require('/shared/utils/fieldCrypto');
 const { buildTrustedGatewayHeaders } = require('/shared/middleware/gatewayTrust');
 const { publishTaskFromFileJob } = require('../messaging/taskFromFilePublisher');
 const {
@@ -13,12 +14,25 @@ const {
   userCanAccessTask,
 } = require('../services/taskWorkspaceScope');
 
-const CHAT_SERVICE_URL = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
 const CHAT_INTERNAL_TOKEN = process.env.CHAT_INTERNAL_TOKEN || '';
-const ORGANIZATION_SERVICE_URL = (process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013').replace(
-  /\/$/,
-  ''
-);
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
+
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const isServerError = status >= 500;
+  const safeMessage = isServerError
+    ? 'Hệ thống tạm thời gặp sự cố. Vui lòng thử lại sau.'
+    : String(err?.message || fallbackMessage);
+  return res.status(status).json({
+    success: false,
+    message: safeMessage,
+    errorCode: String(err?.errorCode || fallbackCode || (isServerError ? 'TASK_INTERNAL_ERROR' : '')).trim(),
+    messageUser: safeMessage,
+  });
+}
 
 class TaskController {
   // Tạo task mới
@@ -96,10 +110,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Create task error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể tạo task', 'TASK_CREATE_FAILED');
     }
   }
 
@@ -154,10 +165,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Get task error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải task', 'TASK_GET_FAILED');
     }
   }
 
@@ -262,18 +270,24 @@ class TaskController {
 
       const searchQ = first(q.q);
       if (searchQ != null && String(searchQ).trim() !== '') {
-        const esc = String(searchQ)
-          .trim()
-          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const textSearch = {
-          $or: [
-            { title: { $regex: esc, $options: 'i' } },
-            { description: { $regex: esc, $options: 'i' } },
-          ],
-        };
-        const existing = { ...filter };
-        Object.keys(filter).forEach((k) => delete filter[k]);
-        filter.$and = [existing, textSearch];
+        if (isEncryptionEnabled()) {
+          logger.warn(
+            '[TaskController] Bỏ qua tìm kiếm text (q) — title/description đã mã hóa at-rest'
+          );
+        } else {
+          const esc = String(searchQ)
+            .trim()
+            .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const textSearch = {
+            $or: [
+              { title: { $regex: esc, $options: 'i' } },
+              { description: { $regex: esc, $options: 'i' } },
+            ],
+          };
+          const existing = { ...filter };
+          Object.keys(filter).forEach((k) => delete filter[k]);
+          filter.$and = [existing, textSearch];
+        }
       }
 
       let sort = { createdAt: -1 };
@@ -327,10 +341,7 @@ class TaskController {
           message: error.message || 'Invalid query parameter',
         });
       }
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải danh sách task', 'TASK_LIST_FAILED');
     }
   }
 
@@ -406,10 +417,7 @@ class TaskController {
           message: error.message || 'Invalid organizationId',
         });
       }
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải thống kê task', 'TASK_STATS_FAILED');
     }
   }
 
@@ -434,10 +442,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Update task error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể cập nhật task', 'TASK_UPDATE_FAILED');
     }
   }
 
@@ -463,10 +468,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Delete task error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể xóa task', 'TASK_DELETE_FAILED');
     }
   }
 
@@ -549,10 +551,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('createTaskFromChatFile error:', error);
-      return res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể xử lý yêu cầu', 'TASK_FILE_CREATE_FAILED');
     }
   }
 
@@ -578,10 +577,7 @@ class TaskController {
       });
     } catch (error) {
       logger.error('Add comment error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể thêm bình luận', 'TASK_COMMENT_FAILED');
     }
   }
 
@@ -597,7 +593,7 @@ class TaskController {
       return res.json({ success: true, deletedCount: result.deletedCount });
     } catch (error) {
       logger.error('purgeOrganizationTasks error:', error);
-      return res.status(500).json({ success: false, message: error.message });
+      return sendError(res, error, 500, 'Không thể dọn dữ liệu task', 'TASK_PURGE_FAILED');
     }
   }
 }

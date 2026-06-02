@@ -1,6 +1,9 @@
+const path = require('path');
+const fs = require('fs');
 const userService = require('../services/user.service');
 const { logger, getRedisClient } = require('/shared');
 const { readPiiFromProfile } = require('../utils/profilePii');
+const { uploadsDir } = require('../config/uploadsPath');
 
 /** Định danh người gọi (chỉ từ userContext sau khi header gateway đã được tin cậy). */
 function actorUserId(req) {
@@ -15,6 +18,18 @@ function safeProfilePayload(profile) {
     ...plain,
     ...pii,
   };
+}
+
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const message = String(err?.message || fallbackMessage);
+  const errorCode = String(err?.errorCode || fallbackCode || '').trim();
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(errorCode ? { errorCode } : {}),
+    messageUser: message,
+  });
 }
 
 class UserController {
@@ -65,10 +80,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Create user profile error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể tạo hồ sơ người dùng', 'USER_CREATE_FAILED');
     }
   }
 
@@ -91,16 +103,30 @@ class UserController {
         });
       }
 
+      const profileEmail = String(userProfile?.email || '').trim().toLowerCase();
+      const authEmail = String(req.headers['x-user-email'] || req.user?.email || '')
+        .trim()
+        .toLowerCase();
+      if (!profileEmail && authEmail) {
+        try {
+          userProfile = await userService.updateUserEmailInternal(userId, authEmail);
+          logger.info(`Recovered missing profile email for userId=${userId}`);
+        } catch (repairErr) {
+          logger.warn(
+            `Failed to recover missing profile email for userId=${userId}: ${
+              repairErr?.message || 'unknown error'
+            }`
+          );
+        }
+      }
+
       res.json({
         success: true,
         data: safeProfilePayload(userProfile),
       });
     } catch (error) {
       logger.error('Get user profile error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải hồ sơ người dùng', 'USER_GET_FAILED');
     }
   }
 
@@ -129,10 +155,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Get user profile by username error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải hồ sơ người dùng', 'USER_GET_FAILED');
     }
   }
 
@@ -163,10 +186,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Get user profile by phone error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải hồ sơ người dùng', 'USER_GET_FAILED');
     }
   }
 
@@ -225,10 +245,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Get current user error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải thông tin người dùng', 'USER_CURRENT_FAILED');
     }
   }
 
@@ -259,10 +276,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Update user profile error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể cập nhật hồ sơ', 'USER_UPDATE_FAILED');
     }
   }
 
@@ -294,10 +308,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Update status error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể cập nhật trạng thái', 'USER_STATUS_FAILED');
     }
   }
 
@@ -352,10 +363,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('internalPresenceBatch error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tìm kiếm người dùng', 'USER_SEARCH_FAILED');
     }
   }
 
@@ -392,6 +400,31 @@ class UserController {
     }
   }
 
+  /**
+   * Cập nhật email profile từ auth-service sau khi xác thực đổi email thành công.
+   * PATCH body: { userId, email } — đã qua internalServiceAuth.
+   */
+  async patchInternalEmail(req, res) {
+    try {
+      const userId = String(req.body?.userId || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      if (!userId || !email) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId and email are required',
+        });
+      }
+      const userProfile = await userService.updateUserEmailInternal(userId, email);
+      return res.json({
+        success: true,
+        data: safeProfilePayload(userProfile),
+      });
+    } catch (error) {
+      logger.error('Internal patch email error:', error);
+      return sendError(res, error, 400, 'Không thể cập nhật email nội bộ', 'USER_INTERNAL_EMAIL_FAILED');
+    }
+  }
+
   // Tìm kiếm users
   async searchUsers(req, res) {
     try {
@@ -422,6 +455,30 @@ class UserController {
     }
   }
 
+  async getUserAvatar(req, res) {
+    try {
+      const requesterId = actorUserId(req);
+      if (!requesterId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      const { userId } = req.params;
+      const profile = await userService.getUserProfileById(userId);
+      if (!profile?.avatar) {
+        return res.status(404).json({ success: false, message: 'Avatar not found' });
+      }
+      const rel = String(profile.avatar).replace(/^\/uploads\//, '').replace(/^uploads\//, '');
+      const safeName = path.basename(rel);
+      const filePath = path.join(uploadsDir, safeName);
+      if (!filePath.startsWith(uploadsDir) || !fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, message: 'Avatar file not found' });
+      }
+      return res.sendFile(filePath);
+    } catch (error) {
+      logger.error('Get user avatar error:', error);
+      return sendError(res, error, 404, 'Không thể tải ảnh đại diện', 'USER_AVATAR_GET_FAILED');
+    }
+  }
+
   async uploadAvatar(req, res) {
     try {
       const userId = actorUserId(req);
@@ -447,10 +504,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Upload avatar error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message || 'Upload failed',
-      });
+      return sendError(res, error, 400, 'Không thể tải ảnh đại diện lên', 'USER_AVATAR_UPLOAD_FAILED');
     }
   }
 
@@ -485,10 +539,7 @@ class UserController {
       });
     } catch (error) {
       logger.error('Delete user profile error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể xóa hồ sơ người dùng', 'USER_DELETE_FAILED');
     }
   }
 }

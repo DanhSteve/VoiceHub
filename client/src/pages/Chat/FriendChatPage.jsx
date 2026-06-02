@@ -48,6 +48,7 @@ import { getUserDisplayName } from '../../utils/helpers';
 import { shouldPlaceToolbarBelowBubble } from '../../utils/messageToolbarPlacement';
 import { COMPOSER_EMOJI_LIST } from '../../utils/chatEmojiList';
 import { useSocket } from '../../context/SocketContext';
+import { resolveApiErrorMessage } from '../../utils/resolveApiErrorMessage';
 import { useFriendCallSession } from '../../context/FriendCallSessionContext';
 import friendCallService from '../../services/friendCallService';
 import { useTheme } from '../../context/ThemeContext';
@@ -64,6 +65,7 @@ import {
 import dmMessageService from '../../services/dmMessageService';
 import { isOutgoing } from '../../utils/dmChatHelpers';
 import { useFriendDmRealtime } from '../../hooks/useFriendDmRealtime';
+import { useFriendChatPageFocus } from '../../hooks/useFriendChatPageFocus';
 
 function messageDayKey(iso) {
   if (!iso) return '';
@@ -191,11 +193,9 @@ function FriendChatPage({ landingDemo = false } = {}) {
   const [pinnedMessagesModalOpen, setPinnedMessagesModalOpen] = useState(false);
   const [blockedByPeer, setBlockedByPeer] = useState(false);
   const { user } = useAuth();
-  const { openFriendCall } = useFriendCallSession();
+  const { outboundRinging, startOutboundRinging } = useFriendCallSession();
   const { emit, on, off, onlineUsers, connected: socketConnected } = useSocket();
-  /** Cuộc gọi đi: chờ accept / reject / timeout */
-  const [outboundCall, setOutboundCall] = useState(null);
-  const outboundCallRef = useRef(null);
+  useFriendChatPageFocus({ enabled: !landingDemo });
   const unfriendInFlightRef = useRef(false);
   const routedDmUserId = String(
     location.state?.openDmUserId || searchParams.get('openDmUserId') || ''
@@ -249,11 +249,6 @@ function FriendChatPage({ landingDemo = false } = {}) {
     setInlineToast({ message, type });
     setTimeout(() => setInlineToast(null), 3000);
   };
-
-  const clearOutboundCall = useCallback(() => {
-    setOutboundCall(null);
-    outboundCallRef.current = null;
-  }, []);
 
   const toggleMuteCurrentFriend = useCallback(() => {
     if (!currentFriendKey) return;
@@ -309,43 +304,18 @@ function FriendChatPage({ landingDemo = false } = {}) {
     [navigate, setActiveWorkspace]
   );
 
-  const cancelOutboundCall = useCallback(async () => {
-    const id = outboundCallRef.current;
-    if (!id) return;
-    outboundCallRef.current = null;
-    setOutboundCall(null);
-    try {
-      await friendCallService.cancel(id);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  useEffect(() => {
-    outboundCallRef.current = outboundCall?.callId || null;
-  }, [outboundCall?.callId]);
-
-  useEffect(() => {
-    return () => {
-      const id = outboundCallRef.current;
-      if (!id || landingDemo) return;
-      friendCallService.cancel(id).catch(() => {});
-      outboundCallRef.current = null;
-    };
-  }, [landingDemo]);
-
   const startFriendCall = useCallback(
-    async (media) => {
+    async (media, peerIdOverride) => {
       if (landingDemo) {
         toast(t('friendChat.callVideoSoon'), { icon: '📞' });
         return;
       }
-      if (!selectedFriendId) return;
-      if (outboundCall?.callId) {
+      const calleeId = String(peerIdOverride || selectedFriendId || '').trim();
+      if (!calleeId) return;
+      if (outboundRinging?.callId) {
         toast.error(t('friendChat.callConflict'));
         return;
       }
-      const calleeId = String(selectedFriendId);
       try {
         const res = await friendCallService.initiate({ calleeId, media });
         const data = res?.data?.data ?? res?.data;
@@ -355,8 +325,16 @@ function FriendChatPage({ landingDemo = false } = {}) {
           toast.error(t('friendChat.callStartFail'));
           return;
         }
-        setOutboundCall({ callId, roomId, media });
-        toast.success(t('friendChat.callRinging'));
+        const prof = friendProfiles[calleeId];
+        const peerLabel =
+          prof?.displayName || prof?.name || prof?.username || '';
+        startOutboundRinging({
+          callId,
+          roomId,
+          media,
+          calleeId,
+          peerLabel,
+        });
       } catch (err) {
         const status = err.response?.status;
         const msg = err.response?.data?.message || err.message;
@@ -365,7 +343,19 @@ function FriendChatPage({ landingDemo = false } = {}) {
         else toast.error(msg || t('friendChat.callStartFail'));
       }
     },
-    [landingDemo, selectedFriendId, outboundCall?.callId, t]
+    [landingDemo, selectedFriendId, outboundRinging?.callId, friendProfiles, startOutboundRinging, t]
+  );
+
+  const handleFriendCallBackFromLog = useCallback(
+    (media, peerId) => {
+      const target = String(peerId || '').trim();
+      if (!target) return;
+      if (String(selectedFriendId || '') !== target) {
+        setSelectedFriendId(target);
+      }
+      void startFriendCall(media, target);
+    },
+    [selectedFriendId, startFriendCall]
   );
 
   const queryClient = useQueryClient();
@@ -430,9 +420,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
     }
     if (acceptedFriendsQuery.isError || blockedFriendsQuery.isError) {
       const err = acceptedFriendsQuery.error || blockedFriendsQuery.error;
-      toast.error(
-        err?.response?.data?.message || err?.message || t('friendChat.loadFriendsFail')
-      );
+      toast.error(resolveApiErrorMessage(err, t('friendChat.loadFriendsFail')));
       setFriends([]);
       setFriendsLoading(false);
       return;
@@ -1129,70 +1117,6 @@ function FriendChatPage({ landingDemo = false } = {}) {
     [jumpToMessage, handleForwardRequest, requestDeleteMessage, t]
   );
 
-  useEffect(() => {
-    if (landingDemo || !socketConnected || !outboundCall?.callId) return undefined;
-    const id = outboundCall.callId;
-    const match = (p) => String(p?.callId || '') === id;
-
-    const onAccepted = (p) => {
-      if (!match(p)) return;
-      clearOutboundCall();
-      const room = p?.roomId;
-      const media = p?.media === 'audio' ? 'audio' : 'video';
-      if (room) {
-        openFriendCall({
-          roomId: room,
-          callId: id,
-          media,
-          peerLabel: currentFriend?.name || '',
-        });
-      }
-    };
-    const onRejected = (p) => {
-      if (!match(p)) return;
-      clearOutboundCall();
-      toast(t('friendChat.callRejected'));
-    };
-    const onCancelled = (p) => {
-      if (!match(p)) return;
-      clearOutboundCall();
-      toast(t('friendChat.callCancelled'));
-    };
-    const onTimeout = (p) => {
-      if (!match(p)) return;
-      clearOutboundCall();
-      toast(t('friendChat.callTimeout'));
-    };
-    const onEnded = (p) => {
-      if (!match(p)) return;
-      clearOutboundCall();
-    };
-
-    on('call:accepted', onAccepted);
-    on('call:rejected', onRejected);
-    on('call:cancelled', onCancelled);
-    on('call:timeout', onTimeout);
-    on('call:ended', onEnded);
-
-    return () => {
-      off('call:accepted', onAccepted);
-      off('call:rejected', onRejected);
-      off('call:cancelled', onCancelled);
-      off('call:timeout', onTimeout);
-      off('call:ended', onEnded);
-    };
-  }, [
-    landingDemo,
-    socketConnected,
-    outboundCall?.callId,
-    on,
-    off,
-    openFriendCall,
-    clearOutboundCall,
-    t,
-    currentFriend?.name,
-  ]);
-
   const sortedChatMessages = useMemo(() => {
     return [...messages].sort((a, b) => {
       const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
@@ -1332,6 +1256,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
     if (mt === 'text') return String(msg.content || '');
     if (mt === 'file' || mt === 'image')
       return msg.fileMeta?.originalName || String(msg.content || '').slice(0, 200) || t('friendChat.attachment');
+    if (mt === 'call_log') return t('friendChat.callLogPreview');
     return String(msg.content || '');
   };
 
@@ -1553,11 +1478,28 @@ function FriendChatPage({ landingDemo = false } = {}) {
     }
   };
 
-  const handleQuickReactMessage = async (msg, emoji) => {
+  const userAlreadyReacted = useCallback(
+    (msg, emoji) => {
+      const me = String(currentUserId || '').trim();
+      if (!me || !emoji) return false;
+      const rows = Array.isArray(msg?.reactions) ? msg.reactions : [];
+      return rows.some(
+        (r) =>
+          String(r.emoji || '') === String(emoji) &&
+          String(r.userId?._id || r.userId || '') === me
+      );
+    },
+    [currentUserId]
+  );
+
+  const handleToggleReaction = async (msg, emoji) => {
     const messageId = msg?._id || msg?.id;
-    if (!messageId || String(messageId).startsWith('temp-')) return;
+    if (!messageId || String(messageId).startsWith('temp-') || !emoji) return;
+    const remove = userAlreadyReacted(msg, emoji);
     try {
-      const resp = await dmMessageService.addReaction(messageId, emoji);
+      const resp = remove
+        ? await dmMessageService.removeReaction(messageId, emoji)
+        : await dmMessageService.addReaction(messageId, emoji);
       const updated = dmMessageService.unwrap(resp);
       setMessages((prev) =>
         prev.map((m) => (String(m._id || m.id) === String(messageId) ? { ...m, ...updated } : m))
@@ -1565,6 +1507,10 @@ function FriendChatPage({ landingDemo = false } = {}) {
     } catch {
       toast.error(t('friendChat.reactionFail'));
     }
+  };
+
+  const handleQuickReactMessage = (msg, emoji) => {
+    void handleToggleReaction(msg, emoji);
   };
 
   const confirmRecallMessage = async (messageId) => {
@@ -1920,7 +1866,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
                       type="button"
                       title={t('friendChat.callAudio')}
                       onClick={() => startFriendCall('audio')}
-                      disabled={Boolean(outboundCall?.callId) || isDmComposerLocked}
+                      disabled={Boolean(outboundRinging?.callId) || isDmComposerLocked}
                       className={iconBtn}
                     >
                       <Phone className="h-5 w-5" strokeWidth={2} />
@@ -1929,7 +1875,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
                       type="button"
                       title={t('friendChat.callVideo')}
                       onClick={() => startFriendCall('video')}
-                      disabled={Boolean(outboundCall?.callId) || isDmComposerLocked}
+                      disabled={Boolean(outboundRinging?.callId) || isDmComposerLocked}
                       className={iconBtn}
                     >
                       <Video className="h-5 w-5" strokeWidth={2} />
@@ -1996,26 +1942,6 @@ function FriendChatPage({ landingDemo = false } = {}) {
                       }`}
                     >
                       {t('friendChat.unblockConfirmBtn')}
-                    </button>
-                  </div>
-                )}
-                {outboundCall?.callId && (
-                  <div
-                    className={`mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm ${
-                      isDarkMode
-                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-100'
-                        : 'border-amber-300 bg-amber-50 text-amber-950'
-                    }`}
-                  >
-                    <span>{t('friendChat.callRinging')}</span>
-                    <button
-                      type="button"
-                      onClick={cancelOutboundCall}
-                      className={`rounded-md px-2 py-1 text-xs font-semibold ${
-                        isDarkMode ? 'bg-zinc-800 text-amber-100 hover:bg-zinc-700' : 'bg-white text-amber-900 hover:bg-amber-100'
-                      }`}
-                    >
-                      {t('friendChat.cancelCall')}
                     </button>
                   </div>
                 )}
@@ -2261,6 +2187,8 @@ function FriendChatPage({ landingDemo = false } = {}) {
                                   <ChatMessageAttachmentBody
                                     message={m}
                                     mentionVariant="friend"
+                                    currentUserId={currentUserId}
+                                    onFriendCallBack={handleFriendCallBackFromLog}
                                     onImageClick={(_url, messageId) => openMediaViewerForMessage(messageId)}
                                   />
                                 )}
@@ -2273,19 +2201,33 @@ function FriendChatPage({ landingDemo = false } = {}) {
                                         acc[em] = (acc[em] || 0) + 1;
                                         return acc;
                                       }, {})
-                                    ).map(([em, count]) => (
-                                      <span
-                                        key={em}
-                                        className={`rounded-full border px-2 py-0.5 text-xs ${
-                                          isDarkMode
-                                            ? 'border-white/15 bg-black/25'
-                                            : 'border-slate-200 bg-slate-50'
-                                        }`}
-                                      >
-                                        {em}
-                                        {count > 1 ? ` ${count}` : ''}
-                                      </span>
-                                    ))}
+                                    ).map(([em, count]) => {
+                                      const mine = userAlreadyReacted(m, em);
+                                      return (
+                                        <button
+                                          key={em}
+                                          type="button"
+                                          title={
+                                            mine
+                                              ? t('friendChat.reactionRemoveHint')
+                                              : t('friendChat.reactionAddHint')
+                                          }
+                                          onClick={() => handleToggleReaction(m, em)}
+                                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${
+                                            mine
+                                              ? isDarkMode
+                                                ? 'border-[#5865F2]/60 bg-[#5865F2]/25 text-white'
+                                                : 'border-[#5865F2]/50 bg-[#5865F2]/10 text-[#5865F2]'
+                                              : isDarkMode
+                                                ? 'border-white/15 bg-black/25 text-white hover:bg-white/10'
+                                                : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                                          }`}
+                                        >
+                                          <span>{em}</span>
+                                          <span className="tabular-nums">{count}</span>
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 )}
                                 {sendPending && (
@@ -2475,7 +2417,7 @@ function FriendChatPage({ landingDemo = false } = {}) {
                       type="button"
                       aria-label={t('friendChat.closeEmoji')}
                       onClick={() => setShowEmojiPicker(false)}
-                      className="fixed inset-0 z-40 cursor-default bg-black/30"
+                      className="fixed top-0 right-0 bottom-0 left-[var(--vh-nav-rail-width,3.5rem)] z-40 cursor-default bg-black/30"
                     />
                     <div className={emojiModalPanel}>
                       <div

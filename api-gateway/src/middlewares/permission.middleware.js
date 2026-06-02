@@ -16,6 +16,10 @@ function cacheKey(userId, serverId, action) {
  */
 const permissionMiddleware = async (req, res, next) => {
   try {
+    const pathOnly = String(req.originalUrl || req.url || req.path || '')
+      .split('?')[0]
+      .replace(/\/+/g, '/');
+
     // Bỏ qua routes public (đăng ký, đăng nhập, ...),
     // và các routes được đánh dấu không cần kiểm tra permission
     if (isPublicRoute(req.path) || noPermissionRoutes.some((route) => req.path.startsWith(route))) {
@@ -33,14 +37,12 @@ const permissionMiddleware = async (req, res, next) => {
 
     // Task / Work / AI-task: bỏ qua role theo serverId — chạy NGAY và dùng originalUrl vì req.path
     // có thể không khớp (proxy/mount). task-service tự kiểm tra creator/assignee.
-    const pathOnly = String(req.originalUrl || req.url || req.path || '')
-      .split('?')[0]
-      .replace(/\/+/g, '/');
     const pathNorm = normalizePath(pathOnly).toLowerCase();
     if (
       pathNorm.startsWith('/api/tasks') ||
       pathNorm.startsWith('/api/work') ||
-      pathNorm.startsWith('/api/ai/tasks')
+      pathNorm.startsWith('/api/ai/tasks') ||
+      /^\/api\/workspaces\/[^/]+\/task-boards(\/|$)/.test(pathNorm)
     ) {
       return next();
     }
@@ -48,25 +50,30 @@ const permissionMiddleware = async (req, res, next) => {
     // Lấy action từ route và method
     const action = getAction(req.method, req.path);
     
-    // Nếu không có action mapping, cho phép (có thể là route mới chưa config)
     if (!action) {
-      console.warn(`No action mapping for ${req.method} ${req.path}`);
-      return next();
+      const pathNormUnmapped = normalizePath(pathOnly).toLowerCase();
+      const downstreamAuthPrefixes = [
+        '/api/voice',
+        '/api/meetings',
+        '/api/organizations',
+        '/api/channels',
+        '/api/tasks',
+        '/api/work',
+        '/api/ai/tasks',
+        '/api/workspaces',
+      ];
+      if (downstreamAuthPrefixes.some((prefix) => pathNormUnmapped.startsWith(prefix))) {
+        return next();
+      }
+      return res.status(403).json({
+        success: false,
+        message: 'Route not permitted',
+      });
     }
 
     // Organization permissions được kiểm tra tại organization-service theo membership thực tế.
     // Bỏ qua check role-service ở gateway để tránh false deny do khác ngữ cảnh serverId.
     if (action.startsWith('organization:')) {
-      return next();
-    }
-
-    // Role & Permission service: tự xử lý sau khi proxy (JWT đã qua auth middleware).
-    // Tránh 403 do gateway map GET /api/roles → get:default và không có quyền trong Discord-style role cache.
-    const pathWithoutQueryEarly = req.path.split('?')[0];
-    if (
-      pathWithoutQueryEarly.startsWith('/api/roles') ||
-      pathWithoutQueryEarly.startsWith('/api/permissions')
-    ) {
       return next();
     }
 

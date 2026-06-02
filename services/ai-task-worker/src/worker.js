@@ -1,3 +1,11 @@
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
+const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || '').trim().replace(/\/+$/, '');
+if (!OLLAMA_BASE_URL) throw new Error('Thiếu biến môi trường: OLLAMA_BASE_URL');
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
+const TASK_SERVICE_URL = String(process.env.TASK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!TASK_SERVICE_URL) throw new Error('Thiếu biến môi trường: TASK_SERVICE_URL');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
@@ -22,7 +30,7 @@ const MAX_AI_JOB_RETRIES = Math.max(0, parseInt(process.env.AI_TASK_JOB_MAX_RETR
 const WORKER_MODE = String(process.env.AI_TASK_WORKER_MODE || 'both').toLowerCase();
 
 async function fetchChatMessage(messageId) {
-  const chatUrl = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
+  const chatUrl = process.env.CHAT_SERVICE_URL;
   const token = process.env.CHAT_INTERNAL_TOKEN || '';
   if (!token) throw new Error('CHAT_INTERNAL_TOKEN is not set');
 
@@ -36,7 +44,7 @@ async function fetchChatMessage(messageId) {
 }
 
 async function getSignedReadUrl(storagePath) {
-  const chatUrl = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
+  const chatUrl = process.env.CHAT_SERVICE_URL;
   const token = process.env.CHAT_INTERNAL_TOKEN || '';
   if (!token) throw new Error('CHAT_INTERNAL_TOKEN is not set');
 
@@ -105,7 +113,7 @@ async function callOllama(prompt) {
       }),
     };
   }
-  const baseUrl = (process.env.OLLAMA_BASE_URL || 'http://ollama:11434').replace(/\/$/, '');
+  const baseUrl = process.env.OLLAMA_BASE_URL;
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:3b-instruct';
 
   const res = await axios.post(
@@ -154,11 +162,29 @@ function validateDraft(draft) {
   return { ok: true };
 }
 
+function sanitizeWorkerErrorMessage(err) {
+  const msg = String(err?.message || '').toLowerCase();
+  if (!msg) return 'Không thể xử lý yêu cầu AI lúc này';
+  if (msg.includes('chat_internal_token') || msg.includes('gateway_internal_token')) {
+    return 'Không thể kết nối dịch vụ nội bộ';
+  }
+  if (msg.includes('timeout') || msg.includes('econn') || msg.includes('enotfound')) {
+    return 'Kết nối dịch vụ đang gián đoạn, vui lòng thử lại';
+  }
+  if (msg.includes('invalid draft')) {
+    return 'Nội dung chưa đủ điều kiện để tạo task tự động';
+  }
+  if (msg.includes('ollama')) {
+    return 'Dịch vụ AI đang bận, vui lòng thử lại sau';
+  }
+  return 'Không thể xử lý yêu cầu AI lúc này';
+}
+
 async function resolveAssigneeId(assigneeName) {
   const q = String(assigneeName || '').trim();
   if (!q) return { assigneeId: null, note: '' };
 
-  const userUrl = (process.env.USER_SERVICE_URL || 'http://user-service:3004').replace(/\/$/, '');
+  const userUrl = process.env.USER_SERVICE_URL;
   const internalToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
   if (!internalToken) {
     return { assigneeId: null, note: 'user_search_no_internal_token' };
@@ -299,7 +325,7 @@ async function createSyncSuggestion({ extraction, messageId, changeType, propose
 }
 
 async function fetchTask(taskId, userId) {
-  const taskUrl = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
+  const taskUrl = process.env.TASK_SERVICE_URL;
   const res = await axios.get(`${taskUrl}/api/tasks/${taskId}`, {
     headers: userId ? { 'x-user-id': String(userId) } : undefined,
     timeout: 15000,
@@ -359,7 +385,7 @@ async function processExtractJob(payload) {
     await extraction.save();
   } catch (err) {
     extraction.status = 'failed';
-    extraction.error = err.message || String(err);
+    extraction.error = sanitizeWorkerErrorMessage(err);
     await extraction.save();
     throw err;
   }

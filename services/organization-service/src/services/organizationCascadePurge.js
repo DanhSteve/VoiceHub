@@ -18,15 +18,18 @@ const RoleScopeAssignment = require('../models/RoleScopeAssignment');
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 const CHAT_INTERNAL_TOKEN = String(process.env.CHAT_INTERNAL_TOKEN || '').trim();
 
-const TASK_SERVICE_URL = (process.env.TASK_SERVICE_URL || 'http://task-service:3009').replace(/\/$/, '');
-const DOCUMENT_SERVICE_URL = (process.env.DOCUMENT_SERVICE_URL || 'http://document-service:3010').replace(/\/$/, '');
-const VOICE_SERVICE_URL = (process.env.VOICE_SERVICE_URL || 'http://voice-service:3005').replace(/\/$/, '');
-const CHAT_SERVICE_URL = (process.env.CHAT_SERVICE_URL || 'http://chat-service:3006').replace(/\/$/, '');
-const AI_TASK_SERVICE_URL = (process.env.AI_TASK_SERVICE_URL || 'http://ai-task-service:3020').replace(/\/$/, '');
-const ROLE_PERMISSION_SERVICE_URL = (process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015').replace(
-  /\/$/,
-  ''
-);
+const TASK_SERVICE_URL = String(process.env.TASK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!TASK_SERVICE_URL) throw new Error('Thiếu biến môi trường: TASK_SERVICE_URL');
+const DOCUMENT_SERVICE_URL = String(process.env.DOCUMENT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!DOCUMENT_SERVICE_URL) throw new Error('Thiếu biến môi trường: DOCUMENT_SERVICE_URL');
+const VOICE_SERVICE_URL = String(process.env.VOICE_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!VOICE_SERVICE_URL) throw new Error('Thiếu biến môi trường: VOICE_SERVICE_URL');
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!CHAT_SERVICE_URL) throw new Error('Thiếu biến môi trường: CHAT_SERVICE_URL');
+const AI_TASK_SERVICE_URL = String(process.env.AI_TASK_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!AI_TASK_SERVICE_URL) throw new Error('Thiếu biến môi trường: AI_TASK_SERVICE_URL');
+const ROLE_PERMISSION_SERVICE_URL = String(process.env.ROLE_PERMISSION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ROLE_PERMISSION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ROLE_PERMISSION_SERVICE_URL');
 const PURGE_MAX_RETRIES = 5;
 const PURGE_RETRY_DELAY_MS = 2000;
 

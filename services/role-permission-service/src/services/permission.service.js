@@ -3,7 +3,8 @@ const Role = require('../models/Role');
 const { getRedisClient, logger } = require('/shared');
 const axios = require('axios');
 
-const ORGANIZATION_SERVICE_URL = process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013';
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 
 function isTestUnlockEnabled() {
   return String(process.env.RBAC_TEST_UNLOCK || '').trim().toLowerCase() === 'true';

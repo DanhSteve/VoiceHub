@@ -1,7 +1,20 @@
 const UserProfile = require('../models/UserProfile');
 const { getRedisClient, logger } = require('/shared');
 const { phoneBlindIndex } = require('/shared/utils/fieldCrypto');
-const { writePiiPatch } = require('../utils/profilePii');
+const {
+  writePiiPatch,
+  writeEmailPatch,
+  writeDateOfBirthFields,
+  maybeMigrateProfilePii,
+  readPiiFromProfile,
+} = require('../utils/profilePii');
+
+function serviceError(message, statusCode = 400, errorCode = 'USER_VALIDATION') {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.errorCode = errorCode;
+  return err;
+}
 
 class UserService {
   // Tạo user profile mới
@@ -10,10 +23,10 @@ class UserService {
       const { userId, username, email, displayName, dateOfBirth } = userData;
 
       if (!userId) {
-        throw new Error('userId is required');
+        throw serviceError('Thiếu userId', 400, 'USER_VALIDATION');
       }
       if (!email || typeof email !== 'string' || !String(email).trim()) {
-        throw new Error('email is required');
+        throw serviceError('Thiếu email', 400, 'USER_VALIDATION');
       }
       const normalizedEmail = String(email).trim().toLowerCase();
 
@@ -43,31 +56,34 @@ class UserService {
       }
       const taken = await UserProfile.findOne({ username: finalUsername });
       if (taken) {
-        throw new Error('Username already exists');
+        throw serviceError('Tên người dùng đã tồn tại', 400, 'USER_USERNAME_EXISTS');
       }
 
       const userProfile = new UserProfile({
         userId,
         username: finalUsername,
-        email: normalizedEmail,
+        ...writeEmailPatch(normalizedEmail),
         displayName: displayName || finalUsername,
-        dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+        ...writeDateOfBirthFields(dateOfBirth || null),
       });
 
       await userProfile.save();
 
-      // Cache user profile trong Redis
+      // Cache user profile trong Redis (plaintext cho API)
       const redis = getRedisClient();
       if (redis) {
         const cacheKey = `user:${userId}`;
-        await redis.setex(cacheKey, 3600, JSON.stringify(userProfile));
+        const plain =
+          typeof userProfile.toObject === 'function' ? userProfile.toObject() : { ...userProfile };
+        const forCache = { ...plain, ...readPiiFromProfile(plain) };
+        await redis.setex(cacheKey, 3600, JSON.stringify(forCache));
       }
 
       logger.info(`User profile created: ${userId}`);
       return userProfile;
     } catch (error) {
       logger.error('Error creating user profile:', error);
-      throw new Error(`Error creating user profile: ${error.message}`);
+      throw error;
     }
   }
 
@@ -84,18 +100,32 @@ class UserService {
         }
       }
 
-      const userProfile = await UserProfile.findOne({ userId });
+      let userProfile = await UserProfile.findOne({ userId });
+      if (userProfile) {
+        try {
+          await maybeMigrateProfilePii(UserProfile, userProfile);
+        } catch (migrateError) {
+          logger.warn(
+            `Skip profile PII migration for userId=${userId}: ${
+              migrateError?.message || 'unknown migration error'
+            }`
+          );
+        }
+      }
 
-      // Cache user profile
+      // Cache user profile (plaintext PII cho API)
       if (redis && userProfile) {
         const cacheKey = `user:${userId}`;
-        await redis.setex(cacheKey, 3600, JSON.stringify(userProfile));
+        const plain =
+          typeof userProfile.toObject === 'function' ? userProfile.toObject() : { ...userProfile };
+        const forCache = { ...plain, ...readPiiFromProfile(plain) };
+        await redis.setex(cacheKey, 3600, JSON.stringify(forCache));
       }
 
       return userProfile;
     } catch (error) {
       logger.error('Error getting user profile:', error);
-      throw new Error(`Error getting user profile: ${error.message}`);
+      throw error;
     }
   }
 
@@ -107,21 +137,16 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error getting user profile by username:', error);
-      throw new Error(`Error getting user profile: ${error.message}`);
+      throw error;
     }
   }
 
   // Cập nhật user profile
   async updateUserProfile(userId, updateData) {
     try {
-      const allowedFields = [
-        'displayName',
-        'avatar',
-        'dateOfBirth',
-        'preferences',
-        'isInvisible',
-        'status',
-      ];
+      const allowedFields = ['displayName', 'avatar', 'preferences', 'isInvisible', 'status'];
+
+      const existingProfile = await UserProfile.findOne({ userId }).lean();
 
       const updateFields = {};
       for (const field of allowedFields) {
@@ -129,12 +154,23 @@ class UserService {
           updateFields[field] = updateData[field];
         }
       }
+
+      if (updateData.orgNicknames !== undefined && updateData.orgNicknames !== null) {
+        const prev =
+          existingProfile?.orgNicknames && typeof existingProfile.orgNicknames === 'object'
+            ? existingProfile.orgNicknames
+            : {};
+        const patch =
+          typeof updateData.orgNicknames === 'object' ? updateData.orgNicknames : {};
+        updateFields.orgNicknames = { ...prev, ...patch };
+      }
       Object.assign(
         updateFields,
         writePiiPatch({
           bio: updateData.bio,
           phone: updateData.phone,
           location: updateData.location,
+          dateOfBirth: updateData.dateOfBirth,
         })
       );
 
@@ -145,7 +181,7 @@ class UserService {
       );
 
       if (!userProfile) {
-        throw new Error('User profile not found');
+        throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
       }
 
       // Xóa cache
@@ -159,19 +195,25 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error updating user profile:', error);
-      throw new Error(`Error updating user profile: ${error.message}`);
+      throw error;
     }
   }
 
   // Cập nhật status
   async updateStatus(userId, status) {
     try {
-      const userProfile = await UserProfile.findOne({ userId });
-      if (!userProfile) {
-        throw new Error('User profile not found');
+      const patch = { status };
+      if (status === 'online' || status === 'offline') {
+        patch.lastSeen = new Date();
       }
-
-      await userProfile.updateStatus(status);
+      const userProfile = await UserProfile.findOneAndUpdate(
+        { userId },
+        { $set: patch },
+        { new: true, runValidators: false }
+      );
+      if (!userProfile) {
+        throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
+      }
 
       // Xóa cache
       const redis = getRedisClient();
@@ -183,7 +225,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error updating status:', error);
-      throw new Error(`Error updating status: ${error.message}`);
+      throw error;
     }
   }
 
@@ -198,6 +240,7 @@ class UserService {
           { username: searchRegex },
           { displayName: searchRegex },
           { phone: searchRegex },
+          { email: searchRegex },
         ],
         isActive: true,
       };
@@ -205,7 +248,7 @@ class UserService {
       const users = await UserProfile.find(filter)
         .limit(limit * 1)
         .skip((page - 1) * limit)
-        .select('userId username displayName avatar status')
+        .select('userId username displayName avatar status email')
         .sort({ username: 1 });
 
       const total = await UserProfile.countDocuments(filter);
@@ -218,7 +261,7 @@ class UserService {
       };
     } catch (error) {
       logger.error('Error searching users:', error);
-      throw new Error(`Error searching users: ${error.message}`);
+      throw error;
     }
   }
 
@@ -238,8 +281,29 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error getting user profile by phone:', error);
-      throw new Error(`Error getting user profile by phone: ${error.message}`);
+      throw error;
     }
+  }
+
+  async updateUserEmailInternal(userId, email) {
+    const uid = String(userId || '').trim();
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!uid || !normalizedEmail) {
+      throw serviceError('Thiếu userId hoặc email', 400, 'USER_VALIDATION');
+    }
+    const userProfile = await UserProfile.findOneAndUpdate(
+      { userId: uid },
+      { $set: { email: normalizedEmail } },
+      { new: true, runValidators: true }
+    );
+    if (!userProfile) {
+      throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
+    }
+    const redis = getRedisClient();
+    if (redis) {
+      await redis.del(`user:${uid}`);
+    }
+    return userProfile;
   }
 
   // Xóa user profile (soft delete)
@@ -252,7 +316,7 @@ class UserService {
       );
 
       if (!userProfile) {
-        throw new Error('User profile not found');
+        throw serviceError('Không tìm thấy hồ sơ người dùng', 404, 'USER_PROFILE_NOT_FOUND');
       }
 
       // Xóa cache
@@ -266,7 +330,7 @@ class UserService {
       return userProfile;
     } catch (error) {
       logger.error('Error deleting user profile:', error);
-      throw new Error(`Error deleting user profile: ${error.message}`);
+      throw error;
     }
   }
 }

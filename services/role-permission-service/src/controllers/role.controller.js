@@ -1,6 +1,18 @@
 const roleService = require('../services/role.service');
 const { logger } = require('/shared');
 
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const message = String(err?.message || fallbackMessage);
+  const errorCode = String(err?.errorCode || fallbackCode || '').trim();
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(errorCode ? { errorCode } : {}),
+    messageUser: message,
+  });
+}
+
 class RoleController {
   // Tạo role mới
   async createRole(req, res) {
@@ -30,10 +42,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Create role error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể tạo vai trò', 'ROLE_CREATE_FAILED');
     }
   }
 
@@ -56,10 +65,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Get role error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải vai trò', 'ROLE_GET_FAILED');
     }
   }
 
@@ -75,10 +81,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Get roles error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải danh sách vai trò', 'ROLE_LIST_FAILED');
     }
   }
 
@@ -103,10 +106,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Assign role error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể gán vai trò', 'ROLE_ASSIGN_FAILED');
     }
   }
 
@@ -130,10 +130,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Remove role error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể gỡ vai trò', 'ROLE_REMOVE_FAILED');
     }
   }
 
@@ -149,10 +146,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Get user roles error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể tải vai trò người dùng', 'ROLE_USER_LIST_FAILED');
     }
   }
 
@@ -168,10 +162,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Update role error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể cập nhật vai trò', 'ROLE_UPDATE_FAILED');
     }
   }
 
@@ -188,10 +179,7 @@ class RoleController {
       });
     } catch (error) {
       logger.error('Delete role error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Không thể xóa vai trò', 'ROLE_DELETE_FAILED');
     }
   }
 
@@ -202,7 +190,18 @@ class RoleController {
       res.json({ success: true, data });
     } catch (error) {
       logger.error('purgeByServerContext error:', error);
-      res.status(400).json({ success: false, message: error.message });
+      return sendError(res, error, 400, 'Không thể dọn dữ liệu vai trò', 'ROLE_PURGE_FAILED');
+    }
+  }
+
+  async backfillRoleRead(req, res) {
+    try {
+      const serverId = req.params?.serverId || req.body?.serverId || req.body?.organizationId || null;
+      const data = await roleService.backfillRoleReadPermission(serverId);
+      res.json({ success: true, data });
+    } catch (error) {
+      logger.error('backfillRoleRead error:', error);
+      return sendError(res, error, 500, 'Không thể backfill quyền role:read', 'ROLE_BACKFILL_FAILED');
     }
   }
 }

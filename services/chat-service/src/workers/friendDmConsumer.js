@@ -3,6 +3,7 @@ const { getRedisClient } = require('/shared');
 const messageService = require('../services/message.service');
 const { emitRealtimeEvent } = require('/shared');
 const { assertDmCanSend } = require('../utils/verifyDmRelationship');
+const { maybeNotifyDmReceived } = require('../utils/dmPushNotification');
 
 const EXCHANGE = process.env.RABBITMQ_EXCHANGE || 'voicehub.topic';
 const QUEUE = process.env.RABBITMQ_FRIEND_DM_QUEUE || 'voicehub.friend.dm';
@@ -78,6 +79,7 @@ async function processPayload(data) {
     userId: String(senderId),
     payload: message,
   });
+  maybeNotifyDmReceived(message).catch(() => null);
 }
 
 async function startFriendDmConsumer() {

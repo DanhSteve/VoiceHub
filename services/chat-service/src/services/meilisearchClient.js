@@ -1,10 +1,12 @@
+const MEILI_HOST = String(process.env.MEILI_HOST || '').trim().replace(/\/+$/, '');
+if (!MEILI_HOST) throw new Error('Thiếu biến môi trường: MEILI_HOST');
 const { MeiliSearch } = require('meilisearch');
 
 let client = null;
 let indexReady = false;
 
 function getMeiliHost() {
-  return String(process.env.MEILI_HOST || 'http://meilisearch:7700').replace(/\/$/, '');
+  return process.env.MEILI_HOST;
 }
 
 function getMeiliApiKey() {

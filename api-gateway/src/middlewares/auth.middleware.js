@@ -21,11 +21,11 @@ const authMiddleware = (req, res, next) => {
     pathWithoutQuery === '/api/health/gateway-trust' ||
     fromOriginal.endsWith('/api/health/gateway-trust')
   ) {
-    console.log(`[API-Gateway] Public route detected: ${pathWithoutQuery}, skipping authentication`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[API-Gateway] Public route: ${pathWithoutQuery}`);
+    }
     return next();
   }
-  
-  console.log(`[API-Gateway] Protected route: ${req.path}, checking authentication...`);
 
   try {
     const jwtSecret = getJwtSecret();
@@ -37,7 +37,13 @@ const authMiddleware = (req, res, next) => {
     }
 
     // Lấy token từ header
-    const authHeader = req.headers.authorization;
+    let authHeader = req.headers.authorization;
+    if ((!authHeader || !authHeader.startsWith('Bearer ')) && req.method === 'GET') {
+      const queryToken = String(req.query?.access_token || '').trim();
+      if (queryToken) {
+        authHeader = `Bearer ${queryToken}`;
+      }
+    }
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
@@ -46,7 +52,6 @@ const authMiddleware = (req, res, next) => {
       });
     }
 
-    // Extract token
     const token = authHeader.split(' ')[1];
 
     if (!token) {

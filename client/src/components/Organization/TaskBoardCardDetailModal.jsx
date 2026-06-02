@@ -44,6 +44,7 @@ export default function TaskBoardCardDetailModal({
   isDarkMode,
   card,
   boardId = '',
+  workspaceSlug = '',
   listTitle = '',
   lists = [],
   initialPanel = 'detail',
@@ -51,6 +52,7 @@ export default function TaskBoardCardDetailModal({
   onUpdateCard,
   onRefresh,
 }) {
+  const boardApiOpts = workspaceSlug ? { workspaceSlug } : {};
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [editingDescription, setEditingDescription] = useState(false);
@@ -127,7 +129,7 @@ export default function TaskBoardCardDetailModal({
     (async () => {
       setLoadingMembers(true);
       try {
-        const res = await taskAPI.getBoardAssignableMembers(String(boardId));
+        const res = await taskAPI.getBoardAssignableMembers(String(boardId), boardApiOpts);
         const payload = unwrapTaskApiPayload(res);
         const rows = Array.isArray(payload?.members) ? payload.members : [];
         if (!cancelled) setMembers(rows);
@@ -140,7 +142,7 @@ export default function TaskBoardCardDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, boardId]);
+  }, [isOpen, boardId, workspaceSlug]);
 
   const boardMembers = useMemo(() => {
     return members
@@ -183,7 +185,7 @@ export default function TaskBoardCardDetailModal({
     if (!text || !cardId || submittingComment) return;
     setSubmittingComment(true);
     try {
-      const res = await taskAPI.addBoardCardComment(cardId, text);
+      const res = await taskAPI.addBoardCardComment(cardId, text, boardApiOpts);
       const updated = unwrapTaskApiPayload(res);
       if (updated && typeof updated === 'object') {
         await onUpdateCard?.(cardId, updated);

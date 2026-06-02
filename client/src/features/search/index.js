@@ -1,7 +1,6 @@
 export { useDebouncedValue } from './useDebouncedValue';
 export * from './searchTypes';
 export * from './orgChatSearchConfig';
-export { default as OrgWorkspaceSearch } from './components/OrgWorkspaceSearch';
 export { default as PageSearchBar, AppSearchField } from './components/PageSearchBar';
 export { default as PageSearchToolbar } from './components/PageSearchToolbar';
 export { default as ConversationSearchPanel } from './components/ConversationSearchPanel';

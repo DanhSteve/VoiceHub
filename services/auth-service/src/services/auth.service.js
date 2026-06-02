@@ -1,12 +1,27 @@
 const UserAuth = require('../models/UserAuth');
+const axios = require('axios');
 const { validateRegistrationDateOfBirth } = require('../utils/dateOfBirth');
 const { hashPassword, comparePassword, validatePasswordStrength } = require('../utils/password');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
 const { getRedisClient } = require('/shared');
 const emailService = require('../utils/email');
 const { bootstrapUserProfile } = require('../utils/bootstrapUserProfile');
+const { writeDateOfBirthFields } = require('/shared/utils/dateOfBirthPii');
 const crypto = require('crypto');
 const { mongoose } = require('/shared/config/mongo');
+const {
+  findUserAuthByEmail,
+  hydrateAuthEmailDoc,
+  writeEmailFields,
+  normalizeEmail,
+} = require('../utils/authEmailPii');
+
+function createServiceError(message, statusCode = 400, errorCode = 'AUTH_VALIDATION') {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.errorCode = errorCode;
+  return err;
+}
 async function ensureMongoReady(scope = 'AUTH') {
   const readyState = mongoose.connection.readyState;
   console.log(
@@ -16,7 +31,24 @@ async function ensureMongoReady(scope = 'AUTH') {
   );
   if (readyState === 1) return;
   // Không reconnect trong request để tránh reset connection pool cạnh tranh với background reconnect.
-  throw new Error('Database temporarily unavailable. Please retry.');
+  throw createServiceError('Hệ thống đang bận. Vui lòng thử lại sau.', 503, 'AUTH_DB_UNAVAILABLE');
+}
+
+async function syncUserProfileEmail(userId, email) {
+  const internalToken = String(process.env.USER_SERVICE_INTERNAL_TOKEN || '').trim();
+  const userServiceUrl = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+  if (!internalToken || !userServiceUrl || !userId || !email) return;
+  await axios.patch(
+    `${userServiceUrl}/api/users/internal/email`,
+    { userId: String(userId), email: String(email).trim().toLowerCase() },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-token': internalToken,
+      },
+      timeout: Number(process.env.USER_BOOTSTRAP_TIMEOUT_MS || 15000),
+    }
+  );
 }
 
 class AuthService {
@@ -24,9 +56,10 @@ class AuthService {
   async register(userData, frontendUrl) {
     try {
       const { email, password, firstName, lastName, dateOfBirth } = userData;
+      const normalizedEmail = normalizeEmail(email);
 
       // Validate required fields
-      if (!email || !password) {
+      if (!normalizedEmail || !password) {
         throw new Error('Email and password are required');
       }
 
@@ -43,19 +76,20 @@ class AuthService {
       await ensureMongoReady('REGISTER');
 
       // Kiểm tra email đã tồn tại chưa
-      console.log('[AuthService] Checking if email exists:', email);
+      console.log('[AuthService] Checking if email exists:', normalizedEmail);
       try {
-        const existingUser = await UserAuth.findOne({ email })
-          .maxTimeMS(15000) // 15 seconds timeout
-          .lean(); // Use lean() for faster query
+        const existingUser = await findUserAuthByEmail(normalizedEmail, {
+          maxTimeMS: 15000,
+          lean: true,
+        });
         
         if (existingUser) {
           console.log('[AuthService] Email already exists');
-          throw new Error('Email already exists');
+          throw createServiceError('Email đã được sử dụng', 400, 'AUTH_EMAIL_EXISTS');
         }
         console.log('[AuthService] ✅ Email is available');
       } catch (error) {
-        if (error.message === 'Email already exists') {
+        if (error.errorCode === 'AUTH_EMAIL_EXISTS') {
           throw error;
         }
         console.error('[AuthService] ❌ Error checking email:', error.message);
@@ -64,9 +98,9 @@ class AuthService {
         
         // Nếu là connection error, throw với message rõ ràng hơn
         if (error.name === 'MongoServerError' || error.message.includes('buffering') || error.message.includes('timeout')) {
-          throw new Error(`Database connection error: ${error.message}. Please try again.`);
+          throw createServiceError('Hệ thống đang bận. Vui lòng thử lại sau.', 503, 'AUTH_DB_UNAVAILABLE');
         }
-        throw new Error(`Database query failed: ${error.message}`);
+        throw createServiceError('Không thể xử lý đăng ký lúc này. Vui lòng thử lại.', 500, 'AUTH_INTERNAL_ERROR');
       }
 
       // Validate password strength
@@ -85,11 +119,11 @@ class AuthService {
       // Tạo user auth (chưa có userId, chưa active)
       // userId sẽ được tạo sau khi verify email thành công
       const userAuth = new UserAuth({
-        email,
+        ...writeEmailFields(normalizedEmail),
+        ...writeDateOfBirthFields(dobCheck.date),
         password: hashedPassword,
         firstName,
         lastName,
-        dateOfBirth: dobCheck.date,
         emailVerificationToken,
         emailVerificationExpiresAt,
         isEmailVerified: false,
@@ -106,12 +140,16 @@ class AuthService {
       console.log('[AuthService] EMAIL_PASSWORD:', process.env.EMAIL_PASSWORD ? 'SET' : 'NOT SET');
       
       if (emailService.isAvailable()) {
-        console.log('[AuthService] 📧 Email service is available, scheduling verification email to:', email);
+        console.log('[AuthService] 📧 Email service is available, scheduling verification email to:', normalizedEmail);
         console.log('[AuthService] Verification token: REDACTED');
         console.log('[AuthService] Email will be sent in background to avoid timeout');
         
         // Gửi email trong background - không await
-        const emailPromise = emailService.sendVerificationEmail(email, emailVerificationToken, frontendUrl);
+        const emailPromise = emailService.sendVerificationEmail(
+          normalizedEmail,
+          emailVerificationToken,
+          frontendUrl
+        );
         console.log('[AuthService] Email promise created, waiting for result...');
         
         emailPromise
@@ -119,7 +157,7 @@ class AuthService {
             console.log('[AuthService] 📬 Email promise resolved');
             console.log('[AuthService] Result:', result ? 'Has result' : 'Null result');
             if (result && result.messageId) {
-              console.log('[AuthService] ✅ Verification email sent successfully to:', email);
+              console.log('[AuthService] ✅ Verification email sent successfully to:', normalizedEmail);
               console.log('[AuthService] Email messageId:', result.messageId);
               console.log('[AuthService] Email response:', result.response);
             } else {
@@ -165,7 +203,7 @@ class AuthService {
         emailScheduled: emailService.isAvailable(), // Email đã được lên lịch gửi (không chờ kết quả)
       };
     } catch (error) {
-      throw new Error(`Error registering user: ${error.message}`);
+      throw error;
     }
   }
 
@@ -175,34 +213,34 @@ class AuthService {
       // Kiểm tra trạng thái kết nối theo fail-fast, không reconnect trong request.
       await ensureMongoReady('LOGIN');
 
-      const userAuth = await UserAuth.findOne({ email })
-        .maxTimeMS(15000)
-        .lean(false);
+      const userAuth = await findUserAuthByEmail(email, { maxTimeMS: 15000 });
 
       if (!userAuth) {
-        throw new Error('Invalid email or password');
+        throw createServiceError('Email hoặc mật khẩu không đúng', 401, 'AUTH_INVALID_CREDENTIALS');
       }
+
+      const plainEmail = await hydrateAuthEmailDoc(userAuth);
 
       // Kiểm tra email đã được verify chưa
       if (!userAuth.isEmailVerified) {
-        throw new Error('Please verify your email before logging in');
+        throw createServiceError('Vui lòng xác thực email trước khi đăng nhập', 401, 'AUTH_EMAIL_NOT_VERIFIED');
       }
 
       // Kiểm tra account có active không
       if (!userAuth.isActive) {
-        throw new Error('Account is not active. Please verify your email first.');
+        throw createServiceError('Tài khoản chưa kích hoạt.', 401, 'AUTH_ACCOUNT_INACTIVE');
       }
 
       // Kiểm tra account có bị lock không
       if (userAuth.isLocked) {
-        throw new Error('Account is temporarily locked due to too many failed login attempts');
+        throw createServiceError('Tài khoản tạm khóa do đăng nhập sai nhiều lần', 401, 'AUTH_ACCOUNT_LOCKED');
       }
 
       // Kiểm tra password
       const isPasswordValid = await comparePassword(password, userAuth.password);
       if (!isPasswordValid) {
         await userAuth.incLoginAttempts();
-        throw new Error('Invalid email or password');
+        throw createServiceError('Email hoặc mật khẩu không đúng', 401, 'AUTH_INVALID_CREDENTIALS');
       }
 
       // Reset login attempts
@@ -215,7 +253,7 @@ class AuthService {
       // Tạo tokens
       const payload = {
         id: userAuth.userId.toString(),
-        email: userAuth.email,
+        email: plainEmail,
       };
 
       const accessToken = generateAccessToken(payload);
@@ -241,11 +279,11 @@ class AuthService {
         refreshToken,
         user: {
           id: userAuth.userId,
-          email: userAuth.email,
+          email: plainEmail,
         },
       };
     } catch (error) {
-      throw new Error(`Error logging in: ${error.message}`);
+      throw error;
     }
   }
 
@@ -262,13 +300,14 @@ class AuthService {
       });
 
       if (!userAuth || userAuth.refreshTokenExpiresAt < new Date()) {
-        throw new Error('Invalid or expired refresh token');
+        throw createServiceError('Phiên đăng nhập không hợp lệ hoặc đã hết hạn', 401, 'AUTH_REFRESH_INVALID');
       }
 
-      // Tạo access token mới
+      const plainEmail = await hydrateAuthEmailDoc(userAuth);
+
       const payload = {
         id: userAuth.userId.toString(),
-        email: userAuth.email,
+        email: plainEmail,
       };
 
       const accessToken = generateAccessToken(payload);
@@ -277,7 +316,7 @@ class AuthService {
         accessToken,
       };
     } catch (error) {
-      throw new Error(`Error refreshing token: ${error.message}`);
+      throw error;
     }
   }
 
@@ -303,7 +342,7 @@ class AuthService {
 
       return true;
     } catch (error) {
-      throw new Error(`Error logging out: ${error.message}`);
+      throw error;
     }
   }
 
@@ -336,14 +375,15 @@ class AuthService {
 
       return true;
     } catch (error) {
-      throw new Error(`Error changing password: ${error.message}`);
+      throw error;
     }
   }
 
   // Quên mật khẩu - tạo reset token
   async forgotPassword(email, frontendUrl) {
     try {
-      const userAuth = await UserAuth.findOne({ email });
+      const normalizedEmail = normalizeEmail(email);
+      const userAuth = await findUserAuthByEmail(normalizedEmail);
       if (!userAuth) {
         // Không báo lỗi để tránh email enumeration
         return {
@@ -351,6 +391,8 @@ class AuthService {
           emailScheduled: false,
         };
       }
+
+      const plainEmail = await hydrateAuthEmailDoc(userAuth);
 
       // Tạo reset token
       const passwordResetToken = crypto.randomBytes(32).toString('hex');
@@ -384,19 +426,19 @@ class AuthService {
 
       return response;
     } catch (error) {
-      throw new Error(`Error processing forgot password: ${error.message}`);
+      throw error;
     }
   }
 
   // Gửi lại email xác thực
   async resendVerificationEmail(email, frontendUrl) {
     try {
-      const normalizedEmail = String(email || '').trim().toLowerCase();
+      const normalizedEmail = normalizeEmail(email);
       if (!normalizedEmail) {
         throw new Error('Email is required');
       }
 
-      const userAuth = await UserAuth.findOne({ email: normalizedEmail });
+      const userAuth = await findUserAuthByEmail(normalizedEmail);
 
       if (!userAuth) {
         // Không trả lỗi để tránh email enumeration
@@ -421,10 +463,12 @@ class AuthService {
       userAuth.emailVerificationExpiresAt = emailVerificationExpiresAt;
       await userAuth.save();
 
+      const plainEmail = await hydrateAuthEmailDoc(userAuth);
+
       let emailScheduled = false;
       if (emailService.isAvailable()) {
         const emailResult = await emailService.sendVerificationEmail(
-          userAuth.email,
+          plainEmail,
           emailVerificationToken,
           frontendUrl
         );
@@ -449,8 +493,102 @@ class AuthService {
 
       return response;
     } catch (error) {
-      throw new Error(`Error resending verification email: ${error.message}`);
+      throw error;
     }
+  }
+
+  async requestEmailChange(userId, newEmail, frontendUrl) {
+    const uid = String(userId || '').trim();
+    if (!uid) {
+      throw createServiceError('Unauthorized', 401, 'AUTH_UNAUTHORIZED');
+    }
+    const normalizedEmail = normalizeEmail(newEmail);
+    if (!normalizedEmail) {
+      throw createServiceError('Email is required', 400, 'AUTH_EMAIL_REQUIRED');
+    }
+
+    const userAuth = await UserAuth.findOne({ userId: uid });
+    if (!userAuth) {
+      throw createServiceError('User not found', 404, 'AUTH_USER_NOT_FOUND');
+    }
+
+    const currentEmail = await hydrateAuthEmailDoc(userAuth);
+    if (normalizeEmail(currentEmail) === normalizedEmail) {
+      throw createServiceError('Email mới trùng email hiện tại', 400, 'AUTH_EMAIL_SAME_AS_CURRENT');
+    }
+
+    const existing = await findUserAuthByEmail(normalizedEmail, { maxTimeMS: 15000, lean: true });
+    if (existing && String(existing.userId || '') !== String(uid)) {
+      throw createServiceError('Email đã được sử dụng', 400, 'AUTH_EMAIL_EXISTS');
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    userAuth.pendingEmail = normalizedEmail;
+    userAuth.emailChangeToken = token;
+    userAuth.emailChangeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await userAuth.save();
+
+    let emailScheduled = false;
+    if (emailService.isAvailable()) {
+      const info = await emailService.sendEmailChangeVerificationEmail(normalizedEmail, token, frontendUrl);
+      emailScheduled = Boolean(info);
+    }
+    const response = {
+      message: 'Nếu email hợp lệ, link xác thực đã được gửi.',
+      emailScheduled,
+    };
+    if (!emailScheduled && process.env.NODE_ENV !== 'production') {
+      const baseNormalized = String(
+        (frontendUrl && String(frontendUrl).trim()) ||
+          process.env.FRONTEND_URL ||
+          'http://localhost:5173'
+      ).replace(/\/+$/, '');
+      response.verificationToken = token;
+      response.verificationUrl = `${baseNormalized}/verify-email-change?token=${token}`;
+    }
+    return response;
+  }
+
+  async verifyEmailChange(token) {
+    const verificationToken = String(token || '').trim();
+    if (!verificationToken) {
+      throw createServiceError('Verification token is required', 400, 'AUTH_EMAIL_CHANGE_TOKEN_REQUIRED');
+    }
+    const userAuth = await UserAuth.findOne({
+      emailChangeToken: verificationToken,
+      emailChangeExpiresAt: { $gt: new Date() },
+    });
+    if (!userAuth) {
+      throw createServiceError('Invalid or expired verification token', 400, 'AUTH_EMAIL_CHANGE_TOKEN_INVALID');
+    }
+
+    const nextEmail = normalizeEmail(userAuth.pendingEmail);
+    if (!nextEmail) {
+      throw createServiceError('Yêu cầu đổi email không hợp lệ', 400, 'AUTH_EMAIL_CHANGE_INVALID');
+    }
+
+    const existing = await findUserAuthByEmail(nextEmail, { maxTimeMS: 15000, lean: true });
+    if (existing && String(existing._id) !== String(userAuth._id)) {
+      throw createServiceError('Email đã được sử dụng', 400, 'AUTH_EMAIL_EXISTS');
+    }
+
+    Object.assign(userAuth, writeEmailFields(nextEmail));
+    userAuth.pendingEmail = null;
+    userAuth.pendingEmailBlindIndex = null;
+    userAuth.emailChangeToken = null;
+    userAuth.emailChangeExpiresAt = null;
+    await userAuth.save();
+
+    try {
+      await syncUserProfileEmail(userAuth.userId, nextEmail);
+    } catch (e) {
+      console.warn('[AuthService] verifyEmailChange: failed to sync user-profile email:', e?.message || e);
+    }
+
+    return {
+      userId: String(userAuth.userId || ''),
+      email: nextEmail,
+    };
   }
 
   // Reset mật khẩu
@@ -482,7 +620,7 @@ class AuthService {
 
       return true;
     } catch (error) {
-      throw new Error(`Error resetting password: ${error.message}`);
+      throw error;
     }
   }
 
@@ -523,12 +661,14 @@ class AuthService {
         );
       }
 
+      const plainEmail = await hydrateAuthEmailDoc(userAuth);
+
       return {
         userId: userId.toString(),
-        email: userAuth.email,
+        email: plainEmail,
       };
     } catch (error) {
-      throw new Error(`Error verifying email: ${error.message}`);
+      throw error;
     }
   }
 }

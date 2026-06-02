@@ -5,6 +5,7 @@ import { ConfirmDialog, GlassCard, GradientButton } from '../../components/Share
 import roleAPI from '../../services/api/roleAPI';
 import { organizationAPI } from '../../services/api/organizationAPI';
 import userService from '../../services/userService';
+import authService from '../../services/authService';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAppStrings } from '../../locales/appStrings';
@@ -47,6 +48,7 @@ function SettingsPage() {
   const [userProfileForm, setUserProfileForm] = useState({
     fullName: 'John Doe',
     phone: '+84 123 456 789',
+    email: '',
   });
   const [apiKeys, setApiKeys] = useState([
     { id: 'k1', name: 'Production API Key', created: '15/12/2025', lastUsed: '2 giờ trước', value: 'vh_prod_xxxxxxxxxxxx' },
@@ -113,7 +115,18 @@ function SettingsPage() {
     const avatarData = localStorage.getItem('settings:avatar');
 
     if (orgData) setOrganizationForm(JSON.parse(orgData));
-    if (userProfileData) setUserProfileForm(JSON.parse(userProfileData));
+    if (userProfileData) {
+      try {
+        const parsed = JSON.parse(userProfileData);
+        setUserProfileForm((prev) => ({
+          ...prev,
+          ...parsed,
+          email: typeof parsed?.email === 'string' ? parsed.email : prev.email,
+        }));
+      } catch {
+        /* ignore */
+      }
+    }
     if (apiKeyData) setApiKeys(JSON.parse(apiKeyData));
     if (integrationData) setIntegrations(JSON.parse(integrationData));
     if (securityData) {
@@ -187,6 +200,7 @@ function SettingsPage() {
     setUserProfileForm({
       fullName: user?.displayName || user?.fullName || user?.name || t('settingsPage.userFallback'),
       phone: user?.phone || user?.phoneNumber || user?.mobile || '',
+      email: user?.email || '',
     });
   }, [user, t]);
 
@@ -226,15 +240,24 @@ function SettingsPage() {
   };
 
   const handleSaveUserProfile = async () => {
+    const nextEmail = String(userProfileForm.email || '').trim().toLowerCase();
+    const currentEmail = String(user?.email || '').trim().toLowerCase();
     const payload = {
       displayName: String(userProfileForm.fullName || '').trim(),
       phone: String(userProfileForm.phone || '').trim(),
     };
     try {
+      if (nextEmail && nextEmail !== currentEmail) {
+        await authService.requestEmailChange(nextEmail);
+      }
       await userService.updateProfile(payload);
       updateUser(payload);
       localStorage.setItem('settings:userProfile', JSON.stringify(userProfileForm));
-      toast.success(t('settingsPage.toastSaveProfile'));
+      if (nextEmail && nextEmail !== currentEmail) {
+        toast.success(t('settingsPage.toastEmailChangeRequested'));
+      } else {
+        toast.success(t('settingsPage.toastSaveProfile'));
+      }
     } catch (error) {
       toast.error(error?.response?.data?.message || t('settingsPage.toastRoleErr'));
     }
@@ -407,11 +430,17 @@ function SettingsPage() {
       setRoleLoading(true);
       if (editingRoleId) {
         // Update existing role
+        if (!roleContextOrganizationId) {
+          toast.error(t('settingsPage.toastRoleNoOrg'));
+          return;
+        }
         await roleAPI.updateRole(editingRoleId, {
           name: roleDraft.name.trim(),
           permissions: roleDraft.permissions.trim(),
           color: roleDraft.color,
-          icon: roleDraft.icon
+          icon: roleDraft.icon,
+          serverId: roleContextOrganizationId,
+          organizationId: roleContextOrganizationId
         });
         setRoles((prev) => prev.map((role) => (
           role.id === editingRoleId
@@ -462,10 +491,10 @@ function SettingsPage() {
 
   const confirmDeleteRole = async () => {
     const roleId = roleDeleteConfirm;
-    if (!roleId) return;
+    if (!roleId || !roleContextOrganizationId) return;
     try {
       setRoleLoading(true);
-      await roleAPI.deleteRole(roleId);
+      await roleAPI.deleteRole(roleId, roleContextOrganizationId);
       setRoles((prev) => prev.filter((role) => role.id !== roleId));
       toast.success(t('settingsPage.toastRoleDeleted'));
     } catch (error) {
@@ -1002,6 +1031,7 @@ function SettingsPage() {
               <div className="flex items-center gap-6 mb-6">
                 <UserAvatar
                   avatar={avatarUrl || null}
+                  userId={user?.id || user?._id}
                   name={userProfileForm.fullName || user?.displayName || user?.name}
                   size="2xl"
                 />
@@ -1023,7 +1053,15 @@ function SettingsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className={`block text-sm font-semibold mb-2 ${st.label}`}>{t('settingsPage.email')}</label>
-                    <input type="email" value={user?.email || ''} className={st.input} disabled />
+                    <input
+                      type="email"
+                      value={userProfileForm.email}
+                      onChange={(e) => setUserProfileForm((prev) => ({ ...prev, email: e.target.value }))}
+                      className={st.input}
+                    />
+                    <p className={`mt-2 text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                      {t('settingsPage.emailChangeHint')}
+                    </p>
                   </div>
                   <div>
                     <label className={`block text-sm font-semibold mb-2 ${st.label}`}>{t('settingsPage.phone')}</label>

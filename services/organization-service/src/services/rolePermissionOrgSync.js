@@ -1,10 +1,11 @@
+const ROLE_PERMISSION_SERVICE_URL = String(process.env.ROLE_PERMISSION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ROLE_PERMISSION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ROLE_PERMISSION_SERVICE_URL');
 const axios = require('axios');
 const { logger } = require('/shared');
 const { invalidateOrgAcl } = require('./orgReadCache.service');
 const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
 
-const ROLE_PERMISSION_BASE =
-  String(process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015').replace(/\/$/, '');
+const ROLE_PERMISSION_BASE = process.env.ROLE_PERMISSION_SERVICE_URL;
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 
 const ORG_ROLE_ADMIN = 'Quản trị viên';
@@ -14,12 +15,14 @@ const ORG_ROLE_MEMBER = 'Thành viên';
 const PERMS_MEMBER = [
   { resource: 'chat', actions: ['read', 'write'] },
   { resource: 'task', actions: ['read'] },
+  { resource: 'role', actions: ['read'] },
 ];
 
 const PERMS_HR = [
   { resource: 'chat', actions: ['read', 'write'] },
   { resource: 'task', actions: ['read'] },
   { resource: 'organization_member', actions: ['read', 'write'] },
+  { resource: 'role', actions: ['read'] },
 ];
 
 const PERMS_ADMIN = [
@@ -28,6 +31,7 @@ const PERMS_ADMIN = [
   { resource: 'document', actions: ['read', 'write'] },
   { resource: 'voice', actions: ['read', 'write'] },
   { resource: 'organization', actions: ['read'] },
+  { resource: 'role', actions: ['read', 'write', 'delete', 'admin'] },
 ];
 
 function internalHeaders() {
@@ -96,6 +100,12 @@ async function ensureDefaultOrgRoles(organizationId) {
     await createIfMissing(ORG_ROLE_ADMIN, PERMS_ADMIN);
     await createIfMissing(ORG_ROLE_HR, PERMS_HR);
     await createIfMissing(ORG_ROLE_MEMBER, PERMS_MEMBER);
+
+    await axios.post(
+      `${ROLE_PERMISSION_BASE}/api/internal/roles/backfill-role-read/${encodeURIComponent(oid)}`,
+      {},
+      { headers: internalHeaders(), timeout: 12000, validateStatus: () => true }
+    );
   } catch (e) {
     logger.warn('[rolePermissionOrgSync] ensureDefaultOrgRoles', e.message);
   }

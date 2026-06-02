@@ -1,5 +1,19 @@
 const authService = require('../services/auth.service');
+const emailService = require('../utils/email');
 const { resolveFrontendUrl } = require('/shared');
+const { readEmailFromStored } = require('/shared/utils/emailPii');
+
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const message = String(err?.message || fallbackMessage);
+  const errorCode = String(err?.errorCode || fallbackCode || '').trim();
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(errorCode ? { errorCode } : {}),
+    ...(message ? { messageUser: message } : {}),
+  });
+}
 
 class AuthController {
   // Đăng ký
@@ -75,7 +89,7 @@ class AuthController {
       }
 
       const responseData = {
-        email: result.userAuth.email,
+        email: readEmailFromStored(result.userAuth?.email),
         message: 'Registration successful. Please check your email to verify your account.',
       };
 
@@ -125,10 +139,7 @@ class AuthController {
       }
 
       console.log('[AuthController] Sending error response to client...');
-      res.status(400).json({
-        success: false,
-        message: error.message || 'Registration failed',
-      });
+      return sendError(res, error, 400, 'Đăng ký thất bại', 'AUTH_REGISTER_FAILED');
       console.log('[AuthController] Error response sent');
     }
   }
@@ -152,10 +163,7 @@ class AuthController {
         data: result,
       });
     } catch (error) {
-      res.status(401).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 401, 'Đăng nhập thất bại', 'AUTH_LOGIN_FAILED');
     }
   }
 
@@ -178,10 +186,7 @@ class AuthController {
         data: result,
       });
     } catch (error) {
-      res.status(401).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 401, 'Làm mới phiên thất bại', 'AUTH_REFRESH_FAILED');
     }
   }
 
@@ -204,10 +209,7 @@ class AuthController {
         message: 'Logged out successfully',
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Đăng xuất thất bại', 'AUTH_LOGOUT_FAILED');
     }
   }
 
@@ -238,10 +240,7 @@ class AuthController {
         message: 'Password changed successfully',
       });
     } catch (error) {
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Đổi mật khẩu thất bại', 'AUTH_CHANGE_PASSWORD_FAILED');
     }
   }
 
@@ -270,10 +269,7 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 500, 'Không thể xử lý yêu cầu lúc này', 'AUTH_FORGOT_PASSWORD_FAILED');
     }
   }
 
@@ -303,10 +299,53 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
+      return sendError(res, error, 500, 'Không thể xử lý yêu cầu lúc này', 'AUTH_RESEND_VERIFY_FAILED');
+    }
+  }
+
+  async requestEmailChange(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      const { email } = req.body || {};
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Email is required' });
+      }
+      const frontendUrl = resolveFrontendUrl(req);
+      const result = await authService.requestEmailChange(userId, email, frontendUrl);
+      return res.json({
+        success: true,
+        message: result.message,
+        data: {
+          emailScheduled: !!result.emailScheduled,
+          ...(result.verificationToken ? { verificationToken: result.verificationToken } : {}),
+          ...(result.verificationUrl ? { verificationUrl: result.verificationUrl } : {}),
+        },
       });
+    } catch (error) {
+      return sendError(res, error, 400, 'Yêu cầu đổi email thất bại', 'AUTH_CHANGE_EMAIL_REQUEST_FAILED');
+    }
+  }
+
+  async verifyEmailChange(req, res) {
+    try {
+      const token = req.query.token || req.body?.token;
+      if (!token) {
+        return res.status(400).json({
+          success: false,
+          message: 'Verification token is required',
+        });
+      }
+      const result = await authService.verifyEmailChange(token);
+      return res.json({
+        success: true,
+        message: 'Email đã được cập nhật thành công.',
+        data: result,
+      });
+    } catch (error) {
+      return sendError(res, error, 400, 'Xác thực đổi email thất bại', 'AUTH_CHANGE_EMAIL_VERIFY_FAILED');
     }
   }
 
@@ -330,10 +369,7 @@ class AuthController {
         message: 'Password reset successfully',
       });
     } catch (error) {
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Đặt lại mật khẩu thất bại', 'AUTH_RESET_PASSWORD_FAILED');
     }
   }
 
@@ -368,10 +404,7 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(400).json({
-        success: false,
-        message: error.message,
-      });
+      return sendError(res, error, 400, 'Xác thực email thất bại', 'AUTH_VERIFY_EMAIL_FAILED');
     }
   }
 
@@ -396,10 +429,36 @@ class AuthController {
         },
       });
     } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message,
+      return sendError(res, error, 500, 'Không tải được thông tin tài khoản', 'AUTH_ME_FAILED');
+    }
+  }
+
+  /** Gọi nội bộ từ voice-service — gửi email mời phòng thoại */
+  async sendVoiceRoomInviteEmail(req, res) {
+    try {
+      const { email, inviteUrl, roomId, hostName } = req.body || {};
+      const normalized = String(email || '').trim().toLowerCase();
+      if (!normalized || !normalized.includes('@')) {
+        return res.status(400).json({ success: false, message: 'email is required' });
+      }
+      const url = String(inviteUrl || '').trim();
+      if (!url) {
+        return res.status(400).json({ success: false, message: 'inviteUrl is required' });
+      }
+      const info = await emailService.sendVoiceRoomInviteEmail(normalized, {
+        inviteUrl: url,
+        roomId: String(roomId || '').trim(),
+        hostName: String(hostName || '').trim(),
       });
+      if (!info) {
+        return res.status(503).json({
+          success: false,
+          message: 'Email service is not configured',
+        });
+      }
+      return res.json({ success: true, sent: true });
+    } catch (error) {
+      return sendError(res, error, 500, 'Không gửi được email mời', 'AUTH_VOICE_INVITE_EMAIL_FAILED');
     }
   }
 }

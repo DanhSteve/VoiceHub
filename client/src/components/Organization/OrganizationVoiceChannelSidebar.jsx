@@ -10,9 +10,9 @@ import { channelNameToDisplaySlug } from '../../utils/orgEntityDisplay';
 import {
   senderAvatarUrl,
   senderDisplayName,
-  senderInitials,
-  userInitialsFromProfile,
+  senderUserId,
 } from '../../utils/orgChatSender';
+import UserAvatar from '../Shared/UserAvatar';
 
 function formatMessageTime(isoDate, locale) {
   if (!isoDate) return '';
@@ -167,9 +167,6 @@ export default function OrganizationVoiceChannelSidebar({
                 t('orgPanel.member')
               );
               const avatarUrl = senderAvatarUrl(message, isMine, currentUser);
-              const avatarInitials = isMine
-                ? userInitialsFromProfile(currentUser)
-                : senderInitials(message);
               const roleCapsule = isMine
                 ? t('orgPanel.roleYouCaps')
                 : type === 'system'
@@ -181,18 +178,15 @@ export default function OrganizationVoiceChannelSidebar({
               return (
                 <Fragment key={mid}>
                   <div className="flex w-full items-start justify-start gap-2">
-                    <div
-                      className="mt-0.5 flex h-8 w-8 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-violet-600/80 to-fuchsia-700/80 text-[10px] font-bold text-white shadow-inner"
+                    <UserAvatar
+                      avatar={avatarUrl}
+                      userId={senderUserId(message, isMine, currentUser)}
+                      name={displayName}
+                      size="sm"
+                      className="mt-0.5"
                       title={displayName}
-                    >
-                      {avatarUrl && String(avatarUrl).startsWith('http') ? (
-                        <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
-                      ) : (
-                        <span className="flex h-full w-full items-center justify-center">
-                          {avatarInitials}
-                        </span>
-                      )}
-                    </div>
+                      ringClassName="shadow-inner"
+                    />
                     <div className="min-w-0 max-w-full flex-1">
                       <div className="mb-1 flex flex-wrap items-center gap-1.5 justify-start">
                         <span

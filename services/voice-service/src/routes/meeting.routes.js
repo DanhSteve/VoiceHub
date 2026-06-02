@@ -25,6 +25,9 @@ router.get('/', meetingController.getMeetings.bind(meetingController));
 // Bootstrap dữ liệu room cho WebRTC client (đặt trước dynamic route để tránh shadow route)
 router.get('/rooms/:roomId/bootstrap', meetingController.bootstrapRoom.bind(meetingController));
 
+const voiceRoomRoutes = require('./voiceRoom.routes');
+router.use('/rooms/:roomId', voiceRoomRoutes);
+
 // Lấy meeting theo ID
 router.get('/:meetingId', meetingController.getMeetingById.bind(meetingController));
 

@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { GlassCard, GradientButton } from '../Shared';
 import UserAvatar from '../Shared/UserAvatar';
 import friendService from '../../services/friendService';
+import { markFriendNotificationsResolved } from '../../services/notificationSync';
 import { useTheme } from '../../context/ThemeContext';
 
 function unwrapApiPayload(res) {
@@ -124,6 +125,7 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
     try {
       if (friendId) await friendService.acceptFriend(friendId);
       else await friendService.acceptRequest(requestId);
+      if (friendId) await markFriendNotificationsResolved(friendId);
       toast.success('Đã chấp nhận');
       onFriendlistChanged?.();
       await loadPending();
@@ -138,6 +140,7 @@ export default function AddFriendModal({ isOpen, onClose, onFriendlistChanged })
     try {
       if (friendId) await friendService.rejectFriend(friendId);
       else await friendService.rejectRequest(requestId);
+      if (friendId) await markFriendNotificationsResolved(friendId);
       toast.success('Đã từ chối');
       onFriendlistChanged?.();
       await loadPending();

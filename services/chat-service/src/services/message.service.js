@@ -154,6 +154,28 @@ class MessageService {
     }
   }
 
+  /** Log cuộc gọi 1-1 đã kết thúc (voice-service gọi nội bộ). */
+  async createCallLogMessage({ callerId, calleeId, media, durationSec }) {
+    const c1 = String(callerId || '').trim();
+    const c2 = String(calleeId || '').trim();
+    if (!c1 || !c2) {
+      throw new Error('callerId and calleeId are required');
+    }
+    const content = JSON.stringify({
+      v: 1,
+      media: media === 'audio' ? 'audio' : 'video',
+      callerId: c1,
+      calleeId: c2,
+      durationSec: Math.max(0, Math.floor(Number(durationSec) || 0)),
+    });
+    return this.createMessage({
+      senderId: c1,
+      receiverId: c2,
+      messageType: 'call_log',
+      content,
+    });
+  }
+
   async getMessageById(messageId) {
     try {
       await ensureMongoReady();

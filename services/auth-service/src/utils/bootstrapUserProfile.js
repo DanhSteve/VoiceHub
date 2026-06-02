@@ -1,4 +1,8 @@
+const USER_SERVICE_URL = String(process.env.USER_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!USER_SERVICE_URL) throw new Error('Thiếu biến môi trường: USER_SERVICE_URL');
 const axios = require('axios');
+const { hydrateAuthEmailDoc } = require('./authEmailPii');
+const { readDateOfBirthFromStored } = require('/shared/utils/dateOfBirthPii');
 
 /**
  * Username hợp lệ cho UserProfile (3–30 ký tự, không khoảng trắng thừa).
@@ -46,15 +50,16 @@ async function bootstrapUserProfile(userAuth, userId) {
     return { ok: false, reason: 'missing_internal_token' };
   }
 
-  const userServiceUrl = (process.env.USER_SERVICE_URL || 'http://user-service:3004').replace(
+  const userServiceUrl = (process.env.USER_SERVICE_URL).replace(
     /\/+$/,
     ''
   );
+  const plainEmail = await hydrateAuthEmailDoc(userAuth);
   const displayName = buildDisplayName(userAuth.firstName, userAuth.lastName);
   const username = buildBootstrapUsername(
     userAuth.firstName,
     userAuth.lastName,
-    userAuth.email,
+    plainEmail,
     uid
   );
 
@@ -64,9 +69,9 @@ async function bootstrapUserProfile(userAuth, userId) {
       {
         userId: uid,
         username,
-        email: userAuth.email,
+        email: plainEmail,
         displayName,
-        dateOfBirth: userAuth.dateOfBirth || undefined,
+        dateOfBirth: readDateOfBirthFromStored(userAuth.dateOfBirth) || undefined,
       },
       {
         headers: {
@@ -77,14 +82,14 @@ async function bootstrapUserProfile(userAuth, userId) {
       }
     );
 
-    console.log('[bootstrapUserProfile] OK for', userAuth.email, response.status);
+    console.log('[bootstrapUserProfile] OK for', plainEmail, response.status);
     return { ok: true, data: response.data };
   } catch (error) {
     const status = error.response?.status;
     const body = error.response?.data;
     console.error(
       '[bootstrapUserProfile] Failed:',
-      userAuth.email,
+      plainEmail,
       status || error.code,
       body?.message || error.message
     );

@@ -10,6 +10,20 @@ function validOid(id) {
   return mongoose.isValidObjectId(String(id || ''));
 }
 
+function sendError(res, err, fallbackStatus, fallbackMessage, fallbackCode) {
+  const status = Number(err?.statusCode) || fallbackStatus;
+  const isServerError = status >= 500;
+  const safeMessage = isServerError
+    ? 'Hệ thống tạm thời gặp sự cố. Vui lòng thử lại sau.'
+    : String(err?.message || fallbackMessage);
+  return res.status(status).json({
+    success: false,
+    message: safeMessage,
+    errorCode: String(err?.errorCode || fallbackCode || (isServerError ? 'TASK_BOARD_INTERNAL_ERROR' : '')).trim(),
+    messageUser: safeMessage,
+  });
+}
+
 class TaskBoardController {
   async createBoard(req, res) {
     try {
@@ -39,7 +53,7 @@ class TaskBoardController {
       });
       return res.status(201).json({ success: true, data: board });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể tạo board', 'TASK_BOARD_CREATE_FAILED');
     }
   }
 
@@ -65,7 +79,7 @@ class TaskBoardController {
     } catch (err) {
       logger.error('[task-board] listBoards failed: %s', err?.message || err);
       const status = err?.name === 'CastError' ? 400 : 500;
-      return res.status(status).json({ success: false, message: err.message || 'listBoards failed' });
+      return sendError(res, err, status, 'Không thể tải danh sách board', 'TASK_BOARD_LIST_FAILED');
     }
   }
 
@@ -78,7 +92,7 @@ class TaskBoardController {
       const data = await boardService.getBoardDetail({ userId, boardId });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(403).json({ success: false, message: err.message });
+      return sendError(res, err, 403, 'Không thể tải chi tiết board', 'TASK_BOARD_DETAIL_FAILED');
     }
   }
 
@@ -91,7 +105,7 @@ class TaskBoardController {
       const data = await boardService.listBoardAssignableMembers({ userId, boardId });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(403).json({ success: false, message: err.message });
+      return sendError(res, err, 403, 'Không thể tải danh sách thành viên', 'TASK_BOARD_MEMBERS_FAILED');
     }
   }
 
@@ -108,7 +122,7 @@ class TaskBoardController {
       const data = await boardService.createList({ userId, boardId, title });
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể tạo danh sách', 'TASK_BOARD_LIST_CREATE_FAILED');
     }
   }
 
@@ -127,7 +141,7 @@ class TaskBoardController {
       const data = await boardService.createCard({ userId, boardId, ...req.body });
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể tạo card', 'TASK_BOARD_CARD_CREATE_FAILED');
     }
   }
 
@@ -143,7 +157,7 @@ class TaskBoardController {
       const data = await boardService.moveCard({ userId, cardId, toListId, position, index });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể di chuyển card', 'TASK_BOARD_CARD_MOVE_FAILED');
     }
   }
 
@@ -160,7 +174,7 @@ class TaskBoardController {
       const data = await boardService.copyCard({ userId, cardId, toListId });
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể sao chép card', 'TASK_BOARD_CARD_COPY_FAILED');
     }
   }
 
@@ -173,7 +187,7 @@ class TaskBoardController {
       const data = await boardService.archiveCard({ userId, cardId });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể lưu trữ card', 'TASK_BOARD_CARD_ARCHIVE_FAILED');
     }
   }
 
@@ -190,7 +204,7 @@ class TaskBoardController {
       const lists = await boardService.reorderList({ userId, boardId, listId, position });
       return res.json({ success: true, data: lists });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể sắp xếp danh sách', 'TASK_BOARD_LIST_REORDER_FAILED');
     }
   }
 
@@ -207,7 +221,7 @@ class TaskBoardController {
       const data = await boardService.copyList({ userId, listId, title, toBoardId });
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể sao chép danh sách', 'TASK_BOARD_LIST_COPY_FAILED');
     }
   }
 
@@ -223,7 +237,7 @@ class TaskBoardController {
       const data = await boardService.moveList({ userId, listId, toBoardId, position });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể di chuyển danh sách', 'TASK_BOARD_LIST_MOVE_FAILED');
     }
   }
 
@@ -239,7 +253,7 @@ class TaskBoardController {
       const data = await boardService.moveAllCardsInList({ userId, listId, toListId });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể di chuyển toàn bộ card', 'TASK_BOARD_LIST_MOVE_ALL_FAILED');
     }
   }
 
@@ -252,7 +266,7 @@ class TaskBoardController {
       const data = await boardService.setListWatch({ userId, listId, watching: true });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể theo dõi danh sách', 'TASK_BOARD_LIST_WATCH_FAILED');
     }
   }
 
@@ -265,7 +279,7 @@ class TaskBoardController {
       const data = await boardService.setListWatch({ userId, listId, watching: false });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể hủy theo dõi danh sách', 'TASK_BOARD_LIST_UNWATCH_FAILED');
     }
   }
 
@@ -280,7 +294,7 @@ class TaskBoardController {
       const data = await boardService.archiveList({ userId, boardId, listId });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể lưu trữ danh sách', 'TASK_BOARD_LIST_ARCHIVE_FAILED');
     }
   }
 
@@ -307,7 +321,7 @@ class TaskBoardController {
       });
       return res.json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể cập nhật card', 'TASK_BOARD_CARD_UPDATE_FAILED');
     }
   }
 
@@ -321,7 +335,7 @@ class TaskBoardController {
       const data = await boardService.addCardComment({ userId, cardId, content });
       return res.status(201).json({ success: true, data });
     } catch (err) {
-      return res.status(400).json({ success: false, message: err.message });
+      return sendError(res, err, 400, 'Không thể thêm bình luận card', 'TASK_BOARD_CARD_COMMENT_FAILED');
     }
   }
 }

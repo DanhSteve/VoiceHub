@@ -77,16 +77,17 @@ export function applyAuthHeader(config) {
   return config;
 }
 
-/** Ghi JWT vào cả localStorage + sessionStorage — tránh mất token khi đổi VITE_TOKEN_STORAGE. */
+/** Ghi JWT vào storage đã cấu hình (không mirror sang storage kia). */
 export function setToken(token) {
   const value = token != null ? String(token).trim() : '';
   if (!value) return;
   try {
-    localStorage.setItem(KEY, value);
-    sessionStorage.setItem(KEY, value);
+    const primary = getTokenStorage();
+    if (primary) {
+      primary.setItem(KEY, value);
+    }
   } catch {
-    const s = getTokenStorage();
-    if (s) s.setItem(KEY, value);
+    /* ignore */
   }
   notifyTokenChange();
 }

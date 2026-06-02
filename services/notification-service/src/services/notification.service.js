@@ -352,6 +352,60 @@ class NotificationService {
    * Sau khi accept/reject kết bạn: đánh dấu đã đọc mọi thông báo friend_request / friend_accepted
    * liên quan tới counterparty (data.userId hoặc data.friendId khớp requester/accepter).
    */
+  /**
+   * Sau khi host duyệt/từ chối yêu cầu vào phòng voice: đánh dấu đã đọc thông báo meeting + voice_room_join_request.
+   */
+  async markVoiceRoomJoinRequestRead(userId, { roomId, requestId, requestUserId }) {
+    try {
+      const uid = new mongoose.Types.ObjectId(String(userId));
+      const rid = String(roomId || '').trim();
+      if (!rid) {
+        throw new Error('roomId is required');
+      }
+
+      const filter = {
+        userId: uid,
+        isRead: false,
+        type: 'meeting',
+        'data.kind': 'voice_room_join_request',
+        'data.roomId': rid,
+      };
+      if (requestId) {
+        filter['data.requestId'] = String(requestId);
+      } else if (requestUserId) {
+        filter['data.requestUserId'] = String(requestUserId);
+      }
+
+      const docs = await Notification.find(filter).select('_id').lean();
+      const ids = docs.map((d) => String(d._id));
+
+      if (ids.length === 0) {
+        return { modifiedCount: 0, notificationIds: [] };
+      }
+
+      await Notification.updateMany(
+        { _id: { $in: docs.map((d) => d._id) } },
+        { $set: { isRead: true, readAt: new Date(), 'data.resolved': true } }
+      );
+
+      await emitRealtimeEvent({
+        event: 'notification:read_many',
+        userId: String(userId),
+        payload: {
+          notificationIds: ids,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      await emitUnreadSnapshots(userId, [{ scope: 'personal' }]);
+
+      return { modifiedCount: ids.length, notificationIds: ids };
+    } catch (error) {
+      logger.error('Error marking voice room join request notifications read:', error);
+      throw new Error(`Error marking voice room join request notifications read: ${error.message}`);
+    }
+  }
+
   async markFriendRelatedRead(userId, counterpartyId) {
     try {
       const uid = new mongoose.Types.ObjectId(String(userId));

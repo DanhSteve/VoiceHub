@@ -39,6 +39,20 @@ export function senderAvatarUrl(message, isMine, currentUser) {
   return null;
 }
 
+export function senderUserId(message, isMine, currentUser) {
+  if (isMine) {
+    const id = currentUser?.id || currentUser?._id || currentUser?.userId;
+    return id != null ? String(id) : null;
+  }
+  const u = message?.senderId;
+  if (u && typeof u === 'object') {
+    const id = u._id || u.id || u.userId;
+    return id != null ? String(id) : null;
+  }
+  if (u != null && u !== '') return String(u);
+  return null;
+}
+
 export function userInitialsFromProfile(user) {
   const name =
     user?.displayName || user?.fullName || user?.username || user?.email?.split?.('@')?.[0] || '';

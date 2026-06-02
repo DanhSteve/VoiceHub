@@ -20,6 +20,7 @@ export default function CreateTaskFromAiModal({
   onClose,
   messageId,
   organizationId,
+  workspaceSlug = '',
   currentUserId,
   messagePreview = '',
   mentions = [],
@@ -44,6 +45,13 @@ export default function CreateTaskFromAiModal({
     [currentUserId]
   );
   const startedRef = useRef(false);
+  const mentionsRef = useRef(mentions);
+  mentionsRef.current = mentions;
+
+  const mentionsKey = useMemo(
+    () => JSON.stringify(sanitizeMentionsForApi(mentions)),
+    [mentions]
+  );
 
   const reset = useCallback(() => {
     setPhase('idle');
@@ -63,14 +71,15 @@ export default function CreateTaskFromAiModal({
       reset();
       return;
     }
+
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     if (!messageId || !organizationId || !currentUserId) {
       setError('Thiếu thông tin tin nhắn hoặc tổ chức.');
       setPhase('failed');
       return;
     }
-
-    if (startedRef.current) return;
-    startedRef.current = true;
 
     let cancelled = false;
     const run = async () => {
@@ -81,7 +90,7 @@ export default function CreateTaskFromAiModal({
           {
             messageId: String(messageId),
             organizationId: String(organizationId),
-            mentions: sanitizeMentionsForApi(mentions),
+            mentions: sanitizeMentionsForApi(mentionsRef.current),
             channelId: channelId ? String(channelId) : undefined,
           },
           userHeaders
@@ -121,7 +130,7 @@ export default function CreateTaskFromAiModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, messageId, organizationId, currentUserId, mentions, channelId, reset, userHeaders]);
+  }, [isOpen, messageId, organizationId, currentUserId, mentionsKey, channelId, reset, userHeaders]);
 
   // Load board/list theo team của kênh chat
   useEffect(() => {
@@ -134,12 +143,15 @@ export default function CreateTaskFromAiModal({
         const res = await taskAPI.getBoards({
           organizationId: String(organizationId),
           teamId: String(teamId),
+          ...(workspaceSlug ? { workspaceSlug } : {}),
         });
         const boards = unwrapTaskBoardListPayload(res);
         if (cancelled) return;
         setTaskBoards(boards);
         const firstBoard = boards[0]?._id || boards[0]?.id;
-        if (firstBoard && !selectedBoardId) setSelectedBoardId(String(firstBoard));
+        if (firstBoard) {
+          setSelectedBoardId((prev) => prev || String(firstBoard));
+        }
       } catch {
         if (cancelled) return;
         setTaskBoards([]);
@@ -152,24 +164,29 @@ export default function CreateTaskFromAiModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, organizationId, teamId, selectedBoardId]);
+  }, [isOpen, organizationId, teamId, workspaceSlug]);
 
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
       if (!isOpen) return;
-      if (!selectedBoardId) return;
+      if (!selectedBoardId) {
+        setTaskLists([]);
+        setSelectedListId('');
+        return;
+      }
       setListsLoading(true);
       try {
-        const res = await taskAPI.getBoardDetail(String(selectedBoardId));
+        const res = await taskAPI.getBoardDetail(
+          String(selectedBoardId),
+          workspaceSlug ? { workspaceSlug } : {}
+        );
         const detail = unwrapTaskBoardDetailPayload(res);
         const lists = Array.isArray(detail?.lists) ? detail.lists : [];
         if (cancelled) return;
         setTaskLists(lists);
-        if (lists.length) {
-          const firstList = lists[0]?._id || lists[0]?.id;
-          if (firstList && !selectedListId) setSelectedListId(String(firstList));
-        }
+        const firstList = lists[0]?._id || lists[0]?.id;
+        setSelectedListId(firstList ? String(firstList) : '');
       } catch {
         if (cancelled) return;
         setTaskLists([]);
@@ -183,7 +200,7 @@ export default function CreateTaskFromAiModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, selectedBoardId, selectedListId]);
+  }, [isOpen, selectedBoardId, workspaceSlug]);
 
   const draft = extraction?.draft || {};
   const assigneeId = draft.assigneeId ? String(draft.assigneeId) : '';

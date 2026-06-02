@@ -5,7 +5,17 @@ const {
   decryptFieldSafe,
   phoneBlindIndex,
 } = require('/shared/utils/fieldCrypto');
+const {
+  readEmailFromStored,
+  writeEmailFields,
+  migrateEmailOnDocument,
+} = require('/shared/utils/emailPii');
 const { unwrapPlaintext } = require('/shared/utils/migration');
+const {
+  readDateOfBirthFromStored,
+  writeDateOfBirthFields,
+  migrateDateOfBirthOnDocument,
+} = require('/shared/utils/dateOfBirthPii');
 
 function readBioPlain(stored) {
   if (stored == null || stored === '') return '';
@@ -21,10 +31,39 @@ function readBioPlain(stored) {
 /** Plaintext cho API response (GET /users/me). */
 function readPiiFromProfile(plain) {
   return {
+    email: readEmailFromStored(plain.email),
     bio: readBioPlain(plain.bio),
     phone: decryptFieldSafe(plain.phone, ''),
     location: unwrapPlaintext(plain.location) || '',
+    dateOfBirth: readDateOfBirthFromStored(plain.dateOfBirth),
   };
+}
+
+function writeEmailPatch(email) {
+  return writeEmailFields(email);
+}
+
+async function maybeMigrateProfileEmail(UserProfile, doc) {
+  if (!doc) return null;
+  const { plain, persist } = migrateEmailOnDocument(doc);
+  if (persist && doc._id) {
+    await UserProfile.updateOne({ _id: doc._id }, { $set: persist });
+    Object.assign(doc, persist);
+  }
+  return plain;
+}
+
+async function maybeMigrateProfilePii(UserProfile, doc) {
+  if (!doc) return;
+  let persist = null;
+  const emailM = migrateEmailOnDocument(doc);
+  if (emailM.persist) persist = { ...emailM.persist };
+  const dobM = migrateDateOfBirthOnDocument(doc);
+  if (dobM.persist) persist = { ...(persist || {}), ...dobM.persist };
+  if (persist && doc._id) {
+    await UserProfile.updateOne({ _id: doc._id }, { $set: persist });
+    Object.assign(doc, persist);
+  }
 }
 
 /** Chuẩn bị $set khi PATCH profile — mã hóa at-rest khi bật ENCRYPTION_MASTER_KEY. */
@@ -51,6 +90,9 @@ function writePiiPatch(input = {}) {
       out.phoneBlindIndex = null;
     }
   }
+  if (input.dateOfBirth !== undefined) {
+    Object.assign(out, writeDateOfBirthFields(input.dateOfBirth));
+  }
   if (Object.keys(out).length > 0 && isEncryptionEnabled()) {
     out.encV = 1;
   }
@@ -60,4 +102,8 @@ function writePiiPatch(input = {}) {
 module.exports = {
   readPiiFromProfile,
   writePiiPatch,
+  writeEmailPatch,
+  writeDateOfBirthFields,
+  maybeMigrateProfileEmail,
+  maybeMigrateProfilePii,
 };

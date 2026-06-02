@@ -123,8 +123,17 @@ export function avatarImageShellClassName(size = 'md', extra = '') {
     .join(' ');
 }
 
-export function resolveAvatarSrc(avatar, cacheBust) {
+/** Avatar /uploads — không dùng <img src> trực tiếp (gateway 401); tải blob có Authorization. */
+export function needsAuthenticatedAvatarFetch(avatar) {
+  const raw = pickAvatarValue(avatar);
+  return Boolean(raw && /\/uploads\//i.test(String(raw)));
+}
+
+export function resolveAvatarSrc(avatar, cacheBust, userId = null) {
   if (!isAvatarImageUrl(avatar)) return null;
+  if (needsAuthenticatedAvatarFetch(avatar, userId)) {
+    return null;
+  }
   let url = resolveMediaUrlLocal(avatar);
   if (!url) return null;
   if (cacheBust) {
@@ -135,4 +144,4 @@ export function resolveAvatarSrc(avatar, cacheBust) {
 }
 
 export const AVATAR_FILE_ACCEPT =
-  'image/jpeg,image/jpg,image/png,image/gif,image/webp,image/bmp,image/svg+xml,image/x-icon,image/avif,image/heic,image/heif,.jpg,.jpeg,.png,.gif,.webp,.bmp,.svg,.ico,.avif,.heic,.heif';
+  'image/jpeg,image/jpg,image/png,image/gif,image/webp,image/bmp,image/x-icon,image/avif,image/heic,image/heif,.jpg,.jpeg,.png,.gif,.webp,.bmp,.ico,.avif,.heic,.heif';

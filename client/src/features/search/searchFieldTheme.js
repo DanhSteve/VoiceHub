@@ -1,4 +1,4 @@
-/** Class names dùng chung cho AppSearchField và OrgWorkspaceSearch. */
+/** Class names dùng chung cho AppSearchField và OrgWorkspaceSearchSidebar. */
 
 const SIZE = {
   sm: {

@@ -18,6 +18,15 @@ const apiLimiter = rateLimit({
   skip: (req) => !req.path.startsWith('/api'),
 });
 app.use(apiLimiter);
+
+const loginLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.GATEWAY_LOGIN_RATE_MAX || 15),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many login attempts, please try again later' },
+});
+app.use('/api/auth/login', loginLimiter);
 const VOICE_SIGNAL_PATH = process.env.VOICE_SIGNAL_PATH || '/voice-socket';
 
 function escapeRegExp(value) {
@@ -27,7 +36,13 @@ function escapeRegExp(value) {
 function toOriginMatcher(rule) {
   const normalized = String(rule || '').replace(/\/+$/, '').trim();
   if (!normalized) return null;
-  if (normalized === '*') return () => true;
+  if (normalized === '*') {
+    if (isProd) {
+      console.warn('[api-gateway] CORS_ORIGIN=* is ignored in production');
+      return null;
+    }
+    return () => true;
+  }
   if (!normalized.includes('*')) {
     return (origin) => origin.replace(/\/+$/, '') === normalized;
   }
@@ -92,9 +107,19 @@ app.use(
   })
 );
 
-// Ảnh đại diện /uploads/* — user-service static tại /uploads (Express mount strip prefix → pathRewrite)
+// Legacy /uploads/* — yêu cầu JWT; ưu tiên GET /api/users/:id/avatar
+const authMiddleware = require('./middlewares/auth.middleware');
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.GATEWAY_UPLOAD_RATE_MAX || 60),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many upload requests, please try again later' },
+});
 app.use(
   '/uploads',
+  uploadLimiter,
+  authMiddleware,
   createProxyMiddleware({
     target: services.user.url,
     changeOrigin: true,

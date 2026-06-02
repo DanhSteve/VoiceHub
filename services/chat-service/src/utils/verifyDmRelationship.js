@@ -1,9 +1,7 @@
 const axios = require('axios');
 
-const FRIEND_SERVICE_URL = (process.env.FRIEND_SERVICE_URL || 'http://friend-service:3014').replace(
-  /\/+$/,
-  ''
-);
+const FRIEND_SERVICE_URL = String(process.env.FRIEND_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!FRIEND_SERVICE_URL) throw new Error('Thiếu biến môi trường: FRIEND_SERVICE_URL');
 
 /**
  * Chỉ cho phép gửi DM khi quan hệ accepted (friend-service).

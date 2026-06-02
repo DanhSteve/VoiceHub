@@ -22,6 +22,11 @@ const userProfileSchema = new mongoose.Schema(
       required: true,
       lowercase: true,
       trim: true,
+    },
+    emailBlindIndex: {
+      type: String,
+      default: null,
+      sparse: true,
       unique: true,
     },
     displayName: {
@@ -55,8 +60,9 @@ const userProfileSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /** Date (legacy plaintext) hoặc ciphertext string khi bật mã hóa */
     dateOfBirth: {
-      type: Date,
+      type: mongoose.Schema.Types.Mixed,
       default: null,
     },
     location: {
@@ -96,6 +102,11 @@ const userProfileSchema = new mongoose.Schema(
         default: true,
       },
     },
+    /** Biệt danh hiển thị theo tổ chức — key: organizationId */
+    orgNicknames: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
+    },
   },
   {
     timestamps: true,
@@ -103,6 +114,8 @@ const userProfileSchema = new mongoose.Schema(
 );
 
 // Virtual để lấy thông tin cơ bản
+userProfileSchema.index({ email: 1 });
+
 userProfileSchema.virtual('publicInfo').get(function () {
   return {
     userId: this.userId,

@@ -53,8 +53,7 @@ const ALLOWED_MIME_PREFIXES = (process.env.FILE_ALLOWED_MIME || DEFAULT_ALLOWED_
 function isMimeAllowed(mimeType) {
   const m = String(mimeType || '').toLowerCase();
   if (!m) return false;
-  /** Trình duyệt thường dùng khi không nhận diện được loại file. */
-  if (m === 'application/octet-stream') return true;
+  if (m === 'application/octet-stream') return false;
   return ALLOWED_MIME_PREFIXES.some((prefix) =>
     prefix.endsWith('/') ? m.startsWith(prefix) : m.startsWith(prefix.toLowerCase())
   );

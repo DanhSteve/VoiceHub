@@ -6,8 +6,11 @@ const {
   userCanAccessTask,
 } = require('./taskWorkspaceScope');
 const axios = require('axios');
+const { writeTaskPayload, encryptTextIfEnabled } = require('../utils/taskPii');
+const { toClientTask, toClientTaskList } = require('../utils/taskDto');
 
-const ORGANIZATION_SERVICE_URL = process.env.ORGANIZATION_SERVICE_URL || 'http://organization-service:3013';
+const ORGANIZATION_SERVICE_URL = String(process.env.ORGANIZATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ORGANIZATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ORGANIZATION_SERVICE_URL');
 
 async function enrichTasksWithUserLabels(tasks) {
   const list = Array.isArray(tasks) ? tasks : [];
@@ -106,31 +109,35 @@ class TaskService {
         }
       }
 
-      const task = new Task({
-        title,
-        summary: summary ? String(summary).trim() : '',
-        description,
-        assigneeId,
-        createdBy,
-        serverId,
-        organizationId,
-        departmentId: departmentId || null,
-        teamId: teamId || null,
-        departmentName: departmentName ? String(departmentName).trim() : '',
-        priority: priority || 'medium',
-        dueDate,
-        tags: tags || [],
-        aiGenerated: Boolean(aiGenerated),
-        sourceMessageId: sourceMessageId || null,
-      });
+      const task = new Task(
+        writeTaskPayload({
+          title,
+          summary: summary ? String(summary).trim() : '',
+          description,
+          assigneeId,
+          createdBy,
+          serverId,
+          organizationId,
+          departmentId: departmentId || null,
+          teamId: teamId || null,
+          departmentName: departmentName ? String(departmentName).trim() : '',
+          priority: priority || 'medium',
+          dueDate,
+          tags: tags || [],
+          aiGenerated: Boolean(aiGenerated),
+          sourceMessageId: sourceMessageId || null,
+        })
+      );
 
       await task.save();
+
+      const clientTask = await toClientTask(task);
 
       // Gửi webhook
       if (assigneeId) {
         await taskWebhook.created(
           task._id.toString(),
-          task.title,
+          clientTask.title,
           createdBy.toString(),
           assigneeId.toString(),
           organizationId?.toString()
@@ -138,7 +145,7 @@ class TaskService {
       }
 
       logger.info(`Task created: ${task._id}`);
-      return task;
+      return clientTask;
     } catch (error) {
       logger.error('Error creating task:', error);
       throw new Error(`Error creating task: ${error.message}`);
@@ -151,7 +158,7 @@ class TaskService {
       // Không populate User (không có model User đăng ký trong task-service).
       const task = await Task.findById(taskId);
 
-      return task;
+      return await toClientTask(task);
     } catch (error) {
       logger.error('Error getting task:', error);
       throw new Error(`Error getting task: ${error.message}`);
@@ -173,7 +180,8 @@ class TaskService {
         .lean();
 
       const total = await Task.countDocuments(filter);
-      const enriched = await enrichTasksWithUserLabels(tasks);
+      const decrypted = await toClientTaskList(tasks);
+      const enriched = await enrichTasksWithUserLabels(decrypted);
 
       return {
         tasks: enriched,
@@ -238,14 +246,15 @@ class TaskService {
         updateFields.completedAt = null;
       }
 
+      const encryptedUpdate = writeTaskPayload(updateFields);
       const updated = await Task.findByIdAndUpdate(
         taskId,
-        { $set: updateFields },
+        { $set: encryptedUpdate },
         { new: true, runValidators: true }
       );
 
       logger.info(`Task updated: ${taskId}`);
-      return updated;
+      return await toClientTask(updated);
     } catch (error) {
       logger.error('Error updating task:', error);
       throw new Error(`Error updating task: ${error.message}`);
@@ -271,7 +280,7 @@ class TaskService {
       await task.save();
 
       logger.info(`Task deleted: ${taskId}`);
-      return task;
+      return await toClientTask(task);
     } catch (error) {
       logger.error('Error deleting task:', error);
       throw new Error(`Error deleting task: ${error.message}`);
@@ -289,14 +298,14 @@ class TaskService {
 
       task.comments.push({
         userId,
-        content,
+        content: encryptTextIfEnabled(content),
         createdAt: new Date(),
       });
 
       await task.save();
 
       logger.info(`Comment added to task: ${taskId}`);
-      return task;
+      return await toClientTask(task);
     } catch (error) {
       logger.error('Error adding comment:', error);
       throw new Error(`Error adding comment: ${error.message}`);

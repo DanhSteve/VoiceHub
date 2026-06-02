@@ -66,11 +66,12 @@ export const debounce = (func, wait) => {
 
 export { displayInitials as getInitials } from './avatarDisplay';
 
-/** URL media same-origin (avatar /uploads/... qua Nginx). */
+/** URL media same-origin. Không dùng cho /uploads/ trong <img> — dùng UserAvatar (JWT blob). */
 export const resolveMediaUrl = (path) => {
   if (!path) return '';
   const p = String(path).trim();
   if (!p) return '';
+  if (/\/uploads\//i.test(p)) return '';
   if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('data:')) return p;
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin}${p.startsWith('/') ? p : `/${p}`}`;

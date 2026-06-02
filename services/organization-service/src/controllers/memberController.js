@@ -1,3 +1,5 @@
+const ROLE_PERMISSION_SERVICE_URL = String(process.env.ROLE_PERMISSION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!ROLE_PERMISSION_SERVICE_URL) throw new Error('Thiếu biến môi trường: ROLE_PERMISSION_SERVICE_URL');
 const Membership = require('../models/Membership');
 const Organization = require('../models/Organization');
 const JoinApplication = require('../models/JoinApplication');
@@ -17,8 +19,8 @@ const { ORG_EVENT_TYPES } = require('../messaging/orgEvents.publisher');
 const ALLOWED_ROLES = ['owner', 'admin', 'hr', 'member'];
 const INVITE_LINK_SECRET = String(process.env.INVITE_LINK_SECRET || process.env.JWT_SECRET || '').trim();
 const INVITE_LINK_EXPIRES_IN = process.env.INVITE_LINK_EXPIRES_IN || '7d';
-const NOTIFICATION_SERVICE_URL =
-  process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3003';
+const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/+$/, '');
+if (!NOTIFICATION_SERVICE_URL) throw new Error('Thiếu biến môi trường: NOTIFICATION_SERVICE_URL');
 const NOTIFICATION_INTERNAL_TOKEN = String(process.env.NOTIFICATION_INTERNAL_TOKEN || '').trim();
 
 function notificationServiceAxiosOpts() {
@@ -157,7 +159,7 @@ async function createPendingJoinApplication({
 const MEMBER_LIST_FULL_ACCESS_ROLES = ['owner', 'admin', 'hr'];
 
 const ROLE_PERMISSION_BASE = String(
-  process.env.ROLE_PERMISSION_SERVICE_URL || 'http://role-permission-service:3015'
+  process.env.ROLE_PERMISSION_SERVICE_URL
 ).replace(/\/$/, '');
 const GATEWAY_INTERNAL_TOKEN = String(process.env.GATEWAY_INTERNAL_TOKEN || '').trim();
 
@@ -167,13 +169,18 @@ function rolePermissionInternalHeaders() {
   return h;
 }
 
-async function fetchOrgRolesList(orgId) {
+async function fetchOrgRolesList(orgId, userId) {
   const oid = String(orgId || '').trim();
-  if (!oid || !GATEWAY_INTERNAL_TOKEN) return [];
+  const uid = String(userId || '').trim();
+  if (!oid || !uid || !GATEWAY_INTERNAL_TOKEN) return [];
   try {
+    const headers = {
+      ...rolePermissionInternalHeaders(),
+      'x-user-id': uid,
+    };
     const res = await axios.get(
       `${ROLE_PERMISSION_BASE}/api/roles/server/${encodeURIComponent(oid)}`,
-      { headers: rolePermissionInternalHeaders(), timeout: 8000, validateStatus: () => true }
+      { headers, timeout: 8000, validateStatus: () => true }
     );
     if (res.status >= 400) return [];
     const body = res.data?.data ?? res.data;
@@ -270,6 +277,7 @@ exports.getMembers = async (req, res, next) => {
         status: 'fail',
         message: error.message,
         code: error.code,
+        messageUser: error.message,
       });
     }
     return next(error);
@@ -279,9 +287,10 @@ exports.getMembers = async (req, res, next) => {
 /** Gom members + roles RBAC — một request cho sidebar (wave-2d). */
 exports.getMembersWithRoles = async (req, res, next) => {
   try {
+    const userId = String(req.user?.id || req.user?.userId || req.user?._id || '');
     const [members, roles] = await Promise.all([
       listMembersForOrg(req),
-      fetchOrgRolesList(req.params.orgId),
+      fetchOrgRolesList(req.params.orgId, userId),
     ]);
     return res.json({ status: 'success', data: { members, roles } });
   } catch (error) {
@@ -290,6 +299,7 @@ exports.getMembersWithRoles = async (req, res, next) => {
         status: 'fail',
         message: error.message,
         code: error.code,
+        messageUser: error.message,
       });
     }
     return next(error);

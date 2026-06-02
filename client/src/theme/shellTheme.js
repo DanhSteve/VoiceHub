@@ -27,8 +27,11 @@ export function tasksFilterTrigger(isDark) {
 export const shellNavRailBackdrop =
   'fixed top-0 right-0 bottom-0 left-[var(--vh-nav-rail-width,3.5rem)]';
 
-/** Rail luôn trên backdrop chat/emoji (z-80) và overlay menu sidebar (z-998). */
-export const shellNavRailZ = 'z-[1100]';
+/** Rail portal (fixed trên body) — luôn trên menu backdrop và overlay workspace. */
+export const shellNavRailZ = 'z-[1200]';
+
+/** Backdrop menu rail / org — dưới rail portal, không phủ vùng rail (left = --vh-nav-rail-width). */
+export const shellNavRailMenuBackdropZ = 'z-[1150]';
 
 export function navSidebarRail(isDark) {
   return isDark

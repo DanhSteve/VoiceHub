@@ -354,6 +354,190 @@ html.light .text-gradient {
     }
   }
 
+  /* Sidebar Voice: mảnh, bo tròn, accent cyan — hiện nhẹ, đậm hơn khi hover */
+  .scrollbar-voice-sidebar {
+    scrollbar-gutter: stable;
+  }
+  .scrollbar-voice-sidebar::-webkit-scrollbar {
+    width: 7px;
+  }
+  .scrollbar-voice-sidebar::-webkit-scrollbar-track {
+    margin: 6px 0;
+    background: transparent;
+    border-radius: 999px;
+  }
+  .scrollbar-voice-sidebar::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: linear-gradient(
+      180deg,
+      rgba(34, 211, 238, 0.45) 0%,
+      rgba(20, 184, 166, 0.35) 50%,
+      rgba(56, 189, 248, 0.3) 100%
+    );
+    background-clip: padding-box;
+    box-shadow: 0 0 8px rgba(6, 182, 212, 0.15);
+  }
+  .scrollbar-voice-sidebar::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(103, 232, 249, 0.75) 0%,
+      rgba(45, 212, 191, 0.65) 50%,
+      rgba(125, 211, 252, 0.6) 100%
+    );
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.25);
+  }
+  @supports (scrollbar-width: thin) {
+    .scrollbar-voice-sidebar {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(34, 211, 238, 0.45) transparent;
+    }
+  }
+  html.light .scrollbar-voice-sidebar::-webkit-scrollbar-thumb {
+    background: linear-gradient(
+      180deg,
+      rgba(8, 145, 178, 0.35) 0%,
+      rgba(13, 148, 136, 0.28) 50%,
+      rgba(2, 132, 199, 0.25) 100%
+    );
+    box-shadow: none;
+  }
+  html.light .scrollbar-voice-sidebar::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(8, 145, 178, 0.55) 0%,
+      rgba(13, 148, 136, 0.48) 50%,
+      rgba(2, 132, 199, 0.42) 100%
+    );
+  }
+  @supports (scrollbar-width: thin) {
+    html.light .scrollbar-voice-sidebar {
+      scrollbar-color: rgba(8, 145, 178, 0.4) transparent;
+    }
+  }
+
+  /* Cột thông báo (mới / lịch sử): thanh cuộn mảnh, accent cyan–teal */
+  .scrollbar-notifications {
+    scrollbar-gutter: stable;
+  }
+  .scrollbar-notifications::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-notifications::-webkit-scrollbar-track {
+    margin: 4px 0;
+    background: transparent;
+    border-radius: 999px;
+  }
+  .scrollbar-notifications::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: linear-gradient(
+      180deg,
+      rgba(34, 211, 238, 0.5) 0%,
+      rgba(20, 184, 166, 0.38) 100%
+    );
+    background-clip: padding-box;
+    box-shadow: 0 0 6px rgba(6, 182, 212, 0.12);
+  }
+  .scrollbar-notifications::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(103, 232, 249, 0.8) 0%,
+      rgba(45, 212, 191, 0.7) 100%
+    );
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.22);
+  }
+  @supports (scrollbar-width: thin) {
+    .scrollbar-notifications {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(34, 211, 238, 0.45) transparent;
+    }
+  }
+  html.light .scrollbar-notifications::-webkit-scrollbar-thumb {
+    background: linear-gradient(
+      180deg,
+      rgba(8, 145, 178, 0.38) 0%,
+      rgba(13, 148, 136, 0.3) 100%
+    );
+    box-shadow: none;
+  }
+  html.light .scrollbar-notifications::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(8, 145, 178, 0.58) 0%,
+      rgba(13, 148, 136, 0.5) 100%
+    );
+  }
+  @supports (scrollbar-width: thin) {
+    html.light .scrollbar-notifications {
+      scrollbar-color: rgba(8, 145, 178, 0.42) transparent;
+    }
+  }
+
+  /* Scrollbar riêng cho Cài đặt tổ chức: tông tím-xanh, mảnh và mượt */
+  .scrollbar-org-settings {
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+  }
+  .scrollbar-org-settings::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-org-settings::-webkit-scrollbar-track {
+    margin: 4px 0;
+    background: transparent;
+    border-radius: 999px;
+  }
+  .scrollbar-org-settings::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: linear-gradient(
+      180deg,
+      rgba(168, 85, 247, 0.52) 0%,
+      rgba(124, 58, 237, 0.44) 55%,
+      rgba(34, 211, 238, 0.4) 100%
+    );
+    background-clip: padding-box;
+    box-shadow: 0 0 10px rgba(124, 58, 237, 0.18);
+  }
+  .scrollbar-org-settings::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(196, 181, 253, 0.8) 0%,
+      rgba(139, 92, 246, 0.72) 55%,
+      rgba(103, 232, 249, 0.66) 100%
+    );
+    box-shadow: 0 0 12px rgba(139, 92, 246, 0.28);
+  }
+  @supports (scrollbar-width: thin) {
+    .scrollbar-org-settings {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(139, 92, 246, 0.5) transparent;
+    }
+  }
+  html.light .scrollbar-org-settings::-webkit-scrollbar-thumb {
+    background: linear-gradient(
+      180deg,
+      rgba(109, 40, 217, 0.42) 0%,
+      rgba(124, 58, 237, 0.36) 55%,
+      rgba(8, 145, 178, 0.32) 100%
+    );
+    box-shadow: none;
+  }
+  html.light .scrollbar-org-settings::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(109, 40, 217, 0.62) 0%,
+      rgba(124, 58, 237, 0.55) 55%,
+      rgba(8, 145, 178, 0.48) 100%
+    );
+  }
+  @supports (scrollbar-width: thin) {
+    html.light .scrollbar-org-settings {
+      scrollbar-color: rgba(109, 40, 217, 0.45) transparent;
+    }
+  }
+
   /* Ô nhập tin nhắn (composer): thanh cuộn mảnh, bo tròn, hiện nhẹ khi hover/focus */
   .scrollbar-composer {
     scroll-behavior: smooth;
